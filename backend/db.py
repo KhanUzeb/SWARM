@@ -73,7 +73,8 @@ _DEFAULT_AGENTS = [
         "You're in the room like anyone else — terse, direct, no filler, "
         "no 'As an AI...' hedging. Answer the actual question. If you don't "
         "know something, say so in one line and move on. Keep replies short "
-        "unless the question genuinely needs length.",
+        "unless the question genuinely needs length. Do not call tools for "
+        "greetings or small talk.",
         "llama-3.3-70b-versatile",
         None,
     ),
@@ -175,16 +176,62 @@ async def add_message(
     }
 
 
-async def get_history(channel_id: str, limit: int = 50) -> list[dict[str, Any]]:
+async def get_history(
+    channel_id: str, limit: int = 50, before_id: int | None = None
+) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if before_id is None:
+            cur = await db.execute(
+                "SELECT * FROM messages WHERE channel_id = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (channel_id, limit),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT * FROM messages WHERE channel_id = ? AND id < ? "
+                "ORDER BY id DESC LIMIT ?",
+                (channel_id, before_id, limit),
+            )
+        rows = await cur.fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+
+async def get_history_after(channel_id: str, after_id: int) -> list[dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT * FROM messages WHERE channel_id = ? "
-            "ORDER BY created_at DESC LIMIT ?",
-            (channel_id, limit),
+            "SELECT * FROM messages WHERE channel_id = ? AND id > ? ORDER BY id ASC",
+            (channel_id, after_id),
         )
         rows = await cur.fetchall()
-        return [dict(r) for r in reversed(rows)]
+        return [dict(r) for r in rows]
+
+
+async def get_message(message_id: int) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def get_replies(parent_id: int) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM messages WHERE parent_id = ? ORDER BY id ASC",
+            (parent_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def channel_of_message(message_id: int) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT channel_id FROM messages WHERE id = ?", (message_id,))
+        row = await cur.fetchone()
+        return row[0] if row else None
 
 
 async def search_history(channel_id: str, query: str, limit: int = 10) -> list[dict[str, Any]]:

@@ -1,17 +1,15 @@
 # PROMPTS.md — swarm
 
-Phases 1–5 and 7 are built (see PROJECT.md). This file now does two
-things: records what actually got built per phase (for anyone
-extending this without having watched it happen), and gives paste-
-ready prompts for Phase 8's speculative next steps, gated the same
-way Phase 6 was.
+Phases 1–5, 7, and 8 are built (see PROJECT.md). This file records
+what actually got built per phase, and keeps paste-ready prompts for
+the remaining gated items (admin role, semantic history).
 
 If you're extending this repo with an agentic coding tool, point it at
 `PROBLEM.md`, `PROJECT.md`, and `SPEC.md` first either way.
 
 ---
 
-## Phases 1–5, 7 — what shipped (reference, not re-runnable as-is)
+## Phases 1–5, 7, 8 — what shipped (reference, not re-runnable as-is)
 
 These prompts describe what was actually implemented. They're kept
 for context, not meant to be re-run — running them again against
@@ -56,20 +54,36 @@ serves `/api/channels` on `:8000`, SQLite on `swarm-data` survives
 required. Sandbox was checked in-container (deterministic) rather than
 via an `@swarm` mention, which depends on Groq choosing the tool.
 
+**Phase 8 (Reliability + streaming UI)**: SPEC updated first. WS
+handshake accepts optional `last_seen_id` and delivers missed messages
+before live broadcast. `GET /api/channels/{id}/messages?before_id=`
+paginates older history. `GET /api/messages/{id}/thread` returns a
+one-level thread. Agent generation uses `AsyncGroq` with `stream=True`;
+tool-call rounds do not forward tokens; the content round emits
+`agent_stream_start` / `agent_token`, then the assembled reply is
+persisted and broadcast as `message`. Frontend split into
+`index.html` / `styles.css` / `app.js` (still no build step): thread
+side panel, `@` mention picker, auto-reconnect, auto-login, in-app
+modals, mobile sidebar, loading/empty states. pytest + httpx cover
+auth, reactions, pagination, threads, WS 4001, catch-up, and a mocked
+streaming mention. Admin role was
+not in this phase.
+
 ---
 
-## Open — none for Phase 7
+## Open — gated leftovers
 
-Docker verify is done. Remaining work is Phase 8, still gated below.
+Admin role and Phase 6 (semantic history) are still gated below.
+Do not build them speculatively.
 
 ---
 
-## Phase 8 — candidates, not yet scoped
+## Remaining candidates
 
 Same rule as Phase 6 had: **don't build any of these speculatively.**
 Each one is listed with the condition that would justify it. If you're
 an agent reading this and none of the conditions have actually
-happened, say so and stop, the way Phase 6's prompt required.
+happened, say so and stop.
 
 ```
 Read PROBLEM.md, PROJECT.md, and SPEC.md. Before implementing anything
@@ -84,23 +98,7 @@ not, report that back and don't implement it.
    gate agent creation on `role = 'admin'`, add a one-time bootstrap
    path to promote the first registered user to admin.
 
-2. WS reconnect via last_seen_id
-   Condition: a real client has actually dropped and needed to
-   reconstruct missed messages awkwardly — not just "this seems like
-   it could happen."
-   If justified: accept an optional `last_seen_id` in the WS handshake
-   frame, and on connect, deliver any messages after that id via REST-
-   shaped payloads before switching to live broadcast.
-
-3. Streaming agent replies
-   Condition: Groq latency or multi-round tool calling has actually
-   made the current wait-for-full-reply UX feel slow in practice, not
-   just "streaming would be nicer."
-   If justified: switch agent.py's generation call to streaming mode,
-   emit incremental `{"type": "agent_token", ...}` WS frames, assemble
-   and persist the full message once the stream ends.
-
-4. Phase 6 (semantic history) — unchanged condition from before:
+2. Phase 6 (semantic history) — unchanged condition from before:
    only if keyword search has actually proven insufficient.
 ```
 

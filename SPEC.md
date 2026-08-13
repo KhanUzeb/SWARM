@@ -1,9 +1,9 @@
 # SPEC.md — swarm
 
-Technical contract for what's actually running (V2). If code and this
-document disagree, one of them is wrong — file it as a bug against
-whichever is easier to fix correctly, not whichever is easier to leave
-broken.
+Technical contract for what's actually running (V2 + Phase 8). If code
+and this document disagree, one of them is wrong — file it as a bug
+against whichever is easier to fix correctly, not whichever is easier
+to leave broken.
 
 ---
 
@@ -65,14 +65,16 @@ a duplicate row or an error.
 Seeded on first run: `swarm` (generalist, unscoped) and `ledger`
 (decision-summarizer, unscoped).
 
-### Not built (see PROJECT.md Phase 8)
+### Not built
 
 No `threads` table separate from `messages.parent_id` — flat storage
-with a nullable self-reference turned out sufficient; a dedicated
-table wasn't justified. No migrations system — the schema has only
-grown via `CREATE TABLE IF NOT EXISTS`, which is fine until a column
-needs to change type or move, at which point this needs an actual
-migration tool, not another `ALTER TABLE` bolted into `init_db`.
+with a nullable self-reference is sufficient; `GET /api/messages/{id}/thread`
+returns one level (the parent plus rows whose `parent_id` equals that
+id). No migrations system — the schema has only grown via
+`CREATE TABLE IF NOT EXISTS`, which is fine until a column needs to
+change type or move, at which point this needs an actual migration
+tool, not another `ALTER TABLE` bolted into `init_db`. Admin role for
+`POST /api/agents` is still a named gap — see `PROJECT.md`.
 
 ---
 
@@ -87,12 +89,14 @@ separately from the token on every call.
 - **REST writes**: `Authorization: Bearer <handle>:<raw>` header,
   required on every POST that creates or modifies data. Read endpoints
   (`GET /api/channels`, `GET /api/channels/{id}/messages`,
-  `GET /api/agents`) are unauthenticated by design — there's no
-  private data in this system yet.
+  `GET /api/messages/{id}/thread`, `GET /api/agents`) are
+  unauthenticated by design — there's no private data in this system
+  yet.
 - **WS writes**: the first frame after connecting must be
-  `{"token": "<handle>:<raw>"}`. Invalid or missing token closes the
-  connection with code `4001`. All subsequent message frames use the
-  handle established at handshake — a client cannot send a different
+  `{"token": "<handle>:<raw>", "last_seen_id": null}`. `last_seen_id`
+  is optional. Invalid or missing token closes the connection with
+  code `4001`. All subsequent message frames use the handle
+  established at handshake — a client cannot send a different
   `author` over an open connection.
 - **Impersonation check**: on REST message/reaction posts, the
   `author` field in the body must equal the authenticated handle or
@@ -138,9 +142,11 @@ Auth required.
 // 409 if id exists, 401 if unauthenticated, 429 if rate limited
 ```
 
-### `GET /api/channels/{channel_id}/messages?limit=50`
+### `GET /api/channels/{channel_id}/messages?limit=50&before_id=`
 No auth required. Returns messages oldest-first, each with a
-`reactions` array embedded:
+`reactions` array embedded. `limit` defaults to 50, capped at 100.
+If `before_id` is set, returns the page of messages with `id < before_id`
+(still oldest-first in the JSON array) — used to load earlier history.
 ```json
 [{
   "id": 1, "channel_id": "general", "parent_id": null,
@@ -174,6 +180,27 @@ Auth required, `author` must match. Idempotent — same
 ```
 404 if message doesn't exist, 403 author mismatch.
 
+### `GET /api/messages/{message_id}/thread`
+No auth required. One-level thread: the parent message plus every
+reply whose `parent_id` equals that id, oldest-first, each with
+`reactions` embedded.
+```json
+{
+  "parent": { "id": 1, "parent_id": null, "body": "...", "reactions": [] },
+  "replies": [
+    { "id": 2, "parent_id": 1, "body": "...", "reactions": [] }
+  ]
+}
+```
+404 if the message doesn't exist.
+
+### `GET /api/status`
+No auth. Reports whether `GROQ_API_KEY` is loaded — boolean only, never the key.
+```json
+{"groq": true}
+```
+The app loads `.env` from the project root and from `backend/.env` on import (process env still wins). If this is `false` after you set a key, restart uvicorn — `--reload` does not pick up `.env` edits.
+
 ### `GET /api/agents?channel_id=<optional>`
 No auth. Without `channel_id`, returns every agent. With it, returns
 agents scoped to that channel plus unscoped (global) agents.
@@ -195,10 +222,16 @@ Auth required (any valid token — no admin check, see section 2).
 
 **Handshake** (required, first frame):
 ```json
-{"token": "handle:raw"}
+{"token": "handle:raw", "last_seen_id": 42}
 ```
-Failure → close code `4001`. Channel not found → close code `4004`
-(checked before accept, so this happens even before the handshake).
+`last_seen_id` is optional. Failure → close code `4001`. Channel not
+found → close code `4004` (checked before accept, so this happens even
+before the handshake).
+
+After a successful handshake the server delivers catch-up (if
+`last_seen_id` was set): every message in that channel with
+`id > last_seen_id`, oldest-first, as normal `message` events, each
+with a `reactions` array. Then it switches to live broadcast.
 
 **Client → server**, after handshake, on send:
 ```json
@@ -209,17 +242,23 @@ established at handshake. This is stricter than the REST path
 intentionally: REST needs an explicit `author` field to validate
 against, WS doesn't need one to exist at all.
 
-**Server → client**, three event types:
+**Server → client** event types:
 ```json
 {"type": "message", "message": { ...same shape as REST message... }}
 {"type": "typing", "author": "swarm"}
 {"type": "reaction", "message_id": 1, "author": "uzeb", "emoji": "🔥"}
 {"type": "error", "detail": "slow down"}
+{"type": "agent_stream_start", "author": "swarm"}
+{"type": "agent_token", "author": "swarm", "delta": "..."}
 ```
 
-No delivery guarantee beyond "connection was open when the broadcast
-happened." A reconnecting client must re-fetch history via REST.
-`last_seen_id`-based catch-up is still unbuilt — see PROJECT.md Phase 8.
+`agent_stream_start` / `agent_token` are live tokens for the agent's
+final text completion. They are not persisted. The completed reply is
+persisted once and then broadcast as a `message` event; clients replace
+the streaming placeholder with that row.
+
+Live `message` events from a human/agent/system write may omit
+`reactions` (empty). Catch-up `message` events include `reactions`.
 
 ---
 
@@ -245,10 +284,14 @@ happened." A reconnecting client must re-fetch history via REST.
   `llama-3.3-70b-versatile`), via Groq.
 - **Tools available**: `read_only_shell(command)` and
   `search_channel_history(query)`, exposed via Groq's function-calling
-  API (`tools` + `tool_choice="auto"`).
+  API (`tools` + `tool_choice="auto"`) **only when the latest human
+  message looks like a file/history request**. Greetings (`@swarm hi`)
+  get a text-only completion — small models otherwise burn the 3-call
+  cap on `ls`/`dir`.
   - `read_only_shell` runs in a sandboxed working directory
-    (`SWARM_SANDBOX_DIR`, default `/tmp/swarm-sandbox`), 10s timeout,
-    output capped at 4000 chars, minimal `PATH` env. **This is not a
+    (`SWARM_SANDBOX_DIR`; default `/tmp/swarm-sandbox`, or `%TEMP%\swarm-sandbox`
+    on Windows), 10s timeout, output capped at 4000 chars, minimal `PATH`
+    env (Unix `/usr/bin:/bin`, Windows `System32`). **This is not a
     real network-isolation guarantee** — it's a working-directory and
     timeout sandbox, not a container or seccomp boundary. Don't treat
     it as one.
@@ -261,12 +304,22 @@ happened." A reconnecting client must re-fetch history via REST.
     broadcast before the agent's final reply is posted. This is the
     audit-trail requirement — not optional logging, it's how a human
     watching the channel sees what the agent actually did.
+- **Streaming**: each Groq round is streamed via AsyncGroq
+  (`stream=True`). If a round contains tool calls, tokens are not
+  forwarded and the round is treated as a tool round (same 3-call cap).
+  The first content-only round broadcasts `agent_stream_start` then
+  `agent_token` frames; the assembled reply is persisted once and
+  broadcast as `message`. Failures still become `[agent error: ...]`
+  posted as a normal agent message — they are not streamed.
 - **Tracing**: if `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are
   both set, every generation call is wrapped in a Langfuse trace
   (`swarm.agent.<name>`), tagged with `channel_id` and agent name in
   metadata, recording latency and token usage per round. If either env
   var is missing, tracing is skipped entirely — `agent.py` has no hard
   Langfuse dependency at runtime.
+- **Env loading**: `backend/__init__.py` loads project-root `.env` then
+  `backend/.env` via python-dotenv (`override=False`, so real process
+  env / Docker `env_file` still win). Tests set `PYTHON_DOTENV_DISABLED`.
 - **Failure mode**: any exception — missing `GROQ_API_KEY`, API error,
   tool execution error — is caught and returned as the reply text
   itself (`[agent error: ...]`), posted as a normal agent message. The
@@ -278,7 +331,7 @@ happened." A reconnecting client must re-fetch history via REST.
 
 ## 6. Functional requirements — status
 
-All FR numbers below are implemented and tested as of V2 unless noted.
+All FR numbers below are implemented as of Phase 8 unless noted.
 
 | FR | Description | Status |
 |---|---|---|
@@ -295,6 +348,10 @@ All FR numbers below are implemented and tested as of V2 unless noted.
 | FR4.2 | Multi-mention replies in order, not concurrent | ✅ (bug found and fixed during build) |
 | FR5.1 | Langfuse trace per generation call, incl. tool calls | ✅ |
 | FR5.2 | Traces tagged with channel_id (and agent name) | ✅ |
+| FR8.1 | WS catch-up via optional `last_seen_id` in handshake | ✅ |
+| FR8.2 | Streaming final agent reply over WS token-by-token | ✅ |
+| FR8.3 | Message history pagination via `before_id` | ✅ |
+| FR8.4 | `GET /api/messages/{id}/thread` one-level thread | ✅ |
 
 ---
 
@@ -303,7 +360,7 @@ All FR numbers below are implemented and tested as of V2 unless noted.
 | Requirement | Target | Notes |
 |---|---|---|
 | Message broadcast latency | < 100ms local | in-memory hub, no network hop beyond the DB write — unchanged from V1, not re-benchmarked |
-| Agent reply latency | best-effort | tool-calling rounds add latency on top of the base Groq call; no p99 target set |
+| Agent reply latency | best-effort | tool-calling rounds stay non-streaming; final tokens stream over WS; no p99 target set |
 | Concurrent connections per channel | untested beyond ~5 in manual testing | in-memory `set[WebSocket]`, no load test exists |
 | DB durability | SQLite file on a Docker named volume | acceptable through Phase 7; revisit for multi-host durability if ever needed |
 | Docker build | verified locally via `docker compose build && up -d` | `/api/channels` 200, named volume persists, sandbox cwd `/tmp/swarm-sandbox`; not a remote VPS deploy |
@@ -315,4 +372,4 @@ All FR numbers below are implemented and tested as of V2 unless noted.
 Unchanged from V1: no Nostr/event-signing, no git hosting, no
 canvas/media comments, no huddle/voice, no multi-tenant hosting, no
 vector search (Phase 6, intentionally unbuilt), no admin role (named
-gap, Phase 8 candidate).
+gap, still gated).

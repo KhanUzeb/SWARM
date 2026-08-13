@@ -42,9 +42,9 @@ channels, and one agent that reads what everyone else reads.
   tenancy. Those are Buzz's actual hard problems and cloning them
   teaches nothing that isn't already covered by other projects (VERIS,
   context-router already cover distributed/protocol-level work).
-- Not production-hardened by default. Auth, rate limiting, and input
-  sanitization are named explicitly as unbuilt in `SPEC.md` — they're
-  Phase 1 work, not assumed-away.
+- Not production-hardened by default. Phase 1 shipped token auth,
+  impersonation checks, and a per-handle rate limit; that is still a
+  portfolio demo's auth story, not a multi-tenant security model.
 
 ## Definition of done (v1, already shipped)
 
@@ -55,5 +55,6 @@ channels, and one agent that reads what everyone else reads.
 - [x] A CLI posts/reads without touching the WebSocket, JSON in/out
 - [x] Agent failures surface in-channel, don't kill the relay
 
-Everything past this line is scoped, not built. See `PROJECT.md` for
-phasing and `SPEC.md` for what "done" means per phase.
+Everything past v1 is scoped in `PROJECT.md` and contracted in
+`SPEC.md`. Phase 1 auth, Phase 8 streaming/reconnect, and the rest of
+V2 are shipped; admin role and semantic search are still gated.

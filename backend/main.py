@@ -5,14 +5,16 @@ same room, everything's an event in SQLite. Run:
 
 Auth model (Phase 1): register a handle, get back a composite token
 "<handle>:<raw>". Send it as `Authorization: Bearer <handle>:<raw>` on
-every write. WS clients send `{"token": "<handle>:<raw>"}` as the
-first frame after connecting, before any message frames.
+every write. WS clients send `{"token": "<handle>:<raw>", "last_seen_id": N}`
+as the first frame after connecting, before any message frames.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +36,7 @@ app.add_middleware(
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 
 RATE_LIMIT_SECONDS = 0.5
+HISTORY_LIMIT_MAX = 100
 _last_write: dict[str, float] = {}
 
 
@@ -68,15 +71,21 @@ async def require_auth(authorization: str | None = Header(default=None)) -> str:
     return handle
 
 
+async def _with_reactions(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for m in messages:
+        m["reactions"] = await db.get_reactions(m["id"])
+    return messages
+
+
 class Hub:
     """In-memory WebSocket fanout, keyed by channel. No history here —
-    that's the DB's job."""
+    that's the DB's job. join() registers an already-accepted socket;
+    accept happens in the WS handler so the handshake frame can arrive."""
 
     def __init__(self) -> None:
         self._rooms: dict[str, set[WebSocket]] = {}
 
-    async def join(self, channel_id: str, ws: WebSocket) -> None:
-        await ws.accept()
+    def join(self, channel_id: str, ws: WebSocket) -> None:
         self._rooms.setdefault(channel_id, set()).add(ws)
 
     def leave(self, channel_id: str, ws: WebSocket) -> None:
@@ -99,6 +108,15 @@ hub = Hub()
 @app.on_event("startup")
 async def on_startup() -> None:
     await db.init_db()
+
+
+# --------------------------------------------------------------- status ---
+
+@app.get("/api/status")
+async def api_status():
+    """Boolean-only — never returns the key itself."""
+    key = (os.environ.get("GROQ_API_KEY") or "").strip().strip('"').strip("'")
+    return {"groq": bool(key)}
 
 
 # ---------------------------------------------------------------- auth ----
@@ -130,13 +148,14 @@ async def api_create_channel(payload: ChannelCreate, handle: str = Depends(requi
 
 
 @app.get("/api/channels/{channel_id}/messages")
-async def api_get_history(channel_id: str, limit: int = 50):
+async def api_get_history(
+    channel_id: str, limit: int = 50, before_id: int | None = None
+):
     if not await db.channel_exists(channel_id):
         raise HTTPException(404, "no such channel")
-    messages = await db.get_history(channel_id, limit)
-    for m in messages:
-        m["reactions"] = await db.get_reactions(m["id"])
-    return messages
+    limit = max(1, min(limit, HISTORY_LIMIT_MAX))
+    messages = await db.get_history(channel_id, limit, before_id)
+    return await _with_reactions(messages)
 
 
 @app.post("/api/channels/{channel_id}/messages")
@@ -160,6 +179,16 @@ async def api_post_message(
     return msg
 
 
+@app.get("/api/messages/{message_id}/thread")
+async def api_get_thread(message_id: int):
+    parent = await db.get_message(message_id)
+    if parent is None:
+        raise HTTPException(404, "no such message")
+    replies = await db.get_replies(message_id)
+    await _with_reactions([parent, *replies])
+    return {"parent": parent, "replies": replies}
+
+
 @app.post("/api/messages/{message_id}/reactions", status_code=204)
 async def api_add_reaction(
     message_id: int, payload: ReactionCreate, handle: str = Depends(require_auth)
@@ -168,21 +197,14 @@ async def api_add_reaction(
         raise HTTPException(403, "author must match the authenticated handle")
     if not await db.message_exists(message_id):
         raise HTTPException(404, "no such message")
-    channel_id = await _channel_of_message(message_id)
-    await db.add_reaction(message_id, payload.author, payload.emoji)
-    await hub.broadcast(channel_id, {
-        "type": "reaction", "message_id": message_id,
-        "author": payload.author, "emoji": payload.emoji,
-    })
+    channel_id = await db.channel_of_message(message_id)
+    inserted = await db.add_reaction(message_id, payload.author, payload.emoji)
+    if inserted:
+        await hub.broadcast(channel_id, {
+            "type": "reaction", "message_id": message_id,
+            "author": payload.author, "emoji": payload.emoji,
+        })
     return Response(status_code=204)
-
-
-async def _channel_of_message(message_id: int) -> str:
-    import aiosqlite
-    async with aiosqlite.connect(db.DB_PATH) as conn:
-        cur = await conn.execute("SELECT channel_id FROM messages WHERE id = ?", (message_id,))
-        row = await cur.fetchone()
-        return row[0]
 
 
 # --------------------------------------------------------------- agents ---
@@ -195,7 +217,7 @@ async def api_list_agents(channel_id: str | None = None):
 @app.post("/api/agents")
 async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_auth)):
     # NOTE: no admin role check yet — any authenticated user can register
-    # a persona. Named gap, see SPEC.md Phase 4. Fine for a single-tenant
+    # a persona. Named gap, see SPEC.md. Fine for a single-tenant
     # portfolio deployment, not fine past that.
     if await db.agent_exists(payload.name):
         raise HTTPException(409, "agent name already registered")
@@ -212,7 +234,7 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
 
     await websocket.accept()
 
-    # auth handshake — first frame must be {"token": "handle:raw"}
+    # auth handshake — first frame must be {"token": "handle:raw", "last_seen_id": N?}
     try:
         first = await websocket.receive_json()
     except Exception:  # noqa: BLE001
@@ -228,7 +250,20 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
         await websocket.close(code=4001)
         return
 
-    hub._rooms.setdefault(channel_id, set()).add(websocket)
+    last_seen_id = first.get("last_seen_id") if isinstance(first, dict) else None
+    hub.join(channel_id, websocket)
+
+    if last_seen_id is not None:
+        try:
+            after = int(last_seen_id)
+        except (TypeError, ValueError):
+            after = None
+        if after is not None:
+            missed = await db.get_history_after(channel_id, after)
+            missed = await _with_reactions(missed)
+            for msg in missed:
+                await websocket.send_json({"type": "message", "message": msg})
+
     try:
         while True:
             data = await websocket.receive_json()
@@ -243,6 +278,8 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
             await hub.broadcast(channel_id, {"type": "message", "message": msg})
             await _maybe_trigger_agents(channel_id, msg)
     except WebSocketDisconnect:
+        pass
+    finally:
         hub.leave(channel_id, websocket)
 
 
@@ -264,16 +301,36 @@ async def _run_agents_in_order(channel_id: str, agents: list[dict]) -> None:
 
 
 async def _run_agent(channel_id: str, agent_row: dict) -> None:
-    await hub.broadcast(channel_id, {"type": "typing", "author": agent_row["name"]})
+    name = agent_row["name"]
+    await hub.broadcast(channel_id, {"type": "typing", "author": name})
     history = await db.get_history(channel_id, limit=agent.HISTORY_WINDOW)
-    result = await agent.generate_reply(agent_row, channel_id, history)
+    tools_posted = False
 
-    for event in result["tool_events"]:
-        note = f"{agent_row['name']} ran: {event['tool']}({event['args']}) -> {event['result'][:200]}"
-        sys_msg = await db.add_message(channel_id, agent_row["name"], note, "system")
-        await hub.broadcast(channel_id, {"type": "message", "message": sys_msg})
+    async def persist_tools(events: list[dict]) -> None:
+        nonlocal tools_posted
+        if tools_posted:
+            return
+        tools_posted = True
+        for event in events:
+            note = f"{name} ran: {event['tool']}({event['args']}) -> {event['result'][:200]}"
+            sys_msg = await db.add_message(channel_id, name, note, "system")
+            await hub.broadcast(channel_id, {"type": "message", "message": sys_msg})
 
-    msg = await db.add_message(channel_id, agent_row["name"], result["reply"], "agent")
+    async def on_stream_start() -> None:
+        await hub.broadcast(channel_id, {"type": "agent_stream_start", "author": name})
+
+    async def on_token(delta: str) -> None:
+        await hub.broadcast(channel_id, {"type": "agent_token", "author": name, "delta": delta})
+
+    result = await agent.generate_reply(
+        agent_row, channel_id, history,
+        on_tools_ready=persist_tools,
+        on_stream_start=on_stream_start,
+        on_token=on_token,
+    )
+    await persist_tools(result["tool_events"])
+
+    msg = await db.add_message(channel_id, name, result["reply"], "agent")
     await hub.broadcast(channel_id, {"type": "message", "message": msg})
 
 

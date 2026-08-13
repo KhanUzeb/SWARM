@@ -4,8 +4,9 @@ A mini Buzz. Chat workspace where LLM agents are channel members, not
 a sidebar. See `PROBLEM.md` for why, `SPEC.md` for the technical
 contract, `PROMPTS.md` for what built each phase and what's left.
 
-**Status: V2 shipped.** Phases 1–5 and 7 are built and tested. Phase 6
-is deliberately not built — see its entry below.
+**Status: V2 + Phase 8 shipped.** Phases 1–5, 7, and 8 are built.
+Phase 6 is deliberately not built — see its entry below. Admin role
+for `POST /api/agents` remains a named gap.
 
 ## Stack
 
@@ -15,7 +16,7 @@ is deliberately not built — see its entry below.
 | DB         | SQLite via `aiosqlite`           | zero-ops for a portfolio project; swap to Postgres if this ever needs concurrent writers at scale |
 | Realtime   | Native WebSocket, in-memory hub  | one process, one hub — no Redis pub/sub needed at this scale |
 | LLM        | Groq (primary)                   | consistent with existing infra layer; OpenRouter fallback not yet wired |
-| Frontend   | Vanilla HTML/CSS/JS, no framework | one page, no build step, Slack/Discord-style dark UI |
+| Frontend   | Vanilla HTML/CSS/JS, no framework | no build step; Slack/Discord-style dark UI with a thread panel |
 | Tracing    | Langfuse                         | reuses the eval/observability pattern from VERIS; degrades to no-op if unconfigured |
 | Deployment | Docker + docker-compose          | single VPS, named volume for the SQLite file |
 
@@ -26,12 +27,15 @@ swarm/
   backend/
     main.py       FastAPI app: REST + WS routes, auth, rate limiting, agent trigger
     db.py         schema + async queries (channels, messages, users, reactions, agents)
-    agent.py      multi-persona LLM responder, tool calling, Langfuse tracing
+    agent.py      multi-persona LLM responder, tool calling, streaming, Langfuse
     models.py     pydantic schemas
   frontend/
-    index.html    single-page Slack/Discord-style UI: auth, threads, reactions, agent sidebar
+    index.html    markup
+    styles.css    Discord-like dark theme, mobile layout
+    app.js        auth, WS reconnect, threads panel, mentions, streaming rows
   cli/
     swarm_cli.py  JSON in/out CLI: register, post, react, history, agents
+  tests/          pytest + httpx; Groq mocked
   docs/
     DEPLOY.md     docker compose deployment guide
   Dockerfile
@@ -55,6 +59,7 @@ swarm/
 | 5     | Observability             | ✅ done | Langfuse trace per generation, tagged by channel + agent, silent no-op if unconfigured |
 | 6     | Semantic history (opt.)   | ⛔ intentionally skipped | keyword search hasn't been shown insufficient — building Qdrant now would be exactly the speculative work Phase 6's own spec forbids |
 | 7     | Deployment                | ✅ done (verified) | Dockerfile, compose, DEPLOY.md — `docker compose build && up -d` run live; `/api/channels` ok; SQLite volume survived down/up; sandbox tool ran in-container at `/tmp/swarm-sandbox` |
+| 8     | Reliability + streaming UI | ✅ done | WS `last_seen_id` catch-up, history `before_id` pagination, `GET /api/messages/{id}/thread`, AsyncGroq token streaming, pytest, vanilla UI split into html/css/js with thread panel, mention picker, reconnect, mobile layout |
 
 ## What changed from the original plan
 
@@ -69,7 +74,7 @@ swarm/
   and reply out of order, violating FR4.2. Fixed by running all
   mentioned agents sequentially inside one task. Documented here
   because it's the kind of bug that only shows up under concurrent
-  load, not in a single-agent test — worth remembering for Phase 8 if
+  load, not in a single-agent test — worth remembering if
   agent-to-agent triggering ever gets added.
 - **`SWARM_DB_PATH` env var** added, not in the original spec, so the
   Dockerfile can point SQLite at a mounted volume without a code
@@ -83,8 +88,8 @@ swarm/
   demo. Unchanged from V1.
 - **No admin role.** Anyone with a registered handle can create a new
   agent persona via `POST /api/agents`. Named explicitly in `SPEC.md`
-  Phase 4 as a known gap, not fixed in V2 — closing it is Phase 8
-  work if this ever needs more than one trusted user.
+  as a known gap — not closed in Phase 8. Close it if this ever needs
+  more than one trusted user.
 - **Docker verified locally, not on a VPS.** `docker compose build &&
   up -d` succeeded against Docker Desktop 29.6.1: `/api/channels`
   responded, `swarm-data` kept `persist-check-*` across a down/up
@@ -96,22 +101,18 @@ swarm/
   Acceptable at current scale; revisit if the sandbox shell ever does
   anything expensive enough to matter.
 
-## Natural next steps (Phase 8, not scoped yet)
+## Natural next steps (still gated)
 
-Not written up as formal prompts because none of these are justified
-by anything that's actually happened yet — they're here so the list
-exists somewhere before it's needed:
+Phase 8 closed WS catch-up and streaming because the UI needed them.
+These remain gated the same way Phase 6 was — don't build them
+speculatively:
 
 1. Admin auth for `POST /api/agents` (closes the named gap above).
-2. WS reconnect with `last_seen_id` so a dropped client doesn't need a
-   full REST re-fetch to catch up — flagged as a maybe in the original
-   SPEC.md, still a maybe.
-3. Streaming agent replies over WS token-by-token, if Groq latency or
-   tool-calling rounds ever make the current "wait for the full reply"
-   UX feel slow in practice.
+2. Semantic history (Phase 6) — only if keyword search has actually
+   proven insufficient.
 
 ## Success criteria for the project as a whole
 
 Unchanged from V1: could someone read `SPEC.md` cold and extend this
-without asking me anything? V2's `SPEC.md` describes what's actually
+without asking me anything? The spec describes what's actually
 running, not what was planned — that's the bar met.
