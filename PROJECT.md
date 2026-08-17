@@ -4,9 +4,9 @@ A mini Buzz. Chat workspace where LLM agents are channel members, not
 a sidebar. See `PROBLEM.md` for why, `SPEC.md` for the technical
 contract, `PROMPTS.md` for what built each phase and what's left.
 
-**Status: V2 + Phase 8 shipped.** Phases 1–5, 7, and 8 are built.
+**Status: V2 + Phase 9 shipped.** Phases 1–5, 7, 8, and 9 are built.
 Phase 6 is deliberately not built — see its entry below. Admin role
-for `POST /api/agents` remains a named gap.
+for `POST /api/agents` remains a named gap. Agent delete is not built.
 
 ## Stack
 
@@ -15,7 +15,7 @@ for `POST /api/agents` remains a named gap.
 | Backend    | FastAPI + Uvicorn                | async-native, WS support built in, matches VOX/AXIOM stack |
 | DB         | SQLite via `aiosqlite`           | zero-ops for a portfolio project; swap to Postgres if this ever needs concurrent writers at scale |
 | Realtime   | Native WebSocket, in-memory hub  | one process, one hub — no Redis pub/sub needed at this scale |
-| LLM        | Groq (primary)                   | consistent with existing infra layer; OpenRouter fallback not yet wired |
+| LLM        | Groq (primary), OpenRouter fallback | Groq first; one retry then OpenRouter if `OPENROUTER_API_KEY` is set |
 | Frontend   | Vanilla HTML/CSS/JS, no framework | no build step; Slack/Discord-style dark UI with a thread panel |
 | Tracing    | Langfuse                         | reuses the eval/observability pattern from VERIS; degrades to no-op if unconfigured |
 | Deployment | Docker + docker-compose          | single VPS, named volume for the SQLite file |
@@ -26,15 +26,15 @@ for `POST /api/agents` remains a named gap.
 swarm/
   backend/
     main.py       FastAPI app: REST + WS routes, auth, rate limiting, agent trigger
-    db.py         schema + async queries (channels, messages, users, reactions, agents)
-    agent.py      multi-persona LLM responder, tool calling, streaming, Langfuse
+    db.py         schema + ensure_schema() + agent_memory
+    agent.py      multi-persona LLM responder, harness, memory tools, streaming, Langfuse
     models.py     pydantic schemas
   frontend/
     index.html    markup
     styles.css    Discord-like dark theme, mobile layout
-    app.js        auth, WS reconnect, threads panel, mentions, streaming rows
+    app.js        auth, WS reconnect, threads panel, agent panel, mentions, streaming rows
   cli/
-    swarm_cli.py  JSON in/out CLI: register, post, react, history, agents
+    swarm_cli.py  JSON in/out CLI: register, post, react, history, agents, create/patch agent
   tests/          pytest + httpx; Groq mocked
   docs/
     DEPLOY.md     docker compose deployment guide
@@ -60,6 +60,7 @@ swarm/
 | 6     | Semantic history (opt.)   | ⛔ intentionally skipped | keyword search hasn't been shown insufficient — building Qdrant now would be exactly the speculative work Phase 6's own spec forbids |
 | 7     | Deployment                | ✅ done (verified) | Dockerfile, compose, DEPLOY.md — `docker compose build && up -d` run live; `/api/channels` ok; SQLite volume survived down/up; sandbox tool ran in-container at `/tmp/swarm-sandbox` |
 | 8     | Reliability + streaming UI | ✅ done | WS `last_seen_id` catch-up, history `before_id` pagination, `GET /api/messages/{id}/thread`, AsyncGroq token streaming, pytest, vanilla UI split into html/css/js with thread panel, mention picker, reconnect, mobile layout |
+| 9     | Custom agents + memory     | ✅ done | Agent create/edit UI + GET/PATCH, per-agent harness (window, tool toggles), `agent_memory` notes via remember/recall, context injects notes + rolling summary, classified errors, one retry, optional OpenRouter |
 
 ## What changed from the original plan
 
@@ -80,16 +81,23 @@ swarm/
   Dockerfile can point SQLite at a mounted volume without a code
   change. Small addition, but it's why Phase 7 didn't need to touch
   `db.py`'s query logic at all.
+- **`ensure_schema()`** is the first real schema upgrade path. Phase 9
+  added columns on `agents` and the `agent_memory` table. Existing
+  SQLite files get `ALTER TABLE` on startup via `PRAGMA table_info`
+  rather than Alembic. Documented because a later column type change
+  would still need a real migration tool — this only covers additive
+  columns and new tables.
 
 ## Explicit risks (updated)
 
 - **In-memory WS hub and rate-limit table don't survive a restart or
   scale past one process.** Still true, still fine for a portfolio
   demo. Unchanged from V1.
-- **No admin role.** Anyone with a registered handle can create a new
-  agent persona via `POST /api/agents`. Named explicitly in `SPEC.md`
-  as a known gap — not closed in Phase 8. Close it if this ever needs
-  more than one trusted user.
+- **No admin role.** Anyone with a registered handle can create or
+  edit an agent persona. Named explicitly in `SPEC.md` as a known
+  gap — not closed in Phase 9. Close it if this ever needs more than
+  one trusted user.
+- **No agent delete.** Mentions and history would dangle. Named gap.
 - **Docker verified locally, not on a VPS.** `docker compose build &&
   up -d` succeeded against Docker Desktop 29.6.1: `/api/channels`
   responded, `swarm-data` kept `persist-check-*` across a down/up
@@ -103,13 +111,13 @@ swarm/
 
 ## Natural next steps (still gated)
 
-Phase 8 closed WS catch-up and streaming because the UI needed them.
 These remain gated the same way Phase 6 was — don't build them
 speculatively:
 
-1. Admin auth for `POST /api/agents` (closes the named gap above).
+1. Admin auth for `POST`/`PATCH /api/agents` (closes the named gap above).
 2. Semantic history (Phase 6) — only if keyword search has actually
    proven insufficient.
+3. Agent delete — only if dangling history is actually a problem.
 
 ## Success criteria for the project as a whole
 

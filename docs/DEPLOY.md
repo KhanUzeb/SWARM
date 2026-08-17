@@ -12,7 +12,7 @@ isn't up you'll get a pipe/socket error, not a compose YAML error.
 
 ```bash
 cp .env.example .env
-# edit .env: set GROQ_API_KEY, optionally LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY
+# edit .env: set GROQ_API_KEY, optionally OPENROUTER_API_KEY, LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY
 
 docker compose build
 docker compose up -d
@@ -40,7 +40,9 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 
 | var | required | purpose |
 |---|---|---|
-| `GROQ_API_KEY` | yes, for agents to respond | Groq inference |
+| `GROQ_API_KEY` | yes (or OpenRouter) | Groq inference |
+| `OPENROUTER_API_KEY` | no | fallback if Groq is down or unset |
+| `OPENROUTER_MODEL` | no | OpenRouter model slug; mapped from the agent model if unset |
 | `SWARM_AGENT_MODEL` | no | overrides per-agent model set in the `agents` table's default |
 | `SWARM_SANDBOX_DIR` | no | set by the Dockerfile, don't override unless you know why |
 | `SWARM_DB_PATH` | no | set by the Dockerfile to `/app/data/swarm.db` |
@@ -54,7 +56,6 @@ docker compose build
 docker compose up -d
 ```
 
-The volume persists across rebuilds — no migration step exists yet
-because the schema hasn't needed one. If a future phase changes the
-schema, add a migration step here before it's needed, not after
-something breaks in prod.
+The volume persists across rebuilds. Phase 9 added `ensure_schema()` —
+on startup the app `ALTER TABLE`s any missing agent harness columns and
+creates `agent_memory` if needed. No separate migrate command.

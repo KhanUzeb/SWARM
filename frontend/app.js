@@ -20,6 +20,8 @@ const state = {
   mentionIndex: 0,
   streams: {},
   emojiMessageId: null,
+  agentsReady: false,
+  editingAgent: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -64,7 +66,7 @@ function currentChannel() {
 
 function updateComposerPlaceholder() {
   const c = currentChannel();
-  el("msg-input").placeholder = `Message #${c.name || c.id}`;
+  el("msg-input").placeholder = `Message #${c.name || c.id} — try @swarm`;
 }
 
 function updateTopbar() {
@@ -316,13 +318,25 @@ async function loadGroqStatus() {
   if (!n) return;
   try {
     const res = await fetch(`${API}/api/status`);
-    const data = res.ok ? await res.json() : { groq: false };
-    n.className = data.groq ? "ready" : "missing";
-    n.textContent = data.groq ? "Groq: key set" : "Groq: no key set";
+    const data = res.ok ? await res.json() : { groq: false, openrouter: false };
+    state.agentsReady = !!(data.groq || data.openrouter);
+    n.className = state.agentsReady ? "ready" : "missing";
+    n.textContent = state.agentsReady
+      ? "Agents ready"
+      : "Set GROQ_API_KEY in .env so agents can reply";
   } catch {
+    state.agentsReady = false;
     n.className = "missing";
-    n.textContent = "Groq: no key set";
+    n.textContent = "Set GROQ_API_KEY in .env so agents can reply";
   }
+}
+
+function roleLine(prompt) {
+  const text = String(prompt || "").replace(/\s+/g, " ").trim();
+  if (!text) return "custom agent";
+  const cut = text.search(/[.!?]/);
+  const first = cut === -1 ? text : text.slice(0, cut + 1);
+  return first.length > 72 ? first.slice(0, 69) + "…" : first;
 }
 
 async function loadAgents(channelId) {
@@ -342,10 +356,19 @@ async function loadAgents(channelId) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "name";
+    btn.title = `Open @${a.name}`;
+    const meta = document.createElement("span");
+    meta.className = "name-meta";
+    const label = document.createElement("span");
+    label.className = "name-label";
+    label.textContent = a.name;
+    const role = document.createElement("span");
+    role.className = "name-role";
+    role.textContent = roleLine(a.system_prompt);
+    meta.append(label, role);
     btn.innerHTML = `<span class="dot"></span>`;
-    btn.appendChild(document.createTextNode(a.name));
-    btn.title = `Insert @${a.name}`;
-    btn.addEventListener("click", () => insertMention(a.name));
+    btn.appendChild(meta);
+    btn.addEventListener("click", () => openAgentPanel(a.name));
     box.appendChild(btn);
   }
 }
@@ -392,7 +415,7 @@ function applyHistoryPage(history, { prepend } = {}) {
     log.innerHTML = "";
     state.streams = {};
     if (!roots.length) {
-      showEmpty(log, "No messages yet. @mention an agent to get started.");
+      showEmpty(log, "No messages yet. Agents live in this room — try @swarm hi");
       return;
     }
     roots.forEach((m) => {
@@ -586,6 +609,9 @@ function sendFrom(input, parentId) {
     toast("Not connected — wait a moment and try again", true);
     return;
   }
+  if (!state.agentsReady && /@[a-zA-Z0-9_\-]+/.test(body)) {
+    toast("Agents can't reply until GROQ_API_KEY is set in .env", true);
+  }
   const payload = { body };
   if (parentId) payload.parent_id = parentId;
   state.ws.send(JSON.stringify(payload));
@@ -691,6 +717,144 @@ function closeChannelModal() {
   el("modal").hidden = true;
 }
 
+function fillScopeOptions(selected) {
+  const sel = el("agent-scope");
+  sel.innerHTML = `<option value="">Every channel</option>`;
+  for (const c of state.channels) {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = `#${c.name}`;
+    if (selected && selected === c.id) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function selectedTools() {
+  return [...document.querySelectorAll('#agent-form input[name="tool"]:checked')].map((n) => n.value);
+}
+
+function setToolChecks(tools) {
+  const set = new Set(tools || []);
+  document.querySelectorAll('#agent-form input[name="tool"]').forEach((n) => {
+    n.checked = set.size ? set.has(n.value) : true;
+  });
+}
+
+function renderMemories(memories) {
+  const box = el("agent-memories");
+  const list = el("agent-memory-list");
+  list.innerHTML = "";
+  if (!memories || !memories.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  for (const m of memories) {
+    const li = document.createElement("li");
+    const scope = m.channel_id ? `#${m.channel_id}` : "global";
+    li.textContent = `${m.kind} · ${scope}: ${m.body}`;
+    list.appendChild(li);
+  }
+}
+
+function openCreateAgent() {
+  state.editingAgent = null;
+  el("agent-err").textContent = "";
+  el("agent-form").reset();
+  el("agent-name").disabled = false;
+  el("agent-model").value = "llama-3.3-70b-versatile";
+  el("agent-window").value = "12";
+  setToolChecks(["read_only_shell", "search_channel_history", "remember", "recall"]);
+  fillScopeOptions("");
+  renderMemories([]);
+  el("agent-modal-title").textContent = "New agent";
+  el("agent-save").textContent = "Create";
+  el("agent-mention").hidden = true;
+  el("agent-modal").hidden = false;
+  el("agent-name").focus();
+}
+
+async function openAgentPanel(name) {
+  el("agent-err").textContent = "";
+  try {
+    const res = await fetch(`${API}/api/agents/${encodeURIComponent(name)}`);
+    if (!res.ok) throw new Error("agent");
+    const a = await res.json();
+    state.editingAgent = a.name;
+    el("agent-name").value = a.name;
+    el("agent-name").disabled = true;
+    el("agent-prompt").value = a.system_prompt || "";
+    el("agent-model").value = a.model || "";
+    el("agent-window").value = String(a.history_window || 12);
+    fillScopeOptions(a.channel_scope || "");
+    setToolChecks(a.tools);
+    renderMemories(a.memories);
+    el("agent-modal-title").textContent = `@${a.name}`;
+    el("agent-save").textContent = "Save";
+    el("agent-mention").hidden = false;
+    el("agent-modal").hidden = false;
+    el("agent-prompt").focus();
+  } catch {
+    toast("Couldn't load that agent", true);
+  }
+}
+
+function closeAgentModal() {
+  el("agent-modal").hidden = true;
+  state.editingAgent = null;
+}
+
+async function saveAgent(ev) {
+  ev.preventDefault();
+  el("agent-err").textContent = "";
+  const name = el("agent-name").value.trim();
+  const system_prompt = el("agent-prompt").value.trim();
+  const model = el("agent-model").value.trim() || "llama-3.3-70b-versatile";
+  const channel_scope = el("agent-scope").value || null;
+  const history_window = Number(el("agent-window").value) || 12;
+  const tools = selectedTools();
+  if (!name || !system_prompt) {
+    el("agent-err").textContent = "name and prompt are required";
+    return;
+  }
+  const payload = { system_prompt, model, channel_scope, history_window, max_tool_calls: 3, tools };
+  try {
+    let res;
+    if (state.editingAgent) {
+      res = await fetch(`${API}/api/agents/${encodeURIComponent(state.editingAgent)}`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+      });
+    } else {
+      res = await fetch(`${API}/api/agents`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ name, ...payload }),
+      });
+    }
+    if (res.ok) {
+      const wasEdit = !!state.editingAgent;
+      closeAgentModal();
+      await loadAgents(state.channel);
+      toast(wasEdit ? `Updated @${name}` : `Created @${name}`);
+      return;
+    }
+    if (res.status === 409) el("agent-err").textContent = "that agent name is taken";
+    else if (res.status === 404) el("agent-err").textContent = "channel or agent not found";
+    else el("agent-err").textContent = "couldn't save agent";
+  } catch {
+    el("agent-err").textContent = "couldn't save agent";
+  }
+}
+
+function applyToolsVisibility() {
+  const show = localStorage.getItem("swarm_show_tools") === "1";
+  document.body.classList.toggle("hide-tools", !show);
+  const btn = el("toggle-tools");
+  if (btn) btn.textContent = show ? "Hide agent tools" : "Show agent tools";
+}
+
 function closeSidebar() {
   document.body.classList.remove("sidebar-open");
   el("sidebar-backdrop").hidden = true;
@@ -783,6 +947,23 @@ el("channel-cancel").addEventListener("click", closeChannelModal);
 el("modal").addEventListener("click", (ev) => {
   if (ev.target === el("modal")) closeChannelModal();
 });
+el("new-agent").addEventListener("click", openCreateAgent);
+el("agent-cancel").addEventListener("click", closeAgentModal);
+el("agent-modal").addEventListener("click", (ev) => {
+  if (ev.target === el("agent-modal")) closeAgentModal();
+});
+el("agent-form").addEventListener("submit", saveAgent);
+el("agent-mention").addEventListener("click", () => {
+  const name = state.editingAgent || el("agent-name").value.trim();
+  if (!name) return;
+  closeAgentModal();
+  insertMention(name);
+});
+el("toggle-tools").addEventListener("click", () => {
+  const show = localStorage.getItem("swarm_show_tools") === "1";
+  localStorage.setItem("swarm_show_tools", show ? "0" : "1");
+  applyToolsVisibility();
+});
 
 el("channel-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -845,6 +1026,7 @@ el("menu-btn").addEventListener("click", openSidebar);
 el("sidebar-backdrop").addEventListener("click", closeSidebar);
 
 (async function init() {
+  applyToolsVisibility();
   const saved = localStorage.getItem("swarm_last_handle");
   if (saved) el("login-input").value = saved;
   const token = saved && localStorage.getItem(`swarm_token_${saved}`);

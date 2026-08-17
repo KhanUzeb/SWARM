@@ -13,11 +13,11 @@
   <div id="login">
     <form class="card" id="login-form">
       <h1>SWARM</h1>
-      <p>Join a channel. Humans and agents share the same room.</p>
+      <p>Pick a handle. This browser remembers you.</p>
       <label class="sr-only" for="login-input">Handle</label>
       <input id="login-input" name="handle" maxlength="24" autofocus autocomplete="username" placeholder="your handle" />
       <button type="submit" class="btn primary" id="login-submit">Join</button>
-      <div class="hint">Register a handle, or reconnect if you've been here before.</div>
+      <div class="hint">New handle registers you. A handle you've used here reconnects.</div>
       <div class="err" id="login-err" role="alert"></div>
     </form>
   </div>
@@ -34,6 +34,43 @@
         <div class="modal-actions">
           <button type="button" class="btn" id="channel-cancel">Cancel</button>
           <button type="submit" class="btn primary">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="agent-modal" class="overlay" hidden>
+    <div class="modal-card agent-card" role="dialog" aria-labelledby="agent-modal-title" aria-modal="true">
+      <h2 id="agent-modal-title">New agent</h2>
+      <form id="agent-form">
+        <label for="agent-name">Name</label>
+        <input id="agent-name" name="name" maxlength="32" required placeholder="scribe" pattern="[A-Za-z0-9_\-]+" />
+        <label for="agent-prompt">System prompt</label>
+        <textarea id="agent-prompt" name="prompt" required maxlength="4000" rows="5" placeholder="Who is this teammate, and how should they talk?"></textarea>
+        <label for="agent-model">Model</label>
+        <input id="agent-model" name="model" maxlength="128" placeholder="llama-3.3-70b-versatile" />
+        <label for="agent-scope">Channel scope</label>
+        <select id="agent-scope" name="scope">
+          <option value="">Every channel</option>
+        </select>
+        <label for="agent-window">History window</label>
+        <input id="agent-window" name="window" type="number" min="1" max="50" value="12" />
+        <fieldset class="tool-toggles">
+          <legend>Tools</legend>
+          <label class="check"><input type="checkbox" name="tool" value="read_only_shell" checked /> read_only_shell</label>
+          <label class="check"><input type="checkbox" name="tool" value="search_channel_history" checked /> search_channel_history</label>
+          <label class="check"><input type="checkbox" name="tool" value="remember" checked /> remember</label>
+          <label class="check"><input type="checkbox" name="tool" value="recall" checked /> recall</label>
+        </fieldset>
+        <div id="agent-memories" hidden>
+          <div class="mem-title">Recent notes</div>
+          <ul id="agent-memory-list"></ul>
+        </div>
+        <div class="err" id="agent-err" role="alert"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="agent-cancel">Cancel</button>
+          <button type="button" class="btn" id="agent-mention" hidden>Mention</button>
+          <button type="submit" class="btn primary" id="agent-save">Create</button>
         </div>
       </form>
     </div>
@@ -58,7 +95,8 @@
     <div id="agents-box">
       <div class="title">Agents in this channel</div>
       <div id="agents-list"></div>
-      <div id="groq-status">Groq: checking…</div>
+      <button type="button" id="new-agent">+ New agent</button>
+      <div id="groq-status">Checking agents…</div>
     </div>
     <div id="me">
       <div class="avatar" id="me-avatar">?</div>
@@ -78,6 +116,7 @@
         <div class="topic" id="topbar-topic"></div>
       </div>
       <span class="who">you're <span id="topbar-user">anon</span> · @mention an agent</span>
+      <button type="button" class="btn ghost" id="toggle-tools">Show agent tools</button>
     </div>
     <button type="button" id="load-earlier" hidden>Load earlier messages</button>
     <div id="log" role="log" aria-live="polite" aria-relevant="additions"></div>

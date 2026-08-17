@@ -56,5 +56,6 @@ channels, and one agent that reads what everyone else reads.
 - [x] Agent failures surface in-channel, don't kill the relay
 
 Everything past v1 is scoped in `PROJECT.md` and contracted in
-`SPEC.md`. Phase 1 auth, Phase 8 streaming/reconnect, and the rest of
-V2 are shipped; admin role and semantic search are still gated.
+`SPEC.md`. Phase 1 auth, Phase 8 streaming/reconnect, Phase 9 custom
+agents/memory, and the rest of V2 are shipped; admin role and semantic
+search are still gated.

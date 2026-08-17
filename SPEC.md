@@ -1,6 +1,6 @@
 # SPEC.md — swarm
 
-Technical contract for what's actually running (V2 + Phase 8). If code
+Technical contract for what's actually running (V2 + Phase 9). If code
 and this document disagree, one of them is wrong — file it as a bug
 against whichever is easier to fix correctly, not whichever is easier
 to leave broken.
@@ -54,27 +54,54 @@ a duplicate row or an error.
 
 ### `agents`
 
-| column         | type | notes |
-|----------------|------|-------|
-| name           | TEXT | PK, mention key (`@<name>`) |
-| system_prompt  | TEXT | |
-| model          | TEXT | Groq model string |
-| channel_scope  | TEXT | nullable FK-ish → channels.id. NULL = every channel |
-| created_at     | REAL | |
+| column          | type    | notes |
+|-----------------|---------|-------|
+| name            | TEXT    | PK, mention key (`@<name>`) |
+| system_prompt   | TEXT    | |
+| model           | TEXT    | Groq (or OpenRouter-mapped) model string |
+| channel_scope   | TEXT    | nullable FK-ish → channels.id. NULL = every channel |
+| created_at      | REAL    | |
+| history_window  | INTEGER | last N channel messages injected; default 12, cap 50 |
+| max_tool_calls  | INTEGER | cap per trigger; default 3, cap 8 |
+| tools           | TEXT    | JSON array of allowed tool names |
 
-Seeded on first run: `swarm` (generalist, unscoped) and `ledger`
-(decision-summarizer, unscoped).
+Allowed tool names: `read_only_shell`, `search_channel_history`,
+`remember`, `recall`. API responses parse `tools` as a JSON array, not
+a raw string.
+
+Seeded on first run: `swarm` (generalist, unscoped, all four tools)
+and `ledger` (decision-summarizer, unscoped, no shell — the other
+three tools). Deleting an agent is not supported (history would
+dangle) — named gap.
+
+Existing databases that predate these columns are upgraded in
+`ensure_schema()` via `PRAGMA table_info` + `ALTER TABLE`, not Alembic.
+`ledger`'s tools are rewritten to the no-shell default only when the
+`tools` column is first added.
+
+### `agent_memory`
+
+| column     | type    | notes |
+|------------|---------|-------|
+| id         | INTEGER | PK, autoincrement |
+| agent_name | TEXT    | the agent's mention name |
+| channel_id | TEXT    | NULL = global to that agent; else a channel id |
+| kind       | TEXT    | `note` \| `summary` |
+| body       | TEXT    | |
+| created_at | REAL    | |
+| updated_at | REAL    | |
+
+Indexed on `(agent_name, created_at)`. Notes are written by the
+`remember` tool. At most one `summary` row is kept per
+`(agent_name, channel_id)` — a new summary replaces the previous.
 
 ### Not built
 
 No `threads` table separate from `messages.parent_id` — flat storage
 with a nullable self-reference is sufficient; `GET /api/messages/{id}/thread`
 returns one level (the parent plus rows whose `parent_id` equals that
-id). No migrations system — the schema has only grown via
-`CREATE TABLE IF NOT EXISTS`, which is fine until a column needs to
-change type or move, at which point this needs an actual migration
-tool, not another `ALTER TABLE` bolted into `init_db`. Admin role for
-`POST /api/agents` is still a named gap — see `PROJECT.md`.
+id). Admin role for `POST /api/agents` is still a named gap — see
+`PROJECT.md`. No agent delete. No vector search (Phase 6).
 
 ---
 
@@ -87,11 +114,11 @@ The composite form exists so REST and WS share one parsing path
 separately from the token on every call.
 
 - **REST writes**: `Authorization: Bearer <handle>:<raw>` header,
-  required on every POST that creates or modifies data. Read endpoints
-  (`GET /api/channels`, `GET /api/channels/{id}/messages`,
-  `GET /api/messages/{id}/thread`, `GET /api/agents`) are
-  unauthenticated by design — there's no private data in this system
-  yet.
+  required on every POST/PATCH that creates or modifies data. Read
+  endpoints (`GET /api/channels`, `GET /api/channels/{id}/messages`,
+  `GET /api/messages/{id}/thread`, `GET /api/agents`,
+  `GET /api/agents/{name}`) are unauthenticated by design — there's no
+  private data in this system yet.
 - **WS writes**: the first frame after connecting must be
   `{"token": "<handle>:<raw>", "last_seen_id": null}`. `last_seen_id`
   is optional. Invalid or missing token closes the connection with
@@ -108,9 +135,9 @@ separately from the token on every call.
   an in-memory dict (`_last_write` in `main.py`). Violating it returns
   `429` (REST) or a `{"type": "error", "detail": "slow down"}` frame
   (WS) — the WS connection stays open, the message is just dropped.
-- **No admin role.** `POST /api/agents` requires only a valid token,
-  not any elevated permission. Named gap, not a bug — see
-  `PROJECT.md`.
+- **No admin role.** `POST /api/agents` and `PATCH /api/agents/{name}`
+  require only a valid token, not any elevated permission. Named gap,
+  not a bug — see `PROJECT.md`.
 
 ---
 
@@ -195,23 +222,68 @@ reply whose `parent_id` equals that id, oldest-first, each with
 404 if the message doesn't exist.
 
 ### `GET /api/status`
-No auth. Reports whether `GROQ_API_KEY` is loaded — boolean only, never the key.
+No auth. Reports whether inference keys are loaded — booleans only,
+never the keys.
 ```json
-{"groq": true}
+{"groq": true, "openrouter": false}
 ```
-The app loads `.env` from the project root and from `backend/.env` on import (process env still wins). If this is `false` after you set a key, restart uvicorn — `--reload` does not pick up `.env` edits.
+The app loads `.env` from the project root and from `backend/.env` on
+import (process env still wins). If this is `false` after you set a
+key, restart uvicorn — `--reload` does not pick up `.env` edits.
+Agents can reply if either `groq` or `openrouter` is true.
 
 ### `GET /api/agents?channel_id=<optional>`
 No auth. Without `channel_id`, returns every agent. With it, returns
-agents scoped to that channel plus unscoped (global) agents.
+agents scoped to that channel plus unscoped (global) agents. Each row
+includes harness fields; `tools` is a JSON array. Memories are not
+embedded on the list.
+
+### `GET /api/agents/{name}`
+No auth. The agent plus its most recent memories (up to 20, newest
+last).
+```json
+{
+  "name": "swarm",
+  "system_prompt": "...",
+  "model": "llama-3.3-70b-versatile",
+  "channel_scope": null,
+  "history_window": 12,
+  "max_tool_calls": 3,
+  "tools": ["read_only_shell", "search_channel_history", "remember", "recall"],
+  "created_at": 1786353998.09,
+  "memories": [
+    {"id": 1, "agent_name": "swarm", "channel_id": "general",
+     "kind": "note", "body": "ship date is Friday",
+     "created_at": 1786527277.23, "updated_at": 1786527277.23}
+  ]
+}
+```
+404 if the name is not registered.
 
 ### `POST /api/agents`
 Auth required (any valid token — no admin check, see section 2).
+Harness fields are optional; omitted values use the defaults above.
+`tools` defaults to all four names. `channel_scope`, if set, must be
+an existing channel id.
 ```json
 // request
-{"name": "ledger", "system_prompt": "...", "model": "llama-3.3-70b-versatile", "channel_scope": null}
-// response 200 — the created agent
-// 409 if name already registered
+{"name": "scribe", "system_prompt": "...", "model": "llama-3.3-70b-versatile",
+ "channel_scope": null, "history_window": 12, "max_tool_calls": 3,
+ "tools": ["search_channel_history", "remember", "recall"]}
+// response 200 — the created agent (no memories array)
+// 409 if name already registered, 404 if channel_scope is unknown
+```
+
+### `PATCH /api/agents/{name}`
+Auth required. Any subset of `system_prompt`, `model`,
+`channel_scope`, `history_window`, `max_tool_calls`, `tools`.
+`channel_scope: null` unscope the agent. Seeded personas (`swarm`,
+`ledger`) are editable like any other.
+```json
+// request
+{"history_window": 20, "tools": ["remember", "recall"]}
+// response 200 — the updated agent
+// 404 if name is not registered
 ```
 
 ---
@@ -255,7 +327,9 @@ against, WS doesn't need one to exist at all.
 `agent_stream_start` / `agent_token` are live tokens for the agent's
 final text completion. They are not persisted. The completed reply is
 persisted once and then broadcast as a `message` event; clients replace
-the streaming placeholder with that row.
+the streaming placeholder with that row. If a content stream dies
+mid-reply, the partial text is persisted with a trailing
+`[reply cut off]` line — tokens already shown are not dropped.
 
 Live `message` events from a human/agent/system write may omit
 `reactions` (empty). Catch-up `message` events include `reactions`.
@@ -274,20 +348,29 @@ Live `message` events from a human/agent/system write may omit
   was a real bug during V2 build (see PROJECT.md "what changed") —
   the fix runs all mentioned agents inside a single background task
   rather than one task per agent.
-- **Context window**: last `HISTORY_WINDOW` (12) messages in the
-  channel, oldest first. `system`-kind messages (tool-call audit logs)
-  are excluded from what's sent to the model — they're for humans
-  reading the channel, not context for the agent itself. The agent's
-  own prior messages map to the `assistant` role; everything else to
-  `user`, prefixed with the author's name.
-- **Model**: per-agent `model` column in the `agents` table (default
-  `llama-3.3-70b-versatile`), via Groq.
-- **Tools available**: `read_only_shell(command)` and
-  `search_channel_history(query)`, exposed via Groq's function-calling
-  API (`tools` + `tool_choice="auto"`) **only when the latest human
-  message looks like a file/history request**. Greetings (`@swarm hi`)
-  get a text-only completion — small models otherwise burn the 3-call
-  cap on `ls`/`dir`.
+- **Context assembly**, in order:
+  1. The agent's `system_prompt`.
+  2. Harness policy: which tools are allowed, and "do not tool-call
+     greetings".
+  3. Injected memories: up to 12 most recent `note` rows that are
+     global to the agent or scoped to this channel, plus the latest
+     `summary` for this agent+channel if one exists.
+  4. Last `history_window` channel messages (oldest first).
+     `system`-kind messages (tool-call audit logs) are excluded from
+     what's sent to the model. The agent's own prior messages map to
+     the `assistant` role; everything else to `user`, prefixed with
+     the author's name.
+- **Rolling summary**: after a successful reply, if the fetched
+  history is at least `history_window` non-system messages, older
+  messages outside the window are compacted into one `summary` row
+  for that agent+channel (replacing any previous summary). This is a
+  local extract, not a second model call.
+- **Model**: per-agent `model` column, via Groq. `SWARM_AGENT_MODEL`
+  still overrides every agent globally if set.
+- **Tools available**: the agent's `tools` list, exposed via function
+  calling **only when the latest human message looks like a
+  file/history/memory request**. Greetings (`@swarm hi`) get a
+  text-only completion.
   - `read_only_shell` runs in a sandboxed working directory
     (`SWARM_SANDBOX_DIR`; default `/tmp/swarm-sandbox`, or `%TEMP%\swarm-sandbox`
     on Windows), 10s timeout, output capped at 4000 chars, minimal `PATH`
@@ -297,20 +380,34 @@ Live `message` events from a human/agent/system write may omit
     it as one.
   - `search_channel_history` does a `LIKE %query%` substring match
     against that channel's messages. Not semantic — see Phase 6.
-  - Capped at 3 tool calls per single agent trigger (not per message —
-    if two agents are mentioned, each gets its own cap of 3).
+  - `remember(body, scope)` writes an `agent_memory` note.
+    `scope` is `channel` (default) or `global`.
+  - `recall(query)` does a `LIKE %query%` substring match against
+    that agent's notes (global + this channel). Not semantic.
+  - Capped at the agent's `max_tool_calls` per single trigger (not
+    per message — if two agents are mentioned, each gets its own cap).
   - Every tool call is persisted as a `system`-kind message
     (`"<agent> ran: <tool>(<args>) -> <truncated result>"`) and
     broadcast before the agent's final reply is posted. This is the
     audit-trail requirement — not optional logging, it's how a human
     watching the channel sees what the agent actually did.
-- **Streaming**: each Groq round is streamed via AsyncGroq
-  (`stream=True`). If a round contains tool calls, tokens are not
-  forwarded and the round is treated as a tool round (same 3-call cap).
-  The first content-only round broadcasts `agent_stream_start` then
-  `agent_token` frames; the assembled reply is persisted once and
-  broadcast as `message`. Failures still become `[agent error: ...]`
-  posted as a normal agent message — they are not streamed.
+- **Streaming**: each provider round is streamed (`stream=True`). If a
+  round contains tool calls, tokens are not forwarded and the round is
+  treated as a tool round. The first content-only round broadcasts
+  `agent_stream_start` then `agent_token` frames; the assembled reply
+  is persisted once and broadcast as `message`.
+- **Retry + fallback**: a 429 / 5xx / timeout is retried **once**
+  after a short delay. If Groq still fails (or `GROQ_API_KEY` is
+  missing) and `OPENROUTER_API_KEY` is set, the same stream contract
+  is tried against OpenRouter's OpenAI-compatible API
+  (`https://openrouter.ai/api/v1`). `OPENROUTER_MODEL` overrides the
+  mapped model name; otherwise Groq model ids are mapped to OpenRouter
+  slugs when a mapping exists, else the original id is sent.
+- **Classified failures**: missing key, rate limit, timeout, bad
+  model, and network errors become a short in-channel line
+  (`[agent error: …]`), not a raw exception string. They are posted as
+  a normal agent message and are not streamed. The relay never 500s
+  because an agent failed.
 - **Tracing**: if `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are
   both set, every generation call is wrapped in a Langfuse trace
   (`swarm.agent.<name>`), tagged with `channel_id` and agent name in
@@ -320,18 +417,12 @@ Live `message` events from a human/agent/system write may omit
 - **Env loading**: `backend/__init__.py` loads project-root `.env` then
   `backend/.env` via python-dotenv (`override=False`, so real process
   env / Docker `env_file` still win). Tests set `PYTHON_DOTENV_DISABLED`.
-- **Failure mode**: any exception — missing `GROQ_API_KEY`, API error,
-  tool execution error — is caught and returned as the reply text
-  itself (`[agent error: ...]`), posted as a normal agent message. The
-  relay never 500s because an agent failed. Verified during build:
-  killing `GROQ_API_KEY` mid-test produced a clean in-channel error on
-  both agents mentioned in the same message, server stayed up.
 
 ---
 
 ## 6. Functional requirements — status
 
-All FR numbers below are implemented as of Phase 8 unless noted.
+All FR numbers below are implemented as of Phase 9 unless noted.
 
 | FR | Description | Status |
 |---|---|---|
@@ -341,17 +432,22 @@ All FR numbers below are implemented as of Phase 8 unless noted.
 | FR1.4 | No bare 500s leaking stack traces | ✅ (all known error paths return structured JSON) |
 | FR2.1 | Shell + history-search tools via Groq function calling | ✅ |
 | FR2.2 | Every tool call posted as a channel system message | ✅ |
-| FR2.3 | 10s tool timeout, 3-call cap per trigger | ✅ |
+| FR2.3 | 10s tool timeout, per-agent tool-call cap | ✅ (default 3, cap 8) |
 | FR3.1 | `parent_id` threading | ✅ |
 | FR3.2 | Idempotent reactions | ✅ |
 | FR4.1 | `agents` table replaces hardcoded persona | ✅ |
-| FR4.2 | Multi-mention replies in order, not concurrent | ✅ (bug found and fixed during build) |
+| FR4.2 | Multi-mention replies in order, not concurrent | ✅ (bug found and fixed during V2 build) |
 | FR5.1 | Langfuse trace per generation call, incl. tool calls | ✅ |
 | FR5.2 | Traces tagged with channel_id (and agent name) | ✅ |
 | FR8.1 | WS catch-up via optional `last_seen_id` in handshake | ✅ |
 | FR8.2 | Streaming final agent reply over WS token-by-token | ✅ |
 | FR8.3 | Message history pagination via `before_id` | ✅ |
 | FR8.4 | `GET /api/messages/{id}/thread` one-level thread | ✅ |
+| FR9.1 | GET/PATCH agent, harness fields, create-agent UI/CLI | ✅ |
+| FR9.2 | `agent_memory` notes via remember/recall tools | ✅ |
+| FR9.3 | Context injects notes + latest summary | ✅ |
+| FR9.4 | Classified errors, one retry, optional OpenRouter | ✅ |
+| FR9.5 | Partial stream persisted with cutoff note | ✅ |
 
 ---
 
@@ -362,7 +458,7 @@ All FR numbers below are implemented as of Phase 8 unless noted.
 | Message broadcast latency | < 100ms local | in-memory hub, no network hop beyond the DB write — unchanged from V1, not re-benchmarked |
 | Agent reply latency | best-effort | tool-calling rounds stay non-streaming; final tokens stream over WS; no p99 target set |
 | Concurrent connections per channel | untested beyond ~5 in manual testing | in-memory `set[WebSocket]`, no load test exists |
-| DB durability | SQLite file on a Docker named volume | acceptable through Phase 7; revisit for multi-host durability if ever needed |
+| DB durability | SQLite file on a Docker named volume | `ensure_schema()` upgrades in place; revisit for multi-host durability if ever needed |
 | Docker build | verified locally via `docker compose build && up -d` | `/api/channels` 200, named volume persists, sandbox cwd `/tmp/swarm-sandbox`; not a remote VPS deploy |
 
 ---
@@ -372,4 +468,4 @@ All FR numbers below are implemented as of Phase 8 unless noted.
 Unchanged from V1: no Nostr/event-signing, no git hosting, no
 canvas/media comments, no huddle/voice, no multi-tenant hosting, no
 vector search (Phase 6, intentionally unbuilt), no admin role (named
-gap, still gated).
+gap, still gated), no agent delete.

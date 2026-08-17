@@ -1,15 +1,15 @@
 # PROMPTS.md — swarm
 
-Phases 1–5, 7, and 8 are built (see PROJECT.md). This file records
+Phases 1–5 and 7–9 are built (see PROJECT.md). This file records
 what actually got built per phase, and keeps paste-ready prompts for
-the remaining gated items (admin role, semantic history).
+the remaining gated items (admin role, semantic history, agent delete).
 
 If you're extending this repo with an agentic coding tool, point it at
 `PROBLEM.md`, `PROJECT.md`, and `SPEC.md` first either way.
 
 ---
 
-## Phases 1–5, 7, 8 — what shipped (reference, not re-runnable as-is)
+## Phases 1–5, 7–9 — what shipped (reference, not re-runnable as-is)
 
 These prompts describe what was actually implemented. They're kept
 for context, not meant to be re-run — running them again against
@@ -69,12 +69,21 @@ auth, reactions, pagination, threads, WS 4001, catch-up, and a mocked
 streaming mention. Admin role was
 not in this phase.
 
+**Phase 9 (Custom agents + memory)**: SPEC updated first. `ensure_schema()`
+adds harness columns (`history_window`, `max_tool_calls`, `tools`) and
+`agent_memory`. `GET`/`PATCH /api/agents/{name}` plus create-agent UI
+and CLI. `remember`/`recall` tools write keyword notes (not vectors).
+Context injects recent notes + one rolling summary. Groq errors are
+classified; 429/5xx/timeout retry once; `OPENROUTER_API_KEY` is an
+optional fallback. Partial streams persist with a cutoff note. Vanilla
+UI: agent panel, clearer empty/login/status, collapsible tool rows.
+
 ---
 
 ## Open — gated leftovers
 
-Admin role and Phase 6 (semantic history) are still gated below.
-Do not build them speculatively.
+Admin role, Phase 6 (semantic history), and agent delete are still
+gated below. Do not build them speculatively.
 
 ---
 
@@ -100,6 +109,12 @@ not, report that back and don't implement it.
 
 2. Phase 6 (semantic history) — unchanged condition from before:
    only if keyword search has actually proven insufficient.
+
+3. Agent delete
+   Condition: dangling agent names in history are actually a problem
+   (renames, retired personas, or a user asking to remove one).
+   If justified: soft-delete or rename-in-place so old messages still
+   resolve; do not hard-delete rows that messages still point at.
 ```
 
 ---

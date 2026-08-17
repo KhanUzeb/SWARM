@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import agent, db
-from .models import AgentCreate, ChannelCreate, MessageCreate, ReactionCreate, RegisterRequest
+from .models import AgentCreate, AgentPatch, ChannelCreate, MessageCreate, ReactionCreate, RegisterRequest
 
 app = FastAPI(title="swarm")
 
@@ -112,11 +112,14 @@ async def on_startup() -> None:
 
 # --------------------------------------------------------------- status ---
 
+def _key_set(name: str) -> bool:
+    return bool((os.environ.get(name) or "").strip().strip('"').strip("'"))
+
+
 @app.get("/api/status")
 async def api_status():
-    """Boolean-only — never returns the key itself."""
-    key = (os.environ.get("GROQ_API_KEY") or "").strip().strip('"').strip("'")
-    return {"groq": bool(key)}
+    """Boolean-only — never returns the keys themselves."""
+    return {"groq": _key_set("GROQ_API_KEY"), "openrouter": _key_set("OPENROUTER_API_KEY")}
 
 
 # ---------------------------------------------------------------- auth ----
@@ -214,14 +217,49 @@ async def api_list_agents(channel_id: str | None = None):
     return await db.list_agents(channel_id)
 
 
+@app.get("/api/agents/{name}")
+async def api_get_agent(name: str):
+    row = await db.get_agent(name)
+    if row is None:
+        raise HTTPException(404, "no such agent")
+    return row
+
+
 @app.post("/api/agents")
 async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_auth)):
     # NOTE: no admin role check yet — any authenticated user can register
     # a persona. Named gap, see SPEC.md. Fine for a single-tenant
     # portfolio deployment, not fine past that.
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
     if await db.agent_exists(payload.name):
         raise HTTPException(409, "agent name already registered")
-    return await db.create_agent(payload.name, payload.system_prompt, payload.model, payload.channel_scope)
+    if payload.channel_scope and not await db.channel_exists(payload.channel_scope):
+        raise HTTPException(404, "no such channel")
+    return await db.create_agent(
+        payload.name,
+        payload.system_prompt,
+        payload.model,
+        payload.channel_scope,
+        payload.history_window,
+        payload.max_tool_calls,
+        payload.tools,
+    )
+
+
+@app.patch("/api/agents/{name}")
+async def api_patch_agent(name: str, payload: AgentPatch, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await db.agent_exists(name):
+        raise HTTPException(404, "no such agent")
+    fields = payload.model_dump(exclude_unset=True)
+    if "channel_scope" in fields and fields["channel_scope"] and not await db.channel_exists(fields["channel_scope"]):
+        raise HTTPException(404, "no such channel")
+    updated = await db.update_agent(name, fields)
+    if updated is None:
+        raise HTTPException(404, "no such agent")
+    return updated
 
 
 # ---------------------------------------------------------------- WS ------
@@ -303,7 +341,8 @@ async def _run_agents_in_order(channel_id: str, agents: list[dict]) -> None:
 async def _run_agent(channel_id: str, agent_row: dict) -> None:
     name = agent_row["name"]
     await hub.broadcast(channel_id, {"type": "typing", "author": name})
-    history = await db.get_history(channel_id, limit=agent.HISTORY_WINDOW)
+    window = agent.history_window_of(agent_row)
+    history = await db.get_history(channel_id, limit=max(window * 2, window))
     tools_posted = False
 
     async def persist_tools(events: list[dict]) -> None:

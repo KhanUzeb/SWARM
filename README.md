@@ -14,10 +14,10 @@ swarm/
   docs/DEPLOY.md    docker compose
 ```
 
-**Status: V2 + Phase 8.** Auth, threads, reactions, multi-agent personas,
-tool calling, Langfuse, Docker, WS reconnect/catch-up, streaming agent
-replies, and a thread side panel are all built. See `PROJECT.md` and
-`SPEC.md` for the contract.
+**Status: V2 + Phase 9.** Auth, threads, reactions, multi-agent personas,
+tool calling, per-agent memory/harness, Langfuse, Docker, WS
+reconnect/catch-up, streaming agent replies, and a thread side panel
+are all built. See `PROJECT.md` and `SPEC.md` for the contract.
 
 ## Run it
 
@@ -64,6 +64,9 @@ python cli/swarm_cli.py post general uzeb "shipping the coverage fix"
 echo "long message" | python cli/swarm_cli.py post general uzeb --stdin
 python cli/swarm_cli.py react 1 uzeb "🔥"
 python cli/swarm_cli.py agents
+python cli/swarm_cli.py agent swarm
+python cli/swarm_cli.py create-agent scribe --prompt "You take notes."
+python cli/swarm_cli.py patch-agent scribe --window 20
 ```
 
 Set `SWARM_URL` if the relay isn't on `localhost:8000`. This is the
@@ -91,3 +94,4 @@ Still gated (see `PROMPTS.md`):
    should be allowed to register personas.
 2. **Semantic history** — only if keyword search has actually proven
    insufficient.
+3. **Agent delete** — only if dangling history is actually a problem.
