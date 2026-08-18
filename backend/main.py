@@ -22,7 +22,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import agent, db
-from .models import AgentCreate, AgentPatch, ChannelCreate, MessageCreate, ReactionCreate, RegisterRequest
+from .jobs import JOB_TEMPLATES
+from .models import (
+    AgentCreate, AgentPatch, ApprovalResolve, ChannelCreate, MessageCreate,
+    ReactionCreate, RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate,
+    SkillPatch,
+)
 
 app = FastAPI(title="swarm")
 
@@ -101,13 +106,28 @@ class Hub:
         for ws in dead:
             self.leave(channel_id, ws)
 
+    async def broadcast_all(self, payload: dict) -> None:
+        for channel_id in list(self._rooms):
+            await self.broadcast(channel_id, payload)
+
 
 hub = Hub()
+_routine_task: asyncio.Task | None = None
+ROUTINE_TICK_SECONDS = 20
+HANDOFF_DEPTH = 2
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    global _routine_task
     await db.init_db()
+    _routine_task = asyncio.create_task(_routine_loop())
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    if _routine_task is not None:
+        _routine_task.cancel()
 
 
 # --------------------------------------------------------------- status ---
@@ -244,6 +264,7 @@ async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_a
         payload.history_window,
         payload.max_tool_calls,
         payload.tools,
+        payload.job,
     )
 
 
@@ -260,6 +281,180 @@ async def api_patch_agent(name: str, payload: AgentPatch, handle: str = Depends(
     if updated is None:
         raise HTTPException(404, "no such agent")
     return updated
+
+
+@app.get("/api/jobs")
+async def api_list_jobs():
+    return JOB_TEMPLATES
+
+
+@app.get("/api/skills")
+async def api_list_skills():
+    return await db.list_skills()
+
+
+@app.post("/api/skills")
+async def api_create_skill(payload: SkillCreate, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    return await db.upsert_skill(payload.name, payload.body)
+
+
+@app.patch("/api/skills/{skill_id}")
+async def api_patch_skill(
+    skill_id: int, payload: SkillPatch, handle: str = Depends(require_auth)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    fields = payload.model_dump(exclude_unset=True)
+    if not fields:
+        row = await db.get_skill_by_id(skill_id)
+        if row is None:
+            raise HTTPException(404, "no such skill")
+        return row
+    updated = await db.update_skill(skill_id, fields)
+    if updated is None:
+        raise HTTPException(404, "no such skill")
+    return updated
+
+
+@app.delete("/api/skills/{skill_id}")
+async def api_delete_skill(skill_id: int, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await db.delete_skill(skill_id):
+        raise HTTPException(404, "no such skill")
+    return {"ok": True}
+
+
+@app.get("/api/routines")
+async def api_list_routines(agent_name: str | None = None):
+    return await db.list_routines(agent_name)
+
+
+@app.post("/api/routines")
+async def api_create_routine(payload: RoutineCreate, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await db.agent_exists(payload.agent_name):
+        raise HTTPException(404, "no such agent")
+    if await db.count_routines(payload.agent_name) >= 50:
+        raise HTTPException(409, "this bot already has 50 routines")
+    return await db.create_routine(
+        payload.agent_name,
+        payload.title,
+        payload.instructions,
+        payload.interval_minutes,
+        payload.enabled,
+    )
+
+
+@app.patch("/api/routines/{routine_id}")
+async def api_patch_routine(
+    routine_id: int, payload: RoutinePatch, handle: str = Depends(require_auth)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    fields = payload.model_dump(exclude_unset=True)
+    if "interval_minutes" in fields:
+        current = await db.get_routine(routine_id)
+        if current is None:
+            raise HTTPException(404, "no such routine")
+        fields["next_run_at"] = time.time() + fields["interval_minutes"] * 60
+    updated = await db.update_routine(routine_id, fields)
+    if updated is None:
+        raise HTTPException(404, "no such routine")
+    return updated
+
+
+@app.delete("/api/routines/{routine_id}")
+async def api_delete_routine(routine_id: int, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await db.delete_routine(routine_id):
+        raise HTTPException(404, "no such routine")
+    return {"ok": True}
+
+
+@app.post("/api/routines/{routine_id}/run")
+async def api_run_routine(routine_id: int, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    row = await db.get_routine(routine_id)
+    if row is None:
+        raise HTTPException(404, "no such routine")
+    asyncio.create_task(_execute_routine(row, test_run=True))
+    return {"ok": True, "status": "started"}
+
+
+@app.get("/api/routines/{routine_id}/runs")
+async def api_routine_runs(routine_id: int):
+    if await db.get_routine(routine_id) is None:
+        raise HTTPException(404, "no such routine")
+    return await db.list_routine_runs(routine_id)
+
+
+@app.get("/api/approvals")
+async def api_list_approvals(channel_id: str | None = None, status: str | None = "pending"):
+    return await db.list_approvals(channel_id=channel_id, status=status)
+
+
+@app.post("/api/approvals/{approval_id}/resolve")
+async def api_resolve_approval(
+    approval_id: int, payload: ApprovalResolve, handle: str = Depends(require_auth)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    row = await db.get_approval(approval_id)
+    if row is None:
+        raise HTTPException(404, "no such approval")
+    if row["status"] != "pending":
+        raise HTTPException(409, "already resolved")
+    updated = await db.resolve_approval(approval_id, payload.status)
+    await db.set_agent_status(row["agent_name"], "idle")
+    await hub.broadcast_all({
+        "type": "bot_status", "name": row["agent_name"], "status": "idle",
+    })
+    verb = "Approved" if payload.status == "approved" else "Denied"
+    body = f"{verb}: {row['action']}"
+    if row.get("detail"):
+        body += f" — {row['detail']}"
+    if payload.status == "approved":
+        body += " Continue from here."
+    else:
+        body += " Do not proceed with that action."
+    msg = await db.add_message(row["channel_id"], handle, body, "human")
+    await hub.broadcast(row["channel_id"], {"type": "message", "message": msg})
+    await hub.broadcast_all({"type": "approval", "approval": updated})
+    await _maybe_trigger_agents(row["channel_id"], msg)
+    return updated
+
+
+@app.get("/api/computer")
+async def api_computer():
+    return {
+        "workspace": agent.SANDBOX_DIR,
+        "shared": True,
+        "files": agent.list_workspace_files(),
+        "activity": await db.get_recent_system_messages(20),
+        "note": (
+            "All Bots share this workspace. It is a local sandbox, not a cloud VM — "
+            "files and shell live here; there is no remote desktop or browser session."
+        ),
+    }
+
+
+@app.get("/api/computer/file")
+async def api_computer_file(path: str):
+    target = agent._safe_workspace_path(path)
+    if target is None or not target.is_file():
+        raise HTTPException(404, "no such file")
+    if target.stat().st_size > 64_000:
+        raise HTTPException(413, "file too large to preview")
+    return {
+        "path": path,
+        "content": target.read_text(encoding="utf-8", errors="replace"),
+    }
 
 
 # ---------------------------------------------------------------- WS ------
@@ -321,29 +516,68 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
         hub.leave(channel_id, websocket)
 
 
-async def _maybe_trigger_agents(channel_id: str, msg: dict) -> None:
-    if msg["author_kind"] != "human":
+async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -> None:
+    if depth > HANDOFF_DEPTH:
         return
+    kind = msg.get("author_kind")
+    body = msg.get("body") or ""
+    if kind == "system" and not body.startswith("[routine:"):
+        return
+    if kind not in ("human", "agent", "system"):
+        return
+
+    to_run: list[dict] = []
+    seen: set[str] = set()
+
+    if kind in ("human", "system"):
+        channel = await db.get_channel(channel_id)
+        owner = (channel or {}).get("owner_agent") if channel and channel.get("kind") == "dm" else None
+        if owner:
+            row = await db.fetch_agent(owner)
+            if row:
+                to_run.append(row)
+                seen.add(row["name"])
+
     scoped_agents = await db.list_agents(channel_id)
-    mentioned = agent.find_mentioned_agents(msg["body"], scoped_agents)
-    if mentioned:
+    mentioned = agent.find_mentioned_agents(body, scoped_agents)
+    if kind == "agent":
+        mentioned = [a for a in mentioned if a["name"] != msg.get("author")]
+        if not mentioned:
+            return
+        asyncio.create_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1))
+        return
+
+    for a in mentioned:
+        if a["name"] not in seen:
+            to_run.append(a)
+            seen.add(a["name"])
+
+    if to_run:
         # one task for the whole batch, agents run in order inside it —
         # asyncio.create_task per-agent would race and violate FR4.2's
-        # "in the order mentioned" guarantee.
-        asyncio.create_task(_run_agents_in_order(channel_id, mentioned))
+        # "in the order mentioned" guarantee. DM owner is prepended so a
+        # 1:1 always hears you without an @mention.
+        asyncio.create_task(_run_agents_in_order(channel_id, to_run, depth=depth))
 
 
-async def _run_agents_in_order(channel_id: str, agents: list[dict]) -> None:
+async def _run_agents_in_order(channel_id: str, agents: list[dict], *, depth: int = 0) -> None:
     for a in agents:
-        await _run_agent(channel_id, a)
+        await _run_agent(channel_id, a, depth=depth)
 
 
-async def _run_agent(channel_id: str, agent_row: dict) -> None:
+async def _set_status(name: str, status: str) -> None:
+    await db.set_agent_status(name, status)
+    await hub.broadcast_all({"type": "bot_status", "name": name, "status": status})
+
+
+async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dict:
     name = agent_row["name"]
+    await _set_status(name, "working")
     await hub.broadcast(channel_id, {"type": "typing", "author": name})
     window = agent.history_window_of(agent_row)
     history = await db.get_history(channel_id, limit=max(window * 2, window))
     tools_posted = False
+    pending_approvals: list[dict] = []
 
     async def persist_tools(events: list[dict]) -> None:
         nonlocal tools_posted
@@ -354,6 +588,12 @@ async def _run_agent(channel_id: str, agent_row: dict) -> None:
             note = f"{name} ran: {event['tool']}({event['args']}) -> {event['result'][:200]}"
             sys_msg = await db.add_message(channel_id, name, note, "system")
             await hub.broadcast(channel_id, {"type": "message", "message": sys_msg})
+            if event["tool"] == "request_approval":
+                pending = await db.list_approvals(channel_id=channel_id, status="pending")
+                for row in pending:
+                    if row["agent_name"] == name and row not in pending_approvals:
+                        pending_approvals.append(row)
+                        await hub.broadcast_all({"type": "approval", "approval": row})
 
     async def on_stream_start() -> None:
         await hub.broadcast(channel_id, {"type": "agent_stream_start", "author": name})
@@ -371,6 +611,65 @@ async def _run_agent(channel_id: str, agent_row: dict) -> None:
 
     msg = await db.add_message(channel_id, name, result["reply"], "agent")
     await hub.broadcast(channel_id, {"type": "message", "message": msg})
+    asked = any(e["tool"] == "request_approval" for e in result["tool_events"])
+    await _set_status(name, "needs_approval" if asked else "idle")
+    if depth < HANDOFF_DEPTH:
+        await _maybe_trigger_agents(channel_id, msg, depth=depth + 1)
+    return result
+
+
+async def _execute_routine(row: dict, *, test_run: bool = False) -> None:
+    agent_row = await db.fetch_agent(row["agent_name"])
+    if agent_row is None:
+        await db.mark_routine_run(
+            row["id"], status="failed", excerpt="bot missing",
+            interval_minutes=row["interval_minutes"],
+        )
+        return
+    channel_id = db.dm_channel_id(row["agent_name"])
+    if not await db.channel_exists(channel_id):
+        await db.mark_routine_run(
+            row["id"], status="failed", excerpt="no 1:1 channel",
+            interval_minutes=row["interval_minutes"],
+        )
+        return
+    prefix = "[routine-test:" if test_run else "[routine:"
+    body = (
+        f"{prefix}{row['title']}] {row['instructions']}\n"
+        "Do this job now. Stop for approval before any external send/publish/delete."
+    )
+    msg = await db.add_message(channel_id, "routine", body, "system")
+    await hub.broadcast(channel_id, {"type": "message", "message": msg})
+    try:
+        result = await _run_agent(channel_id, agent_row)
+        excerpt = (result.get("reply") or "")[:240]
+        await db.mark_routine_run(
+            row["id"], status="ok", excerpt=excerpt,
+            interval_minutes=row["interval_minutes"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        await db.mark_routine_run(
+            row["id"], status="failed", excerpt=str(exc)[:240],
+            interval_minutes=row["interval_minutes"],
+        )
+
+
+async def run_due_routines() -> int:
+    due = await db.due_routines()
+    for row in due:
+        await _execute_routine(row)
+    return len(due)
+
+
+async def _routine_loop() -> None:
+    while True:
+        try:
+            await run_due_routines()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — scheduler must not die
+            pass
+        await asyncio.sleep(ROUTINE_TICK_SECONDS)
 
 
 # ------------------------------------------------------------ frontend ----

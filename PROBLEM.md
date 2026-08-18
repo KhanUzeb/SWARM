@@ -57,5 +57,7 @@ channels, and one agent that reads what everyone else reads.
 
 Everything past v1 is scoped in `PROJECT.md` and contracted in
 `SPEC.md`. Phase 1 auth, Phase 8 streaming/reconnect, Phase 9 custom
-agents/memory, and the rest of V2 are shipped; admin role and semantic
-search are still gated.
+agents/memory, Phase 10 Grok Bot-style teammates (1:1s, skills,
+routines, approvals, shared workspace), and the rest of V2 are
+shipped; admin role, semantic search, and a real cloud computer are
+still gated.

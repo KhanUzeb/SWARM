@@ -4,9 +4,10 @@ A mini Buzz. Chat workspace where LLM agents are channel members, not
 a sidebar. See `PROBLEM.md` for why, `SPEC.md` for the technical
 contract, `PROMPTS.md` for what built each phase and what's left.
 
-**Status: V2 + Phase 9 shipped.** Phases 1–5, 7, 8, and 9 are built.
-Phase 6 is deliberately not built — see its entry below. Admin role
-for `POST /api/agents` remains a named gap. Agent delete is not built.
+**Status: V2 + Phase 10 shipped.** Phases 1–5, 7, 8, 9, and 10 are
+built. Phase 6 is deliberately not built — see its entry below. Admin
+role for `POST /api/agents` remains a named gap. Agent delete is not
+built. There is no cloud VM; the "computer" is the shared sandbox.
 
 ## Stack
 
@@ -28,11 +29,12 @@ swarm/
     main.py       FastAPI app: REST + WS routes, auth, rate limiting, agent trigger
     db.py         schema + ensure_schema() + agent_memory
     agent.py      multi-persona LLM responder, harness, memory tools, streaming, Langfuse
+    jobs.py      Grok Bot-style job templates for create-Bot
     models.py     pydantic schemas
   frontend/
     index.html    markup
-    styles.css    Discord-like dark theme, mobile layout
-    app.js        auth, WS reconnect, threads panel, agent panel, mentions, streaming rows
+    styles.css    dark Grok-like theme, computer panel, bot roster
+    app.js        auth, WS, DMs, skills/routines/approvals, streaming
   cli/
     swarm_cli.py  JSON in/out CLI: register, post, react, history, agents, create/patch agent
   tests/          pytest + httpx; Groq mocked
@@ -61,6 +63,7 @@ swarm/
 | 7     | Deployment                | ✅ done (verified) | Dockerfile, compose, DEPLOY.md — `docker compose build && up -d` run live; `/api/channels` ok; SQLite volume survived down/up; sandbox tool ran in-container at `/tmp/swarm-sandbox` |
 | 8     | Reliability + streaming UI | ✅ done | WS `last_seen_id` catch-up, history `before_id` pagination, `GET /api/messages/{id}/thread`, AsyncGroq token streaming, pytest, vanilla UI split into html/css/js with thread panel, mention picker, reconnect, mobile layout |
 | 9     | Custom agents + memory     | ✅ done | Agent create/edit UI + GET/PATCH, per-agent harness (window, tool toggles), `agent_memory` notes via remember/recall, context injects notes + rolling summary, classified errors, one retry, optional OpenRouter |
+| 10    | Grok Bot teammates         | ✅ done | Named jobs, 1:1 DMs (no @ needed), job templates, skills, interval routines, approvals, shared workspace/"computer" panel, bot-to-bot handoff, status chips |
 
 ## What changed from the original plan
 
@@ -76,7 +79,9 @@ swarm/
   mentioned agents sequentially inside one task. Documented here
   because it's the kind of bug that only shows up under concurrent
   load, not in a single-agent test — worth remembering if
-  agent-to-agent triggering ever gets added.
+  agent-to-agent triggering ever gets added. Phase 10 did add
+  handoffs: an agent reply that `@mentions` another Bot triggers
+  that Bot, depth-capped at 2, still sequential inside the task.
 - **`SWARM_DB_PATH` env var** added, not in the original spec, so the
   Dockerfile can point SQLite at a mounted volume without a code
   change. Small addition, but it's why Phase 7 didn't need to touch
@@ -108,6 +113,11 @@ swarm/
   agents in one message can still produce up to 6 tool calls total.
   Acceptable at current scale; revisit if the sandbox shell ever does
   anything expensive enough to matter.
+- **The shared computer is a sandbox directory, not a VM.** Browser
+  sessions, 24/7 cloud work with the laptop closed, and teach-by-
+  demonstration are out of scope. Files and logins placed there are
+  visible to every Bot on the account — same boundary as Grok Bot's
+  docs, without the cloud isolation story.
 
 ## Natural next steps (still gated)
 
@@ -118,6 +128,9 @@ speculatively:
 2. Semantic history (Phase 6) — only if keyword search has actually
    proven insufficient.
 3. Agent delete — only if dangling history is actually a problem.
+4. Real computer-use (browser + cloud VM) — only if the sandbox
+   workspace has actually been shown insufficient for the jobs people
+   run here.
 
 ## Success criteria for the project as a whole
 

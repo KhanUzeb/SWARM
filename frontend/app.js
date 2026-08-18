@@ -4,10 +4,17 @@ const HISTORY_LIMIT = 50;
 const state = {
   user: null,
   token: null,
-  channel: "general",
+  channel: "dm-swarm",
   ws: null,
   channels: [],
   agents: [],
+  allAgents: [],
+  jobs: [],
+  skills: [],
+  routines: [],
+  approvals: [],
+  computer: null,
+  panelTab: "files",
   threadId: null,
   lastSeenId: 0,
   reactions: {},
@@ -22,6 +29,7 @@ const state = {
   emojiMessageId: null,
   agentsReady: false,
   editingAgent: null,
+  mentionMode: "at",
 };
 
 const el = (id) => document.getElementById(id);
@@ -64,15 +72,47 @@ function currentChannel() {
     || { id: state.channel, name: state.channel, topic: "" };
 }
 
+function isDm(channel) {
+  const c = channel || currentChannel();
+  return (c.kind || "") === "dm";
+}
+
+function botForChannel(channelId) {
+  return state.allAgents.find((a) => a.dm_channel_id === channelId);
+}
+
 function updateComposerPlaceholder() {
   const c = currentChannel();
-  el("msg-input").placeholder = `Message #${c.name || c.id} — try @swarm`;
+  const bot = botForChannel(c.id);
+  if (bot) {
+    el("msg-input").placeholder = `Message ${bot.name} — they already hear you`;
+    return;
+  }
+  el("msg-input").placeholder = `Message #${c.name || c.id} — @mention a bot or /skill`;
 }
 
 function updateTopbar() {
   const c = currentChannel();
-  el("topbar-name").textContent = "#" + (c.name || c.id);
-  el("topbar-topic").textContent = c.topic || "No topic set";
+  const bot = botForChannel(c.id);
+  const chip = el("bot-chip");
+  const configure = el("configure-bot");
+  if (bot) {
+    el("topbar-name").textContent = bot.name;
+    el("topbar-topic").textContent = bot.job || c.topic || "Teammate";
+    chip.hidden = false;
+    chip.className = `status-chip ${bot.status || "idle"}`;
+    chip.textContent = ({
+      working: "Working",
+      needs_approval: "Needs approval",
+      idle: "Idle",
+    })[bot.status || "idle"] || bot.status;
+    configure.hidden = false;
+  } else {
+    el("topbar-name").textContent = "#" + (c.name || c.id);
+    el("topbar-topic").textContent = c.topic || "No topic set";
+    chip.hidden = true;
+    configure.hidden = true;
+  }
 }
 
 function remember(m) {
@@ -293,11 +333,12 @@ async function loadChannels() {
   state.channels = await res.json();
   const list = el("channel-list");
   list.innerHTML = "";
-  if (!state.channels.length) {
-    list.innerHTML = `<li class="empty-state">No channels</li>`;
+  const rooms = state.channels.filter((c) => c.kind !== "dm");
+  if (!rooms.length) {
+    list.innerHTML = `<li class="empty-state">No rooms</li>`;
     return;
   }
-  for (const c of state.channels) {
+  for (const c of rooms) {
     const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.type = "button";
@@ -322,21 +363,66 @@ async function loadGroqStatus() {
     state.agentsReady = !!(data.groq || data.openrouter);
     n.className = state.agentsReady ? "ready" : "missing";
     n.textContent = state.agentsReady
-      ? "Agents ready"
-      : "Set GROQ_API_KEY in .env so agents can reply";
+      ? "Bots ready"
+      : "Set GROQ_API_KEY in .env so bots can reply";
   } catch {
     state.agentsReady = false;
     n.className = "missing";
-    n.textContent = "Set GROQ_API_KEY in .env so agents can reply";
+    n.textContent = "Set GROQ_API_KEY in .env so bots can reply";
   }
+}
+
+function statusLabel(status) {
+  return ({ working: "Working", needs_approval: "Needs approval", idle: "Idle" })[status] || status || "Idle";
 }
 
 function roleLine(prompt) {
   const text = String(prompt || "").replace(/\s+/g, " ").trim();
-  if (!text) return "custom agent";
+  if (!text) return "custom bot";
   const cut = text.search(/[.!?]/);
   const first = cut === -1 ? text : text.slice(0, cut + 1);
   return first.length > 72 ? first.slice(0, 69) + "…" : first;
+}
+
+function renderBots() {
+  const box = el("bots-list");
+  box.innerHTML = "";
+  if (!state.allAgents.length) {
+    box.innerHTML = `<div class="empty">No bots yet</div>`;
+    return;
+  }
+  for (const a of state.allAgents) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "bot-item" + (a.dm_channel_id === state.channel ? " active" : "");
+    btn.innerHTML = `<span class="dot ${a.status || "idle"}"></span>`;
+    const meta = document.createElement("span");
+    meta.className = "bot-meta";
+    const name = document.createElement("span");
+    name.className = "bot-name";
+    name.textContent = a.name;
+    const job = document.createElement("span");
+    job.className = "bot-job";
+    job.textContent = a.job || roleLine(a.system_prompt);
+    meta.append(name, job);
+    btn.appendChild(meta);
+    btn.addEventListener("click", () => {
+      closeSidebar();
+      switchChannel(a.dm_channel_id);
+    });
+    box.appendChild(btn);
+  }
+}
+
+async function loadAllAgents() {
+  try {
+    const res = await fetch(`${API}/api/agents`);
+    state.allAgents = res.ok ? await res.json() : [];
+  } catch {
+    state.allAgents = [];
+  }
+  fillRoutineAgents();
+  renderBots();
 }
 
 async function loadAgents(channelId) {
@@ -346,46 +432,6 @@ async function loadAgents(channelId) {
   } catch {
     state.agents = [];
   }
-  const box = el("agents-list");
-  if (!state.agents.length) {
-    box.innerHTML = `<div class="empty">No agents in this channel</div>`;
-    return;
-  }
-  box.innerHTML = "";
-  for (const a of state.agents) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "name";
-    btn.title = `Open @${a.name}`;
-    const meta = document.createElement("span");
-    meta.className = "name-meta";
-    const label = document.createElement("span");
-    label.className = "name-label";
-    label.textContent = a.name;
-    const role = document.createElement("span");
-    role.className = "name-role";
-    role.textContent = roleLine(a.system_prompt);
-    meta.append(label, role);
-    btn.innerHTML = `<span class="dot"></span>`;
-    btn.appendChild(meta);
-    btn.addEventListener("click", () => openAgentPanel(a.name));
-    box.appendChild(btn);
-  }
-}
-
-function insertMention(name, textarea = el("msg-input")) {
-  const start = textarea.selectionStart;
-  const value = textarea.value;
-  const before = value.slice(0, start);
-  const after = value.slice(textarea.selectionEnd);
-  const replaced = before.replace(/(^|\s)@[a-zA-Z0-9_\-]*$/, `$1@${name} `);
-  const usedReplace = replaced !== before;
-  textarea.value = usedReplace ? replaced + after : `${before}@${name} ${after}`;
-  const pos = usedReplace ? replaced.length : before.length + name.length + 2;
-  textarea.focus();
-  textarea.setSelectionRange(pos, pos);
-  hideMention();
-  autosize(textarea);
 }
 
 async function loadHistory(channelId, { beforeId } = {}) {
@@ -415,7 +461,10 @@ function applyHistoryPage(history, { prepend } = {}) {
     log.innerHTML = "";
     state.streams = {};
     if (!roots.length) {
-      showEmpty(log, "No messages yet. Agents live in this room — try @swarm hi");
+      const bot = botForChannel(state.channel);
+      showEmpty(log, bot
+        ? `No messages yet. Give ${bot.name} a real task — outcome, sources, and what needs your approval.`
+        : "No messages yet. Bots live in this room — try @swarm");
       return;
     }
     roots.forEach((m) => {
@@ -449,6 +498,7 @@ async function switchChannel(id) {
   document.querySelectorAll("#channel-list button").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.id === id);
   });
+  renderBots();
   updateTopbar();
   updateComposerPlaceholder();
   el("log").innerHTML = `<div class="loading-state">Loading messages…</div>`;
@@ -464,6 +514,8 @@ async function switchChannel(id) {
 
   await loadAgents(id);
   await loadGroqStatus();
+  await loadApprovals();
+  await loadComputer();
   connectWs(id);
 }
 
@@ -543,6 +595,17 @@ function handleWsEvent(data) {
     startStream(data.author);
   } else if (data.type === "agent_token") {
     appendStream(data.author, data.delta || "");
+  } else if (data.type === "bot_status") {
+    const bot = state.allAgents.find((a) => a.name === data.name);
+    if (bot) bot.status = data.status;
+    renderBots();
+    updateTopbar();
+  } else if (data.type === "approval") {
+    upsertApproval(data.approval);
+    renderApprovals();
+    if (data.approval && data.approval.channel_id === state.channel) {
+      renderApprovalDock();
+    }
   }
 }
 
@@ -610,7 +673,7 @@ function sendFrom(input, parentId) {
     return;
   }
   if (!state.agentsReady && /@[a-zA-Z0-9_\-]+/.test(body)) {
-    toast("Agents can't reply until GROQ_API_KEY is set in .env", true);
+    toast("Bots can't reply until GROQ_API_KEY is set in .env", true);
   }
   const payload = { body };
   if (parentId) payload.parent_id = parentId;
@@ -628,38 +691,67 @@ function autosize(textarea) {
 function mentionQuery(textarea) {
   const pos = textarea.selectionStart;
   const before = textarea.value.slice(0, pos);
-  const m = before.match(/(^|\s)@([a-zA-Z0-9_\-]*)$/);
-  return m ? m[2].toLowerCase() : null;
+  const at = before.match(/(^|\s)@([a-zA-Z0-9_\-]*)$/);
+  if (at) return { mode: "at", query: at[2].toLowerCase() };
+  const slash = before.match(/(^|\s)\/([a-zA-Z0-9_\-]*)$/);
+  if (slash) return { mode: "slash", query: slash[2].toLowerCase() };
+  return null;
 }
 
 function hideMention() {
   el("mention-menu").hidden = true;
 }
 
-function renderMentionMenu(query) {
+function renderMentionMenu(info) {
   const menu = el("mention-menu");
-  const matches = state.agents.filter((a) => a.name.toLowerCase().startsWith(query));
+  let matches = [];
+  if (info.mode === "at") {
+    matches = (state.agents.length ? state.agents : state.allAgents)
+      .filter((a) => a.name.toLowerCase().startsWith(info.query))
+      .map((a) => ({ label: `@${a.name}`, value: a.name, kind: "at" }));
+  } else {
+    matches = state.skills
+      .filter((s) => s.name.toLowerCase().startsWith(info.query))
+      .map((s) => ({ label: `/${s.name}`, value: s.name, kind: "slash" }));
+  }
   if (!matches.length) {
     hideMention();
     return;
   }
   if (state.mentionIndex >= matches.length) state.mentionIndex = 0;
   menu.innerHTML = "";
-  matches.forEach((a, i) => {
+  matches.forEach((item, i) => {
     const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.type = "button";
     btn.setAttribute("role", "option");
-    btn.textContent = `@${a.name}`;
+    btn.textContent = item.label;
     if (i === state.mentionIndex) btn.classList.add("active");
     btn.addEventListener("mousedown", (ev) => {
       ev.preventDefault();
-      insertMention(a.name);
+      insertMention(item.value, el("msg-input"), item.kind);
     });
     li.appendChild(btn);
     menu.appendChild(li);
   });
   menu.hidden = false;
+}
+
+function insertMention(name, textarea = el("msg-input"), kind = "at") {
+  const start = textarea.selectionStart;
+  const value = textarea.value;
+  const before = value.slice(0, start);
+  const after = value.slice(textarea.selectionEnd);
+  const needle = kind === "slash" ? /(^|\s)\/[a-zA-Z0-9_\-]*$/ : /(^|\s)@[a-zA-Z0-9_\-]*$/;
+  const mark = kind === "slash" ? "/" : "@";
+  const replaced = before.replace(needle, `$1${mark}${name} `);
+  const usedReplace = replaced !== before;
+  textarea.value = usedReplace ? replaced + after : `${before}${mark}${name} ${after}`;
+  const pos = usedReplace ? replaced.length : before.length + name.length + 2;
+  textarea.focus();
+  textarea.setSelectionRange(pos, pos);
+  hideMention();
+  autosize(textarea);
 }
 
 function onComposerInput() {
@@ -679,19 +771,23 @@ function onComposerKey(ev) {
     if (ev.key === "ArrowDown") {
       ev.preventDefault();
       state.mentionIndex = (state.mentionIndex + 1) % buttons.length;
-      renderMentionMenu(mentionQuery(el("msg-input")) || "");
+      const info = mentionQuery(el("msg-input"));
+      if (info) renderMentionMenu(info);
       return;
     }
     if (ev.key === "ArrowUp") {
       ev.preventDefault();
       state.mentionIndex = (state.mentionIndex - 1 + buttons.length) % buttons.length;
-      renderMentionMenu(mentionQuery(el("msg-input")) || "");
+      const info = mentionQuery(el("msg-input"));
+      if (info) renderMentionMenu(info);
       return;
     }
     if (ev.key === "Enter" || ev.key === "Tab") {
       ev.preventDefault();
-      const name = buttons[state.mentionIndex]?.textContent?.replace(/^@/, "");
-      if (name) insertMention(name);
+      const raw = buttons[state.mentionIndex]?.textContent || "";
+      const kind = raw.startsWith("/") ? "slash" : "at";
+      const name = raw.replace(/^[@/]/, "");
+      if (name) insertMention(name, el("msg-input"), kind);
       return;
     }
     if (ev.key === "Escape") {
@@ -719,8 +815,8 @@ function closeChannelModal() {
 
 function fillScopeOptions(selected) {
   const sel = el("agent-scope");
-  sel.innerHTML = `<option value="">Every channel</option>`;
-  for (const c of state.channels) {
+  sel.innerHTML = `<option value="">Every room (plus their 1:1)</option>`;
+  for (const c of state.channels.filter((ch) => ch.kind !== "dm")) {
     const opt = document.createElement("option");
     opt.value = c.id;
     opt.textContent = `#${c.name}`;
@@ -757,6 +853,24 @@ function renderMemories(memories) {
   }
 }
 
+function renderJobTemplates() {
+  const box = el("job-templates");
+  box.innerHTML = "";
+  box.hidden = false;
+  for (const job of state.jobs) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = job.job;
+    btn.addEventListener("click", () => {
+      box.querySelectorAll("button").forEach((n) => n.classList.remove("active"));
+      btn.classList.add("active");
+      el("agent-job").value = job.job;
+      el("agent-prompt").value = job.prompt;
+    });
+    box.appendChild(btn);
+  }
+}
+
 function openCreateAgent() {
   state.editingAgent = null;
   el("agent-err").textContent = "";
@@ -764,10 +878,15 @@ function openCreateAgent() {
   el("agent-name").disabled = false;
   el("agent-model").value = "llama-3.3-70b-versatile";
   el("agent-window").value = "12";
-  setToolChecks(["read_only_shell", "search_channel_history", "remember", "recall"]);
+  el("agent-job").value = "";
+  setToolChecks([
+    "read_only_shell", "search_channel_history", "remember", "recall",
+    "list_workspace", "write_workspace", "save_skill", "request_approval",
+  ]);
   fillScopeOptions("");
   renderMemories([]);
-  el("agent-modal-title").textContent = "New agent";
+  renderJobTemplates();
+  el("agent-modal-title").textContent = "New Bot";
   el("agent-save").textContent = "Create";
   el("agent-mention").hidden = true;
   el("agent-modal").hidden = false;
@@ -784,11 +903,13 @@ async function openAgentPanel(name) {
     el("agent-name").value = a.name;
     el("agent-name").disabled = true;
     el("agent-prompt").value = a.system_prompt || "";
+    el("agent-job").value = a.job || "";
     el("agent-model").value = a.model || "";
     el("agent-window").value = String(a.history_window || 12);
     fillScopeOptions(a.channel_scope || "");
     setToolChecks(a.tools);
     renderMemories(a.memories);
+    el("job-templates").hidden = true;
     el("agent-modal-title").textContent = `@${a.name}`;
     el("agent-save").textContent = "Save";
     el("agent-mention").hidden = false;
@@ -812,12 +933,13 @@ async function saveAgent(ev) {
   const model = el("agent-model").value.trim() || "llama-3.3-70b-versatile";
   const channel_scope = el("agent-scope").value || null;
   const history_window = Number(el("agent-window").value) || 12;
+  const job = el("agent-job").value.trim() || "Teammate";
   const tools = selectedTools();
   if (!name || !system_prompt) {
     el("agent-err").textContent = "name and prompt are required";
     return;
   }
-  const payload = { system_prompt, model, channel_scope, history_window, max_tool_calls: 3, tools };
+  const payload = { system_prompt, model, channel_scope, history_window, max_tool_calls: 3, tools, job };
   try {
     let res;
     if (state.editingAgent) {
@@ -835,9 +957,12 @@ async function saveAgent(ev) {
     }
     if (res.ok) {
       const wasEdit = !!state.editingAgent;
+      const created = wasEdit ? null : await res.json();
       closeAgentModal();
-      await loadAgents(state.channel);
+      await loadAllAgents();
+      await loadChannels();
       toast(wasEdit ? `Updated @${name}` : `Created @${name}`);
+      if (!wasEdit && created && created.dm_channel_id) switchChannel(created.dm_channel_id);
       return;
     }
     if (res.status === 409) el("agent-err").textContent = "that agent name is taken";
@@ -852,7 +977,7 @@ function applyToolsVisibility() {
   const show = localStorage.getItem("swarm_show_tools") === "1";
   document.body.classList.toggle("hide-tools", !show);
   const btn = el("toggle-tools");
-  if (btn) btn.textContent = show ? "Hide agent tools" : "Show agent tools";
+  if (btn) btn.textContent = show ? "Hide tool log" : "Show tool log";
 }
 
 function closeSidebar() {
@@ -905,7 +1030,9 @@ async function enterWorkspace(handle, token) {
   localStorage.setItem("swarm_last_handle", handle);
   setIdentity(handle);
   el("login").style.display = "none";
-  await loadChannels();
+  await Promise.all([loadChannels(), loadAllAgents(), loadJobs(), loadSkills(), loadRoutines()]);
+  const preferred = state.channels.some((c) => c.id === "dm-swarm") ? "dm-swarm" : (state.channels[0]?.id || "general");
+  if (!state.channels.some((c) => c.id === state.channel)) state.channel = preferred;
   await switchChannel(state.channel);
 }
 
@@ -956,8 +1083,10 @@ el("agent-form").addEventListener("submit", saveAgent);
 el("agent-mention").addEventListener("click", () => {
   const name = state.editingAgent || el("agent-name").value.trim();
   if (!name) return;
+  const bot = state.allAgents.find((a) => a.name === name);
   closeAgentModal();
-  insertMention(name);
+  if (bot) switchChannel(bot.dm_channel_id);
+  else insertMention(name);
 });
 el("toggle-tools").addEventListener("click", () => {
   const show = localStorage.getItem("swarm_show_tools") === "1";
@@ -1025,8 +1154,331 @@ el("load-earlier").addEventListener("click", async () => {
 el("menu-btn").addEventListener("click", openSidebar);
 el("sidebar-backdrop").addEventListener("click", closeSidebar);
 
+function setComputerOpen(open) {
+  document.body.classList.toggle("computer-open", open);
+  localStorage.setItem("swarm_computer", open ? "1" : "0");
+}
+
+function showPanelTab(tab) {
+  state.panelTab = tab;
+  document.querySelectorAll(".panel-tabs .tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tab);
+  });
+  ["files", "skills", "routines", "approvals"].forEach((name) => {
+    const node = el(`panel-${name}`);
+    if (node) node.hidden = name !== tab;
+  });
+}
+
+async function loadJobs() {
+  try {
+    const res = await fetch(`${API}/api/jobs`);
+    state.jobs = res.ok ? await res.json() : [];
+  } catch {
+    state.jobs = [];
+  }
+}
+
+async function loadSkills() {
+  try {
+    const res = await fetch(`${API}/api/skills`);
+    state.skills = res.ok ? await res.json() : [];
+  } catch {
+    state.skills = [];
+  }
+  renderSkills();
+}
+
+function renderSkills() {
+  const list = el("skill-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!state.skills.length) {
+    list.innerHTML = `<li class="empty-state">No skills yet. Save a process that worked.</li>`;
+    return;
+  }
+  for (const s of state.skills) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "linkish";
+    btn.textContent = `/${s.name}`;
+    btn.addEventListener("click", () => insertMention(s.name, el("msg-input"), "slash"));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn ghost";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      const res = await fetch(`${API}/api/skills/${s.id}`, { method: "DELETE", headers: authHeaders(false) });
+      if (res.ok) loadSkills();
+    });
+    li.append(btn, document.createTextNode(" "), del);
+    list.appendChild(li);
+  }
+}
+
+function fillRoutineAgents() {
+  const sel = el("routine-agent");
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = "";
+  for (const a of state.allAgents) {
+    const opt = document.createElement("option");
+    opt.value = a.name;
+    opt.textContent = a.name;
+    sel.appendChild(opt);
+  }
+  if (current) sel.value = current;
+  const owner = botForChannel(state.channel);
+  if (owner) sel.value = owner.name;
+}
+
+async function loadRoutines() {
+  try {
+    const res = await fetch(`${API}/api/routines`);
+    state.routines = res.ok ? await res.json() : [];
+  } catch {
+    state.routines = [];
+  }
+  renderRoutines();
+}
+
+function renderRoutines() {
+  const list = el("routine-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!state.routines.length) {
+    list.innerHTML = `<li class="empty-state">No routines. Automate a skill after it is reliable.</li>`;
+    return;
+  }
+  for (const r of state.routines) {
+    const li = document.createElement("li");
+    const title = document.createElement("div");
+    title.textContent = `${r.title} · @${r.agent_name} · every ${r.interval_minutes}m`;
+    const meta = document.createElement("div");
+    meta.className = "bot-job";
+    meta.textContent = r.enabled ? "enabled" : "paused";
+    const run = document.createElement("button");
+    run.type = "button";
+    run.className = "btn ghost";
+    run.textContent = "Test run";
+    run.addEventListener("click", async () => {
+      const res = await fetch(`${API}/api/routines/${r.id}/run`, { method: "POST", headers: authHeaders() });
+      toast(res.ok ? "Routine started" : "Couldn't start routine", !res.ok);
+    });
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "btn ghost";
+    toggle.textContent = r.enabled ? "Pause" : "Enable";
+    toggle.addEventListener("click", async () => {
+      await fetch(`${API}/api/routines/${r.id}`, {
+        method: "PATCH", headers: authHeaders(),
+        body: JSON.stringify({ enabled: !r.enabled }),
+      });
+      loadRoutines();
+    });
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn ghost";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      await fetch(`${API}/api/routines/${r.id}`, { method: "DELETE", headers: authHeaders(false) });
+      loadRoutines();
+    });
+    li.append(title, meta, run, toggle, del);
+    list.appendChild(li);
+  }
+}
+
+function upsertApproval(row) {
+  if (!row) return;
+  const i = state.approvals.findIndex((a) => a.id === row.id);
+  if (i >= 0) state.approvals[i] = row;
+  else state.approvals.unshift(row);
+}
+
+async function loadApprovals() {
+  try {
+    const res = await fetch(`${API}/api/approvals?status=pending`);
+    state.approvals = res.ok ? await res.json() : [];
+  } catch {
+    state.approvals = [];
+  }
+  renderApprovals();
+  renderApprovalDock();
+}
+
+function renderApprovals() {
+  const list = el("approval-list");
+  if (!list) return;
+  const pending = state.approvals.filter((a) => a.status === "pending");
+  list.innerHTML = "";
+  if (!pending.length) {
+    list.innerHTML = `<li class="empty-state">Nothing waiting. Consequential actions pause here.</li>`;
+    return;
+  }
+  for (const a of pending) list.appendChild(approvalItem(a));
+}
+
+function renderApprovalDock() {
+  const dock = el("approval-dock");
+  if (!dock) return;
+  dock.innerHTML = "";
+  const pending = state.approvals.filter((a) => a.status === "pending" && a.channel_id === state.channel);
+  pending.forEach((a) => dock.appendChild(approvalCard(a)));
+}
+
+function approvalItem(a) {
+  const li = document.createElement("li");
+  li.appendChild(approvalCard(a));
+  return li;
+}
+
+function approvalCard(a) {
+  const card = document.createElement("div");
+  card.className = "approval-card";
+  card.innerHTML = `<div class="who">${a.agent_name} needs approval</div><p></p>`;
+  card.querySelector("p").textContent = a.detail ? `${a.action} — ${a.detail}` : a.action;
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const allow = document.createElement("button");
+  allow.type = "button";
+  allow.className = "btn primary";
+  allow.textContent = "Allow once";
+  allow.addEventListener("click", () => resolveApproval(a.id, "approved"));
+  const deny = document.createElement("button");
+  deny.type = "button";
+  deny.className = "btn";
+  deny.textContent = "Deny";
+  deny.addEventListener("click", () => resolveApproval(a.id, "denied"));
+  actions.append(allow, deny);
+  card.appendChild(actions);
+  return card;
+}
+
+async function resolveApproval(id, status) {
+  const res = await fetch(`${API}/api/approvals/${id}/resolve`, {
+    method: "POST", headers: authHeaders(), body: JSON.stringify({ status }),
+  });
+  if (!res.ok) {
+    toast("Couldn't resolve approval", true);
+    return;
+  }
+  const updated = await res.json();
+  upsertApproval(updated);
+  renderApprovals();
+  renderApprovalDock();
+}
+
+async function loadComputer() {
+  try {
+    const res = await fetch(`${API}/api/computer`);
+    state.computer = res.ok ? await res.json() : null;
+  } catch {
+    state.computer = null;
+  }
+  renderComputer();
+}
+
+function renderComputer() {
+  const data = state.computer;
+  el("computer-note").textContent = data?.note || "";
+  el("computer-sub").textContent = data
+    ? `Shared workspace · ${data.files.length} file${data.files.length === 1 ? "" : "s"}`
+    : "Shared workspace";
+  const list = el("file-list");
+  list.innerHTML = "";
+  if (!data || !data.files.length) {
+    list.innerHTML = `<li class="empty-state">Workspace is empty. Ask a bot to write a file here.</li>`;
+  } else {
+    for (const f of data.files) {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "linkish";
+      btn.textContent = `${f.path} (${f.size} B)`;
+      btn.addEventListener("click", () => previewFile(f.path));
+      li.appendChild(btn);
+      list.appendChild(li);
+    }
+  }
+  const act = el("activity-list");
+  act.innerHTML = "";
+  for (const m of (data?.activity || []).slice(0, 12)) {
+    const li = document.createElement("li");
+    li.textContent = m.body;
+    act.appendChild(li);
+  }
+}
+
+async function previewFile(path) {
+  const preview = el("file-preview");
+  try {
+    const res = await fetch(`${API}/api/computer/file?path=${encodeURIComponent(path)}`);
+    if (!res.ok) throw new Error("file");
+    const data = await res.json();
+    preview.hidden = false;
+    preview.textContent = data.content;
+  } catch {
+    toast("Couldn't open that file", true);
+  }
+}
+
+el("toggle-computer").addEventListener("click", () => {
+  setComputerOpen(!document.body.classList.contains("computer-open"));
+});
+el("computer-close").addEventListener("click", () => setComputerOpen(false));
+document.querySelectorAll(".panel-tabs .tab").forEach((btn) => {
+  btn.addEventListener("click", () => showPanelTab(btn.dataset.tab));
+});
+el("configure-bot").addEventListener("click", () => {
+  const bot = botForChannel(state.channel);
+  if (bot) openAgentPanel(bot.name);
+});
+el("skill-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const name = el("skill-name").value.trim();
+  const body = el("skill-body").value.trim();
+  if (!name || !body) return;
+  const res = await fetch(`${API}/api/skills`, {
+    method: "POST", headers: authHeaders(), body: JSON.stringify({ name, body }),
+  });
+  if (res.ok) {
+    el("skill-form").reset();
+    loadSkills();
+    toast(`Saved /${name}`);
+  } else toast("Couldn't save skill", true);
+});
+el("routine-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const payload = {
+    agent_name: el("routine-agent").value,
+    title: el("routine-title").value.trim(),
+    instructions: el("routine-instructions").value.trim(),
+    interval_minutes: Number(el("routine-interval").value) || 60,
+    enabled: true,
+  };
+  if (!payload.agent_name || !payload.title || !payload.instructions) return;
+  const res = await fetch(`${API}/api/routines`, {
+    method: "POST", headers: authHeaders(), body: JSON.stringify(payload),
+  });
+  if (res.ok) {
+    el("routine-form").reset();
+    fillRoutineAgents();
+    loadRoutines();
+    toast("Routine created");
+  } else toast("Couldn't create routine", true);
+});
+
+const origIngest = ingestLive;
+ingestLive = function (m) {
+  origIngest(m);
+  if (m.author_kind === "system") loadComputer();
+};
+
 (async function init() {
   applyToolsVisibility();
+  if (localStorage.getItem("swarm_computer") === "0") setComputerOpen(false);
   const saved = localStorage.getItem("swarm_last_handle");
   if (saved) el("login-input").value = saved;
   const token = saved && localStorage.getItem(`swarm_token_${saved}`);

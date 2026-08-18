@@ -3,20 +3,21 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>swarm</title>
+<title>swarm — AI teammates</title>
 <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body class="computer-open">
 
   <div id="toast" role="status" aria-live="polite"></div>
 
   <div id="login">
     <form class="card" id="login-form">
-      <h1>SWARM</h1>
-      <p>Pick a handle. This browser remembers you.</p>
+      <p class="kicker">Early build</p>
+      <h1>Meet your first Bot</h1>
+      <p>AI teammates you can give real work to. They keep a job, a 1:1, memory, and a shared workspace — and only come back when something needs you.</p>
       <label class="sr-only" for="login-input">Handle</label>
       <input id="login-input" name="handle" maxlength="24" autofocus autocomplete="username" placeholder="your handle" />
-      <button type="submit" class="btn primary" id="login-submit">Join</button>
+      <button type="submit" class="btn primary" id="login-submit">Get started</button>
       <div class="hint">New handle registers you. A handle you've used here reconnects.</div>
       <div class="err" id="login-err" role="alert"></div>
     </form>
@@ -24,12 +25,12 @@
 
   <div id="modal" class="overlay" hidden>
     <div class="modal-card" role="dialog" aria-labelledby="modal-title" aria-modal="true">
-      <h2 id="modal-title">New channel</h2>
+      <h2 id="modal-title">New room</h2>
       <form id="channel-form">
         <label for="channel-name">Name</label>
         <input id="channel-name" name="name" maxlength="64" required placeholder="release-planning" />
         <label for="channel-topic">Topic <span class="optional">(optional)</span></label>
-        <input id="channel-topic" name="topic" maxlength="200" placeholder="what this channel is for" />
+        <input id="channel-topic" name="topic" maxlength="200" placeholder="what this room is for" />
         <div class="err" id="channel-err" role="alert"></div>
         <div class="modal-actions">
           <button type="button" class="btn" id="channel-cancel">Cancel</button>
@@ -41,17 +42,20 @@
 
   <div id="agent-modal" class="overlay" hidden>
     <div class="modal-card agent-card" role="dialog" aria-labelledby="agent-modal-title" aria-modal="true">
-      <h2 id="agent-modal-title">New agent</h2>
+      <h2 id="agent-modal-title">New Bot</h2>
       <form id="agent-form">
+        <div id="job-templates" class="job-templates" hidden></div>
         <label for="agent-name">Name</label>
-        <input id="agent-name" name="name" maxlength="32" required placeholder="scribe" pattern="[A-Za-z0-9_\-]+" />
-        <label for="agent-prompt">System prompt</label>
-        <textarea id="agent-prompt" name="prompt" required maxlength="4000" rows="5" placeholder="Who is this teammate, and how should they talk?"></textarea>
+        <input id="agent-name" name="name" maxlength="32" required placeholder="piper" pattern="[A-Za-z0-9_\-]+" />
+        <label for="agent-job">Primary job</label>
+        <input id="agent-job" name="job" maxlength="64" placeholder="Product Performance" />
+        <label for="agent-prompt">How they should work</label>
+        <textarea id="agent-prompt" name="prompt" required maxlength="4000" rows="5" placeholder="One job, sources, deliverable, and what needs approval."></textarea>
         <label for="agent-model">Model</label>
-        <input id="agent-model" name="model" maxlength="128" placeholder="llama-3.3-70b-versatile" />
-        <label for="agent-scope">Channel scope</label>
+        <input id="agent-model" name="model" maxlength="128" placeholder="openai/gpt-oss-120b" />
+        <label for="agent-scope">Room scope</label>
         <select id="agent-scope" name="scope">
-          <option value="">Every channel</option>
+          <option value="">Every room (plus their 1:1)</option>
         </select>
         <label for="agent-window">History window</label>
         <input id="agent-window" name="window" type="number" min="1" max="50" value="12" />
@@ -61,6 +65,10 @@
           <label class="check"><input type="checkbox" name="tool" value="search_channel_history" checked /> search_channel_history</label>
           <label class="check"><input type="checkbox" name="tool" value="remember" checked /> remember</label>
           <label class="check"><input type="checkbox" name="tool" value="recall" checked /> recall</label>
+          <label class="check"><input type="checkbox" name="tool" value="list_workspace" checked /> list_workspace</label>
+          <label class="check"><input type="checkbox" name="tool" value="write_workspace" checked /> write_workspace</label>
+          <label class="check"><input type="checkbox" name="tool" value="save_skill" checked /> save_skill</label>
+          <label class="check"><input type="checkbox" name="tool" value="request_approval" checked /> request_approval</label>
         </fieldset>
         <div id="agent-memories" hidden>
           <div class="mem-title">Recent notes</div>
@@ -69,7 +77,7 @@
         <div class="err" id="agent-err" role="alert"></div>
         <div class="modal-actions">
           <button type="button" class="btn" id="agent-cancel">Cancel</button>
-          <button type="button" class="btn" id="agent-mention" hidden>Mention</button>
+          <button type="button" class="btn" id="agent-mention" hidden>Open 1:1</button>
           <button type="submit" class="btn primary" id="agent-save">Create</button>
         </div>
       </form>
@@ -88,15 +96,15 @@
   <div id="sidebar-backdrop" hidden></div>
 
   <nav id="sidebar" aria-label="Workspace">
-    <div class="brand">SWARM<small>humans + agents, one relay</small></div>
-    <div class="section-label">Channels</div>
+    <div class="brand">SWARM<small>AI teammates you can give work to</small></div>
+    <div class="section-label">Bots</div>
+    <div id="bots-list"></div>
+    <button type="button" id="new-agent">+ New Bot</button>
+    <div class="section-label">Rooms</div>
     <ul id="channel-list"></ul>
-    <button type="button" id="new-channel">+ New channel</button>
+    <button type="button" id="new-channel">+ New room</button>
     <div id="agents-box">
-      <div class="title">Agents in this channel</div>
-      <div id="agents-list"></div>
-      <button type="button" id="new-agent">+ New agent</button>
-      <div id="groq-status">Checking agents…</div>
+      <div id="groq-status">Checking teammates…</div>
     </div>
     <div id="me">
       <div class="avatar" id="me-avatar">?</div>
@@ -110,16 +118,20 @@
 
   <main id="main">
     <div id="topbar">
-      <button type="button" id="menu-btn" aria-label="Open channels">☰</button>
+      <button type="button" id="menu-btn" aria-label="Open sidebar">☰</button>
       <div class="channel-meta">
-        <div class="name" id="topbar-name">#general</div>
+        <div class="name" id="topbar-name">swarm</div>
         <div class="topic" id="topbar-topic"></div>
       </div>
-      <span class="who">you're <span id="topbar-user">anon</span> · @mention an agent</span>
-      <button type="button" class="btn ghost" id="toggle-tools">Show agent tools</button>
+      <span class="status-chip idle" id="bot-chip" hidden>Idle</span>
+      <span class="who">you're <span id="topbar-user">anon</span></span>
+      <button type="button" class="btn ghost" id="configure-bot" hidden>Configure</button>
+      <button type="button" class="btn ghost" id="toggle-tools">Show tool log</button>
+      <button type="button" class="btn ghost" id="toggle-computer">Computer</button>
     </div>
     <button type="button" id="load-earlier" hidden>Load earlier messages</button>
     <div id="log" role="log" aria-live="polite" aria-relevant="additions"></div>
+    <div id="approval-dock"></div>
     <div id="typing" aria-live="polite"></div>
     <div id="composer">
       <div id="reply-context">
@@ -127,12 +139,59 @@
         <button type="button" class="cancel" id="reply-cancel">cancel</button>
       </div>
       <div id="inputbar">
-        <ul id="mention-menu" hidden role="listbox" aria-label="Mention an agent"></ul>
-        <textarea id="msg-input" rows="1" autocomplete="off" placeholder="Message #general"></textarea>
+        <ul id="mention-menu" hidden role="listbox" aria-label="Mention a bot or skill"></ul>
+        <textarea id="msg-input" rows="1" autocomplete="off" placeholder="Give swarm a task"></textarea>
         <button type="button" class="btn primary send" id="send-btn" aria-label="Send">Send</button>
       </div>
+      <div class="composer-hint">@bot to mention · /skill to invoke · DMs don't need an @</div>
     </div>
   </main>
+
+  <aside id="computer-panel">
+    <div class="computer-head">
+      <div>
+        <div class="thread-title">Shared computer</div>
+        <div class="thread-sub" id="computer-sub">All Bots share this workspace</div>
+      </div>
+      <button type="button" class="btn ghost" id="computer-close" aria-label="Close computer">Close</button>
+    </div>
+    <div class="panel-tabs" role="tablist">
+      <button type="button" class="tab active" data-tab="files">Files</button>
+      <button type="button" class="tab" data-tab="skills">Skills</button>
+      <button type="button" class="tab" data-tab="routines">Routines</button>
+      <button type="button" class="tab" data-tab="approvals">Approvals</button>
+    </div>
+    <div class="panel-body" id="panel-files">
+      <p class="panel-note" id="computer-note"></p>
+      <ul id="file-list" class="panel-list"></ul>
+      <pre id="file-preview" hidden></pre>
+      <div class="mem-title">Recent actions</div>
+      <ul id="activity-list" class="panel-list dim"></ul>
+    </div>
+    <div class="panel-body" id="panel-skills" hidden>
+      <form id="skill-form" class="mini-form">
+        <input id="skill-name" maxlength="64" required placeholder="weekly-health" />
+        <textarea id="skill-body" maxlength="8000" rows="4" required placeholder="When to use it, inputs, steps, validation, output, approval boundary."></textarea>
+        <button type="submit" class="btn primary">Save skill</button>
+      </form>
+      <ul id="skill-list" class="panel-list"></ul>
+    </div>
+    <div class="panel-body" id="panel-routines" hidden>
+      <form id="routine-form" class="mini-form">
+        <input id="routine-title" maxlength="80" required placeholder="Morning digest" />
+        <textarea id="routine-instructions" maxlength="4000" rows="3" required placeholder="Every run: what to do, where to post, what needs approval."></textarea>
+        <div class="row-fields">
+          <select id="routine-agent"></select>
+          <input id="routine-interval" type="number" min="1" max="10080" value="60" title="Minutes" />
+        </div>
+        <button type="submit" class="btn primary">Create routine</button>
+      </form>
+      <ul id="routine-list" class="panel-list"></ul>
+    </div>
+    <div class="panel-body" id="panel-approvals" hidden>
+      <ul id="approval-list" class="panel-list"></ul>
+    </div>
+  </aside>
 
   <aside id="thread-panel" hidden>
     <div class="thread-head">

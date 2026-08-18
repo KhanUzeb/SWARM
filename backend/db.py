@@ -17,7 +17,7 @@ from typing import Any
 
 import aiosqlite
 
-from .models import ALLOWED_TOOLS, DEFAULT_TOOLS, LEDGER_TOOLS
+from .models import ALLOWED_TOOLS, DEFAULT_GROQ_MODEL, DEFAULT_JOB, DEFAULT_TOOLS, GROQ_MODEL_ALIASES, LEDGER_TOOLS
 
 DB_PATH = Path(os.environ.get("SWARM_DB_PATH", str(Path(__file__).parent / "swarm.db")))
 
@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS channels (
     id          TEXT PRIMARY KEY,
     name        TEXT UNIQUE NOT NULL,
     topic       TEXT DEFAULT '',
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'room',
+    owner_agent TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -67,7 +69,9 @@ CREATE TABLE IF NOT EXISTS agents (
     created_at      REAL NOT NULL,
     history_window  INTEGER NOT NULL DEFAULT 12,
     max_tool_calls  INTEGER NOT NULL DEFAULT 3,
-    tools           TEXT NOT NULL DEFAULT '{_DEFAULT_TOOLS_JSON}'
+    tools           TEXT NOT NULL DEFAULT '{_DEFAULT_TOOLS_JSON}',
+    job             TEXT NOT NULL DEFAULT '{DEFAULT_JOB}',
+    status          TEXT NOT NULL DEFAULT 'idle'
 );
 
 CREATE TABLE IF NOT EXISTS agent_memory (
@@ -81,6 +85,50 @@ CREATE TABLE IF NOT EXISTS agent_memory (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_memory_agent ON agent_memory(agent_name, created_at);
+
+CREATE TABLE IF NOT EXISTS skills (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT UNIQUE NOT NULL,
+    body        TEXT NOT NULL,
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS routines (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_name        TEXT NOT NULL,
+    title             TEXT NOT NULL,
+    instructions      TEXT NOT NULL,
+    interval_minutes  INTEGER NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    last_run_at       REAL,
+    next_run_at       REAL NOT NULL,
+    created_at        REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_routines_next ON routines(enabled, next_run_at);
+
+CREATE TABLE IF NOT EXISTS routine_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    routine_id  INTEGER NOT NULL REFERENCES routines(id),
+    started_at  REAL NOT NULL,
+    finished_at REAL,
+    status      TEXT NOT NULL,
+    excerpt     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS approvals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_name  TEXT NOT NULL,
+    channel_id  TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    detail      TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  REAL NOT NULL,
+    resolved_at REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_approvals_pending ON approvals(status, channel_id);
 """
 
 _DEFAULT_CHANNELS = [
@@ -98,11 +146,12 @@ _DEFAULT_AGENTS = [
         "unless the question genuinely needs length. Do not call tools for "
         "greetings or small talk. Use remember for facts that should stick "
         "across turns.",
-        "llama-3.3-70b-versatile",
+        DEFAULT_GROQ_MODEL,
         None,
         12,
         3,
         DEFAULT_TOOLS,
+        "Generalist",
     ),
     (
         "ledger",
@@ -111,11 +160,12 @@ _DEFAULT_AGENTS = [
         "channel history in a short bulleted list — nothing else. If "
         "there's nothing decision-shaped in the recent history, say so "
         "in one line. Remember durable decisions with the remember tool.",
-        "llama-3.3-70b-versatile",
+        DEFAULT_GROQ_MODEL,
         None,
         12,
         3,
         LEDGER_TOOLS,
+        "Decision log",
     ),
 ]
 
@@ -142,11 +192,18 @@ def public_agent(row: dict[str, Any]) -> dict[str, Any]:
     out["tools"] = parse_tools(out.get("tools"))
     out["history_window"] = int(out.get("history_window") or 12)
     out["max_tool_calls"] = int(out.get("max_tool_calls") or 3)
+    out["job"] = (out.get("job") or DEFAULT_JOB).strip() or DEFAULT_JOB
+    out["status"] = out.get("status") or "idle"
+    out["dm_channel_id"] = dm_channel_id(out["name"])
     return out
 
 
+def dm_channel_id(agent_name: str) -> str:
+    return f"dm-{agent_name}"
+
+
 async def _ensure_schema(db: aiosqlite.Connection) -> None:
-    """Add Phase 9 columns/tables to databases that predate them."""
+    """Add columns/tables to databases that predate them."""
     cur = await db.execute("PRAGMA table_info(agents)")
     cols = {row[1] for row in await cur.fetchall()}
     if "history_window" not in cols:
@@ -166,6 +223,40 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
             "UPDATE agents SET tools = ? WHERE name = ?",
             (_LEDGER_TOOLS_JSON, "ledger"),
         )
+    if "job" not in cols:
+        await db.execute(
+            f"ALTER TABLE agents ADD COLUMN job TEXT NOT NULL DEFAULT '{DEFAULT_JOB}'"
+        )
+        await db.execute("UPDATE agents SET job = 'Generalist' WHERE name = 'swarm'")
+        await db.execute("UPDATE agents SET job = 'Decision log' WHERE name = 'ledger'")
+    if "status" not in cols:
+        await db.execute(
+            "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'"
+        )
+    for old, new in GROQ_MODEL_ALIASES.items():
+        await db.execute("UPDATE agents SET model = ? WHERE model = ?", (new, old))
+
+    cur = await db.execute("PRAGMA table_info(channels)")
+    ch_cols = {row[1] for row in await cur.fetchall()}
+    if "kind" not in ch_cols:
+        await db.execute(
+            "ALTER TABLE channels ADD COLUMN kind TEXT NOT NULL DEFAULT 'room'"
+        )
+    if "owner_agent" not in ch_cols:
+        await db.execute("ALTER TABLE channels ADD COLUMN owner_agent TEXT")
+
+    cur = await db.execute("SELECT name, job FROM agents")
+    agents = await cur.fetchall()
+    for name, job in agents:
+        dm_id = dm_channel_id(name)
+        cur = await db.execute("SELECT 1 FROM channels WHERE id = ?", (dm_id,))
+        if await cur.fetchone() is None:
+            topic = f"1:1 with {name}" + (f" · {job}" if job else "")
+            await db.execute(
+                "INSERT INTO channels (id, name, topic, created_at, kind, owner_agent) "
+                "VALUES (?, ?, ?, ?, 'dm', ?)",
+                (dm_id, dm_id, topic, time.time(), name),
+            )
 
 
 async def init_db() -> None:
@@ -174,25 +265,27 @@ async def init_db() -> None:
         await _ensure_schema(db)
         await db.commit()
 
-        cur = await db.execute("SELECT COUNT(*) FROM channels")
+        cur = await db.execute("SELECT COUNT(*) FROM channels WHERE kind = 'room' OR kind IS NULL")
         (count,) = await cur.fetchone()
         if count == 0:
             for name, topic in _DEFAULT_CHANNELS:
                 await db.execute(
-                    "INSERT INTO channels (id, name, topic, created_at) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO channels (id, name, topic, created_at, kind) VALUES (?, ?, ?, ?, 'room')",
                     (name, name, topic, time.time()),
                 )
 
         cur = await db.execute("SELECT COUNT(*) FROM agents")
         (count,) = await cur.fetchone()
         if count == 0:
-            for name, prompt, model, scope, window, cap, tools in _DEFAULT_AGENTS:
+            for name, prompt, model, scope, window, cap, tools, job in _DEFAULT_AGENTS:
                 await db.execute(
                     "INSERT INTO agents (name, system_prompt, model, channel_scope, "
-                    "created_at, history_window, max_tool_calls, tools) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (name, prompt, model, scope, time.time(), window, cap, json.dumps(tools)),
+                    "created_at, history_window, max_tool_calls, tools, job, status) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')",
+                    (name, prompt, model, scope, time.time(), window, cap, json.dumps(tools), job),
                 )
+            await db.commit()
+            await _ensure_schema(db)
         await db.commit()
 
 
@@ -206,14 +299,33 @@ async def list_channels() -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
-async def create_channel(channel_id: str, name: str, topic: str = "") -> dict[str, Any]:
+async def create_channel(
+    channel_id: str,
+    name: str,
+    topic: str = "",
+    *,
+    kind: str = "room",
+    owner_agent: str | None = None,
+) -> dict[str, Any]:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO channels (id, name, topic, created_at) VALUES (?, ?, ?, ?)",
-            (channel_id, name, topic, time.time()),
+            "INSERT INTO channels (id, name, topic, created_at, kind, owner_agent) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (channel_id, name, topic, time.time(), kind, owner_agent),
         )
         await db.commit()
-    return {"id": channel_id, "name": name, "topic": topic}
+    return {
+        "id": channel_id, "name": name, "topic": topic,
+        "kind": kind, "owner_agent": owner_agent,
+    }
+
+
+async def get_channel(channel_id: str) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM channels WHERE id = ?", (channel_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
 
 async def channel_exists(channel_id: str) -> bool:
@@ -400,14 +512,20 @@ async def list_agents(channel_id: str | None = None) -> list[dict[str, Any]]:
     return [a for a in agents if a["channel_scope"] in (None, channel_id)]
 
 
-async def get_agent(name: str) -> dict[str, Any] | None:
+async def fetch_agent(name: str) -> dict[str, Any] | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM agents WHERE name = ?", (name,))
         row = await cur.fetchone()
         if row is None:
             return None
-        agent = public_agent(dict(row))
+        return public_agent(dict(row))
+
+
+async def get_agent(name: str) -> dict[str, Any] | None:
+    agent = await fetch_agent(name)
+    if agent is None:
+        return None
     agent["memories"] = await list_memories(name, limit=20)
     return agent
 
@@ -420,18 +538,22 @@ async def create_agent(
     history_window: int = 12,
     max_tool_calls: int = 3,
     tools: list[str] | None = None,
+    job: str = DEFAULT_JOB,
 ) -> dict[str, Any]:
     tool_names = tools if tools is not None else list(DEFAULT_TOOLS)
+    job_title = (job or DEFAULT_JOB).strip() or DEFAULT_JOB
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO agents (name, system_prompt, model, channel_scope, "
-            "created_at, history_window, max_tool_calls, tools) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "created_at, history_window, max_tool_calls, tools, job, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')",
             (
                 name, system_prompt, model, channel_scope, time.time(),
-                history_window, max_tool_calls, json.dumps(tool_names),
+                history_window, max_tool_calls, json.dumps(tool_names), job_title,
             ),
         )
+        await db.commit()
+        await _ensure_schema(db)
         await db.commit()
     return {
         "name": name,
@@ -441,6 +563,9 @@ async def create_agent(
         "history_window": history_window,
         "max_tool_calls": max_tool_calls,
         "tools": tool_names,
+        "job": job_title,
+        "status": "idle",
+        "dm_channel_id": dm_channel_id(name),
     }
 
 
@@ -449,7 +574,7 @@ async def update_agent(name: str, fields: dict[str, Any]) -> dict[str, Any] | No
         return await get_agent(name)
     allowed = {
         "system_prompt", "model", "channel_scope",
-        "history_window", "max_tool_calls", "tools",
+        "history_window", "max_tool_calls", "tools", "job", "status",
     }
     sets: list[str] = []
     values: list[Any] = []
@@ -586,3 +711,292 @@ async def search_memory(
             )
         rows = await cur.fetchall()
         return [dict(r) for r in reversed(rows)]
+
+
+async def set_agent_status(name: str, status: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE agents SET status = ? WHERE name = ?", (status, name))
+        await db.commit()
+
+
+async def get_recent_system_messages(limit: int = 20) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM messages WHERE author_kind = 'system' "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+# ---------------------------------------------------------------- skills --
+
+async def list_skills() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM skills ORDER BY name")
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_skill(name: str) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM skills WHERE name = ?", (name,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def get_skill_by_id(skill_id: int) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM skills WHERE id = ?", (skill_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def upsert_skill(name: str, body: str) -> dict[str, Any]:
+    ts = time.time()
+    existing = await get_skill(name)
+    async with aiosqlite.connect(DB_PATH) as db:
+        if existing:
+            await db.execute(
+                "UPDATE skills SET body = ?, updated_at = ? WHERE name = ?",
+                (body, ts, name),
+            )
+            await db.commit()
+            return await get_skill(name)  # type: ignore[return-value]
+        cur = await db.execute(
+            "INSERT INTO skills (name, body, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (name, body, ts, ts),
+        )
+        await db.commit()
+        return {
+            "id": cur.lastrowid, "name": name, "body": body,
+            "created_at": ts, "updated_at": ts,
+        }
+
+
+async def update_skill(skill_id: int, fields: dict[str, Any]) -> dict[str, Any] | None:
+    row = await get_skill_by_id(skill_id)
+    if row is None:
+        return None
+    name = fields.get("name", row["name"])
+    body = fields.get("body", row["body"])
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute(
+                "UPDATE skills SET name = ?, body = ?, updated_at = ? WHERE id = ?",
+                (name, body, ts, skill_id),
+            )
+            await db.commit()
+        except aiosqlite.IntegrityError:
+            return None
+    return await get_skill_by_id(skill_id)
+
+
+async def delete_skill(skill_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+# -------------------------------------------------------------- routines -
+
+def _routine_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    out["enabled"] = bool(out.get("enabled"))
+    return out
+
+
+async def list_routines(agent_name: str | None = None) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if agent_name:
+            cur = await db.execute(
+                "SELECT * FROM routines WHERE agent_name = ? ORDER BY created_at",
+                (agent_name,),
+            )
+        else:
+            cur = await db.execute("SELECT * FROM routines ORDER BY created_at")
+        return [_routine_row(dict(r)) for r in await cur.fetchall()]
+
+
+async def count_routines(agent_name: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM routines WHERE agent_name = ?", (agent_name,)
+        )
+        (n,) = await cur.fetchone()
+        return int(n)
+
+
+async def get_routine(routine_id: int) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM routines WHERE id = ?", (routine_id,))
+        row = await cur.fetchone()
+        return _routine_row(dict(row)) if row else None
+
+
+async def create_routine(
+    agent_name: str,
+    title: str,
+    instructions: str,
+    interval_minutes: int,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    ts = time.time()
+    next_run = ts + interval_minutes * 60
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO routines (agent_name, title, instructions, interval_minutes, "
+            "enabled, last_run_at, next_run_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+            (agent_name, title, instructions, interval_minutes, 1 if enabled else 0, next_run, ts),
+        )
+        await db.commit()
+        rid = cur.lastrowid
+    return await get_routine(rid)  # type: ignore[return-value]
+
+
+async def update_routine(routine_id: int, fields: dict[str, Any]) -> dict[str, Any] | None:
+    row = await get_routine(routine_id)
+    if row is None:
+        return None
+    allowed = {"title", "instructions", "interval_minutes", "enabled", "last_run_at", "next_run_at"}
+    sets: list[str] = []
+    values: list[Any] = []
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key == "enabled":
+            value = 1 if value else 0
+        sets.append(f"{key} = ?")
+        values.append(value)
+    if not sets:
+        return row
+    values.append(routine_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"UPDATE routines SET {', '.join(sets)} WHERE id = ?",
+            values,
+        )
+        await db.commit()
+    return await get_routine(routine_id)
+
+
+async def delete_routine(routine_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM routine_runs WHERE routine_id = ?", (routine_id,))
+        cur = await db.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def due_routines(now: float | None = None) -> list[dict[str, Any]]:
+    ts = now if now is not None else time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM routines WHERE enabled = 1 AND next_run_at <= ? "
+            "ORDER BY next_run_at",
+            (ts,),
+        )
+        return [_routine_row(dict(r)) for r in await cur.fetchall()]
+
+
+async def mark_routine_run(
+    routine_id: int, *, status: str, excerpt: str, interval_minutes: int
+) -> None:
+    ts = time.time()
+    next_run = ts + interval_minutes * 60
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO routine_runs (routine_id, started_at, finished_at, status, excerpt) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (routine_id, ts, ts, status, excerpt[:500]),
+        )
+        await db.execute(
+            "UPDATE routines SET last_run_at = ?, next_run_at = ? WHERE id = ?",
+            (ts, next_run, routine_id),
+        )
+        await db.commit()
+
+
+async def list_routine_runs(routine_id: int, limit: int = 20) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM routine_runs WHERE routine_id = ? ORDER BY id DESC LIMIT ?",
+            (routine_id, limit),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+# ------------------------------------------------------------ approvals --
+
+async def create_approval(
+    agent_name: str, channel_id: str, action: str, detail: str = ""
+) -> dict[str, Any]:
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO approvals (agent_name, channel_id, action, detail, status, created_at) "
+            "VALUES (?, ?, ?, ?, 'pending', ?)",
+            (agent_name, channel_id, action, detail, ts),
+        )
+        await db.commit()
+        aid = cur.lastrowid
+    return {
+        "id": aid, "agent_name": agent_name, "channel_id": channel_id,
+        "action": action, "detail": detail, "status": "pending",
+        "created_at": ts, "resolved_at": None,
+    }
+
+
+async def get_approval(approval_id: int) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def list_approvals(
+    *, channel_id: str | None = None, status: str | None = "pending", limit: int = 50
+) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        clauses = []
+        args: list[Any] = []
+        if channel_id:
+            clauses.append("channel_id = ?")
+            args.append(channel_id)
+        if status:
+            clauses.append("status = ?")
+            args.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        cur = await db.execute(
+            f"SELECT * FROM approvals {where} ORDER BY id DESC LIMIT ?",
+            (*args, limit),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def resolve_approval(approval_id: int, status: str) -> dict[str, Any] | None:
+    row = await get_approval(approval_id)
+    if row is None:
+        return None
+    ts = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE approvals SET status = ?, resolved_at = ? WHERE id = ?",
+            (status, ts, approval_id),
+        )
+        await db.commit()
+    row["status"] = status
+    row["resolved_at"] = ts
+    return row

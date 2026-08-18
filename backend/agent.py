@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import db
-from .models import ALLOWED_TOOLS, DEFAULT_TOOLS
+from .models import ALLOWED_TOOLS, DEFAULT_TOOLS, resolve_groq_model, resolve_groq_model
 
 HISTORY_WINDOW = 12
 MAX_TOOL_CALLS = 3
@@ -35,6 +35,9 @@ CUTOFF_NOTE = "\n\n[reply cut off]"
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _GROQ_TO_OPENROUTER = {
+    "openai/gpt-oss-120b": "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b": "openai/gpt-oss-20b",
+    "qwen/qwen3.6-27b": "qwen/qwen3.6-27b",
     "llama-3.3-70b-versatile": "meta-llama/llama-3.3-70b-instruct",
     "llama-3.1-8b-instant": "meta-llama/llama-3.1-8b-instruct",
     "llama-3.1-70b-versatile": "meta-llama/llama-3.1-70b-instruct",
@@ -61,14 +64,21 @@ _TOOL_HINT = re.compile(
     r"ls|dir|cat|grep|findstr|find|files?|folder|directory|sandbox|shell|cwd|"
     r"inspect|look\s+up|search(?:\s+the)?\s+history|earlier\s+messages?|"
     r"what\s+did\s+we|last\s+time|"
-    r"remember|recall|forget|notes?|memor(?:y|ies)"
+    r"remember|recall|forget|notes?|memor(?:y|ies)|"
+    r"workspace|write|save|skill|routine|schedule|approv|"
+    r"computer|handoff|draft|research"
     r")\b",
     re.I,
 )
+_SLASH_SKILL = re.compile(r"/([a-zA-Z0-9_\-]+)")
 _TOOL_POLICY = (
-    "Tools: only use a tool when the user explicitly asks to inspect files, "
-    "search older channel history, or remember/recall a fact. "
-    "Greetings and normal chat get a short text reply — no tools."
+    "You are a persistent named teammate. Finish the job and only stop when "
+    "the deliverable is ready or something needs approval. "
+    "Tools: use them when the work needs files, history, memory, a saved skill, "
+    "or an approval gate. Greetings in a shared room get a short text reply. "
+    "For sending, publishing, deleting, purchasing, or production changes, call "
+    "request_approval and wait. Write durable files to the shared workspace. "
+    "You may @mention another bot to hand off work."
 )
 
 OnToolsReady = Callable[[list[dict[str, Any]]], Awaitable[None]]
@@ -153,6 +163,74 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "list_workspace": {
+        "type": "function",
+        "function": {
+            "name": "list_workspace",
+            "description": (
+                "List files on the shared computer workspace all Bots use. "
+                "Prefer this over a raw shell listing."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "write_workspace": {
+        "type": "function",
+        "function": {
+            "name": "write_workspace",
+            "description": (
+                "Write a text file into the shared workspace. Use for drafts, "
+                "reports, and other durable deliverables. Paths stay under the "
+                "workspace root."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "relative path, e.g. reports/weekly.md"},
+                    "content": {"type": "string", "description": "file contents"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    "save_skill": {
+        "type": "function",
+        "function": {
+            "name": "save_skill",
+            "description": (
+                "Save a reusable skill: when to use it, required inputs, the "
+                "sequence of work, how to validate, what to return, and what "
+                "requires approval. Available to every Bot."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "slug, e.g. weekly-account-health"},
+                    "body": {"type": "string", "description": "the skill instructions"},
+                },
+                "required": ["name", "body"],
+            },
+        },
+    },
+    "request_approval": {
+        "type": "function",
+        "function": {
+            "name": "request_approval",
+            "description": (
+                "Pause and ask the human to approve a consequential action "
+                "(send, publish, delete, purchase, production change). "
+                "Do not proceed until they approve."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "short label for the action"},
+                    "detail": {"type": "string", "description": "what would happen, to whom, and why"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
 }
 
 # Back-compat alias for tests that imported TOOLS.
@@ -168,11 +246,21 @@ def tools_schema_for(names: list[str]) -> list[dict[str, Any]]:
     return [TOOL_SCHEMAS[n] for n in names if n in TOOL_SCHEMAS]
 
 
-def should_offer_tools(history: list[dict[str, Any]]) -> bool:
-    """True only if the latest human message looks like a tool request."""
+def should_offer_tools(
+    history: list[dict[str, Any]], *, channel_kind: str | None = None
+) -> bool:
+    """True if this turn looks like work. DMs and routines always offer tools.
+    Shared rooms still skip greetings so small models don't tool-call 'hi'."""
+    if channel_kind == "dm":
+        return True
     for m in reversed(history):
+        body = m.get("body") or ""
+        if m.get("author_kind") == "system" and body.startswith("[routine:"):
+            return True
         if m.get("author_kind") == "human":
-            return bool(_TOOL_HINT.search(m.get("body") or ""))
+            if body.lstrip().startswith("/") or _TOOL_HINT.search(body):
+                return True
+            return False
     return False
 
 
@@ -304,6 +392,90 @@ async def _run_recall_tool(agent_name: str, channel_id: str, query: str) -> str:
     return "\n".join(lines)
 
 
+def list_workspace_files(limit: int = 100) -> list[dict[str, Any]]:
+    os.makedirs(SANDBOX_DIR, exist_ok=True)
+    base = Path(SANDBOX_DIR)
+    files: list[dict[str, Any]] = []
+    for path in sorted(base.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(base).as_posix()
+        if rel.startswith("."):
+            continue
+        stat = path.stat()
+        files.append({"path": rel, "size": stat.st_size, "modified": stat.st_mtime})
+        if len(files) >= limit:
+            break
+    return files
+
+
+async def _run_list_workspace() -> str:
+    os.makedirs(SANDBOX_DIR, exist_ok=True)
+    base = Path(SANDBOX_DIR)
+    files: list[str] = []
+    for path in sorted(base.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(base).as_posix()
+        if rel.startswith("."):
+            continue
+        files.append(f"{rel} ({path.stat().st_size} bytes)")
+        if len(files) >= 100:
+            break
+    return "\n".join(files) if files else "(workspace empty)"
+
+
+def _safe_workspace_path(rel: str) -> Path | None:
+    if not rel or rel.strip() != rel:
+        rel = (rel or "").strip()
+    if not rel or rel.startswith("/") or "\\" in rel[:1]:
+        return None
+    base = Path(SANDBOX_DIR).resolve()
+    target = (base / rel).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return None
+    return target
+
+
+async def _run_write_workspace(rel: str, content: str) -> str:
+    target = _safe_workspace_path(rel)
+    if target is None:
+        return "(invalid path — stay under the workspace root)"
+    text = content if isinstance(content, str) else str(content)
+    if len(text) > 32_000:
+        return "(file too large — cap is 32000 characters)"
+    os.makedirs(SANDBOX_DIR, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    rel_out = target.relative_to(Path(SANDBOX_DIR).resolve()).as_posix()
+    return f"wrote {rel_out} ({len(text)} chars)"
+
+
+async def _run_save_skill(name: str, body: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_\-]", "", (name or "").strip())[:64]
+    text = (body or "").strip()
+    if not slug or not text:
+        return "(need a slug name and a body)"
+    row = await db.upsert_skill(slug, text[:8000])
+    return f"saved skill /{row['name']} (id {row['id']})"
+
+
+async def _run_approval_tool(
+    agent_name: str, channel_id: str, action: str, detail: str
+) -> str:
+    label = (action or "").strip()[:200]
+    if not label:
+        return "(need an action to approve)"
+    row = await db.create_approval(agent_name, channel_id, label, (detail or "").strip()[:2000])
+    await db.set_agent_status(agent_name, "needs_approval")
+    return (
+        f"Approval #{row['id']} is pending for: {label}. "
+        "Stop here. Tell the human what you need approved. Do not proceed."
+    )
+
+
 def history_window_of(agent_row: dict[str, Any]) -> int:
     try:
         window = int(agent_row.get("history_window") or HISTORY_WINDOW)
@@ -328,14 +500,28 @@ def _build_messages(
     allowed_tools: list[str] | None = None,
     notes: list[dict[str, Any]] | None = None,
     summary: dict[str, Any] | None = None,
+    job: str | None = None,
+    skills: list[dict[str, Any]] | None = None,
+    invoked_skills: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     tools = allowed_tools if allowed_tools is not None else list(DEFAULT_TOOLS)
     policy = _TOOL_POLICY
+    if job:
+        policy = f"Primary job: {job}.\n" + policy
     if tools:
         policy += " Allowed tools: " + ", ".join(tools) + "."
     else:
         policy += " You have no tools for this turn."
     blocks = [system_prompt, policy]
+    if skills:
+        names = ", ".join(f"/{s['name']}" for s in skills)
+        blocks.append(
+            "Saved skills (humans type /name to invoke; you may follow them when relevant): "
+            + names
+        )
+    if invoked_skills:
+        for s in invoked_skills:
+            blocks.append(f"Invoked skill /{s['name']}:\n{s['body']}")
     if notes:
         lines = []
         for n in notes:
@@ -505,6 +691,16 @@ async def _execute_tool(
         )
     if name == "recall":
         return await _run_recall_tool(agent_name, channel_id, args.get("query", ""))
+    if name == "list_workspace":
+        return await _run_list_workspace()
+    if name == "write_workspace":
+        return await _run_write_workspace(args.get("path", ""), args.get("content", ""))
+    if name == "save_skill":
+        return await _run_save_skill(args.get("name", ""), args.get("body", ""))
+    if name == "request_approval":
+        return await _run_approval_tool(
+            agent_name, channel_id, args.get("action", ""), args.get("detail", ""),
+        )
     return f"(unknown tool {name})"
 
 
@@ -628,11 +824,24 @@ async def generate_reply(
     window = history_window_of(agent_row)
     allowed = agent_tools(agent_row)
     notes, summary = await db.get_context_memories(name, channel_id, MEMORY_INJECT_LIMIT)
+    channel = await db.get_channel(channel_id)
+    channel_kind = (channel or {}).get("kind") or "room"
+    skills = await db.list_skills()
+    invoked: list[dict[str, Any]] = []
+    for m in reversed(history):
+        if m.get("author_kind") in ("human", "system"):
+            slugs = _SLASH_SKILL.findall(m.get("body") or "")
+            by_name = {s["name"]: s for s in skills}
+            for slug in slugs:
+                if slug in by_name and by_name[slug] not in invoked:
+                    invoked.append(by_name[slug])
+            break
     messages = _build_messages(
         agent_row["system_prompt"], history,
         window=window, allowed_tools=allowed, notes=notes, summary=summary,
+        job=agent_row.get("job"), skills=skills, invoked_skills=invoked,
     )
-    use_tools = should_offer_tools(history) and bool(allowed)
+    use_tools = should_offer_tools(history, channel_kind=channel_kind) and bool(allowed)
 
     langfuse = _langfuse_client()
     trace = None

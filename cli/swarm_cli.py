@@ -12,9 +12,9 @@ Usage:
     swarm_cli.py agents [--channel ID]
     swarm_cli.py agent <name>
     swarm_cli.py create-agent <name> --prompt TEXT [--model M] [--scope ID]
-                 [--window N] [--tools a,b,c]
+                 [--window N] [--tools a,b,c] [--job JOB]
     swarm_cli.py patch-agent <name> [--prompt TEXT] [--model M] [--scope ID]
-                 [--unscoped] [--window N] [--tools a,b,c]
+                 [--unscoped] [--window N] [--tools a,b,c] [--job JOB]
 
 Env:
     SWARM_URL     base URL of the relay (default http://localhost:8000)
@@ -118,6 +118,7 @@ def cmd_create_agent(args) -> None:
         "channel_scope": args.scope or None,
         "history_window": args.window,
         "max_tool_calls": args.cap,
+        "job": args.job,
     }
     tools = _parse_tools(args.tools)
     if tools is not None:
@@ -139,6 +140,8 @@ def cmd_patch_agent(args) -> None:
         payload["history_window"] = args.window
     if args.cap is not None:
         payload["max_tool_calls"] = args.cap
+    if args.job:
+        payload["job"] = args.job
     tools = _parse_tools(args.tools)
     if tools is not None:
         payload["tools"] = tools
@@ -191,10 +194,10 @@ def main() -> None:
     p_create = sub.add_parser("create-agent")
     p_create.add_argument("name")
     p_create.add_argument("--prompt", default="")
-    p_create.add_argument("--model", default="llama-3.3-70b-versatile")
+    p_create.add_argument("--model", default="openai/gpt-oss-120b")
     p_create.add_argument("--scope", default=None)
     p_create.add_argument("--window", type=int, default=12)
-    p_create.add_argument("--cap", type=int, default=3)
+    p_create.add_argument("--job", default="Teammate")
     p_create.add_argument("--tools", default=None)
     p_create.set_defaults(func=cmd_create_agent)
 
@@ -207,6 +210,7 @@ def main() -> None:
     p_patch.add_argument("--window", type=int, default=None)
     p_patch.add_argument("--cap", type=int, default=None)
     p_patch.add_argument("--tools", default=None)
+    p_patch.add_argument("--job", default="")
     p_patch.set_defaults(func=cmd_patch_agent)
 
     args = parser.parse_args()

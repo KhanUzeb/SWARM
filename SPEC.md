@@ -1,6 +1,6 @@
 # SPEC.md — swarm
 
-Technical contract for what's actually running (V2 + Phase 9). If code
+Technical contract for what's actually running (V2 + Phase 10). If code
 and this document disagree, one of them is wrong — file it as a bug
 against whichever is easier to fix correctly, not whichever is easier
 to leave broken.
@@ -17,6 +17,8 @@ to leave broken.
 | name       | TEXT  | unique, display name |
 | topic      | TEXT  | default `''` |
 | created_at | REAL  | unix timestamp |
+| kind       | TEXT  | `room` (shared channel) or `dm` (a Bot's 1:1). default `room` |
+| owner_agent | TEXT | for `dm`: the Bot that always hears this channel. NULL for rooms |
 
 ### `messages`
 
@@ -64,20 +66,28 @@ a duplicate row or an error.
 | history_window  | INTEGER | last N channel messages injected; default 12, cap 50 |
 | max_tool_calls  | INTEGER | cap per trigger; default 3, cap 8 |
 | tools           | TEXT    | JSON array of allowed tool names |
+| job             | TEXT    | primary job title; default `Teammate` |
+| status          | TEXT    | `idle` \| `working` \| `needs_approval` |
 
 Allowed tool names: `read_only_shell`, `search_channel_history`,
-`remember`, `recall`. API responses parse `tools` as a JSON array, not
-a raw string.
+`remember`, `recall`, `list_workspace`, `write_workspace`,
+`save_skill`, `request_approval`. API responses parse `tools` as a
+JSON array, not a raw string. List/get also include `dm_channel_id`
+(`dm-<name>`).
 
-Seeded on first run: `swarm` (generalist, unscoped, all four tools)
-and `ledger` (decision-summarizer, unscoped, no shell — the other
-three tools). Deleting an agent is not supported (history would
+Seeded on first run: `swarm` (job `Generalist`, unscoped, all eight
+tools) and `ledger` (job `Decision log`, unscoped, no shell/workspace
+write — `search_channel_history`, `remember`, `recall`). Creating an
+agent also creates its 1:1 channel `dm-<name>` (`kind=dm`,
+`owner_agent=<name>`). Existing databases get those DMs from
+`ensure_schema()`. Deleting an agent is not supported (history would
 dangle) — named gap.
 
 Existing databases that predate these columns are upgraded in
 `ensure_schema()` via `PRAGMA table_info` + `ALTER TABLE`, not Alembic.
 `ledger`'s tools are rewritten to the no-shell default only when the
-`tools` column is first added.
+`tools` column is first added. Pre-Phase-10 `swarm` rows keep whatever
+`tools` JSON they already had; a fresh DB gets the eight-tool default.
 
 ### `agent_memory`
 
@@ -95,13 +105,63 @@ Indexed on `(agent_name, created_at)`. Notes are written by the
 `remember` tool. At most one `summary` row is kept per
 `(agent_name, channel_id)` — a new summary replaces the previous.
 
+### `skills`
+
+| column     | type    | notes |
+|------------|---------|-------|
+| id         | INTEGER | PK |
+| name       | TEXT    | unique slug, invoked in chat as `/<name>` |
+| body       | TEXT    | instructions: when to use, inputs, steps, validation, output, approval boundary |
+| created_at | REAL    | |
+| updated_at | REAL    | |
+
+Skills are account-wide, not per-Bot.
+
+### `routines`
+
+| column            | type    | notes |
+|-------------------|---------|-------|
+| id                | INTEGER | PK |
+| agent_name        | TEXT    | owning Bot |
+| title             | TEXT    | |
+| instructions      | TEXT    | what to do each run |
+| interval_minutes  | INTEGER | 1–10080 |
+| enabled           | INTEGER | 0/1 |
+| last_run_at       | REAL    | nullable |
+| next_run_at       | REAL    | |
+| created_at        | REAL    | |
+
+Cap: 50 routines per Bot. A background loop (20s tick) runs due
+rows into that Bot's 1:1 as a `system` message starting with
+`[routine:<title>]`. `routine_runs` keeps the 20 most recent run
+records per routine (status + excerpt).
+
+### `approvals`
+
+| column      | type    | notes |
+|-------------|---------|-------|
+| id          | INTEGER | PK |
+| agent_name  | TEXT    | |
+| channel_id  | TEXT    | |
+| action      | TEXT    | short label |
+| detail      | TEXT    | |
+| status      | TEXT    | `pending` \| `approved` \| `denied` |
+| created_at  | REAL    | |
+| resolved_at | REAL    | nullable |
+
+Created by the `request_approval` tool. Resolving posts a human
+message into that channel ("Approved: … Continue from here." /
+"Denied: …") and re-triggers the Bot.
+
 ### Not built
 
 No `threads` table separate from `messages.parent_id` — flat storage
 with a nullable self-reference is sufficient; `GET /api/messages/{id}/thread`
 returns one level (the parent plus rows whose `parent_id` equals that
 id). Admin role for `POST /api/agents` is still a named gap — see
-`PROJECT.md`. No agent delete. No vector search (Phase 6).
+`PROJECT.md`. No agent delete. No vector search (Phase 6). No cloud VM,
+browser computer-use, or teach-by-demonstration recording — the
+"computer" is the shared sandbox workspace.
 
 ---
 
@@ -156,7 +216,8 @@ separately from the token on every call.
 ### `GET /api/channels`
 No auth required.
 ```json
-[{"id": "general", "name": "general", "topic": "wherever, whatever", "created_at": 1786353998.09}]
+[{"id": "general", "name": "general", "topic": "wherever, whatever",
+  "created_at": 1786353998.09, "kind": "room", "owner_agent": null}]
 ```
 
 ### `POST /api/channels`
@@ -235,8 +296,9 @@ Agents can reply if either `groq` or `openrouter` is true.
 ### `GET /api/agents?channel_id=<optional>`
 No auth. Without `channel_id`, returns every agent. With it, returns
 agents scoped to that channel plus unscoped (global) agents. Each row
-includes harness fields; `tools` is a JSON array. Memories are not
-embedded on the list.
+includes harness fields; `tools` is a JSON array. Each row also has
+`job`, `status`, and `dm_channel_id`. Memories are not embedded on
+the list.
 
 ### `GET /api/agents/{name}`
 No auth. The agent plus its most recent memories (up to 20, newest
@@ -250,6 +312,9 @@ last).
   "history_window": 12,
   "max_tool_calls": 3,
   "tools": ["read_only_shell", "search_channel_history", "remember", "recall"],
+  "job": "Generalist",
+  "status": "idle",
+  "dm_channel_id": "dm-swarm",
   "created_at": 1786353998.09,
   "memories": [
     {"id": 1, "agent_name": "swarm", "channel_id": "general",
@@ -263,28 +328,72 @@ last).
 ### `POST /api/agents`
 Auth required (any valid token — no admin check, see section 2).
 Harness fields are optional; omitted values use the defaults above.
-`tools` defaults to all four names. `channel_scope`, if set, must be
-an existing channel id.
+`tools` defaults to all eight names. `job` defaults to `Teammate`.
+`channel_scope`, if set, must be an existing channel id. A 1:1 channel
+`dm-<name>` is created with the agent.
 ```json
 // request
 {"name": "scribe", "system_prompt": "...", "model": "llama-3.3-70b-versatile",
  "channel_scope": null, "history_window": 12, "max_tool_calls": 3,
+ "job": "Note taker",
  "tools": ["search_channel_history", "remember", "recall"]}
-// response 200 — the created agent (no memories array)
+// response 200 — the created agent (no memories array), includes job, status, dm_channel_id
 // 409 if name already registered, 404 if channel_scope is unknown
 ```
 
 ### `PATCH /api/agents/{name}`
 Auth required. Any subset of `system_prompt`, `model`,
-`channel_scope`, `history_window`, `max_tool_calls`, `tools`.
+`channel_scope`, `history_window`, `max_tool_calls`, `tools`, `job`.
 `channel_scope: null` unscope the agent. Seeded personas (`swarm`,
 `ledger`) are editable like any other.
 ```json
 // request
-{"history_window": 20, "tools": ["remember", "recall"]}
+{"history_window": 20, "tools": ["remember", "recall"], "job": "Decision log"}
 // response 200 — the updated agent
 // 404 if name is not registered
 ```
+
+### `GET /api/jobs`
+No auth. Job templates used by the create-Bot UI (id, job, prompt).
+These fill the form; they do not connect Salesforce/Slack/etc.
+
+### `GET /api/skills` / `POST /api/skills`
+List is unauthenticated. Create/upsert requires auth. Body:
+`{"name": "weekly-health", "body": "..."}`. Same name upserts.
+
+### `PATCH /api/skills/{id}` / `DELETE /api/skills/{id}`
+Auth required. 404 if missing.
+
+### `GET /api/routines?agent_name=` / `POST /api/routines`
+List is unauthenticated. Create requires auth.
+`{"agent_name", "title", "instructions", "interval_minutes", "enabled"}`.
+409 if that Bot already has 50 routines. 404 if the Bot does not exist.
+
+### `PATCH /api/routines/{id}` / `DELETE /api/routines/{id}`
+Auth required. Changing `interval_minutes` resets `next_run_at`.
+
+### `POST /api/routines/{id}/run`
+Auth required. Starts a test run in the Bot's 1:1 (real work, same as
+a due tick). Returns `{"ok": true, "status": "started"}`.
+
+### `GET /api/routines/{id}/runs`
+No auth. Recent run records, newest first.
+
+### `GET /api/approvals?channel_id=&status=pending`
+No auth. `status` defaults to `pending`; pass empty to list all.
+
+### `POST /api/approvals/{id}/resolve`
+Auth required. `{"status": "approved"}` or `{"status": "denied"}`.
+409 if already resolved. Posts a human message into the approval's
+channel and re-triggers agents there.
+
+### `GET /api/computer`
+No auth. Shared workspace listing: `{workspace, shared, files, activity, note}`.
+The workspace is the sandbox directory, not a cloud VM.
+
+### `GET /api/computer/file?path=`
+No auth. Text preview, capped at 64KB. 404 if missing or the path
+escapes the workspace. 413 if too large.
 
 ---
 
@@ -322,7 +431,13 @@ against, WS doesn't need one to exist at all.
 {"type": "error", "detail": "slow down"}
 {"type": "agent_stream_start", "author": "swarm"}
 {"type": "agent_token", "author": "swarm", "delta": "..."}
+{"type": "bot_status", "name": "swarm", "status": "working"}
+{"type": "approval", "approval": { "id": 1, "agent_name": "swarm", "status": "pending", "...": "..." }}
 ```
+
+`bot_status` and `approval` are fanout to every connected socket
+(`broadcast_all`), not just the channel that produced them, so the
+Bot roster can update while you are in another room.
 
 `agent_stream_start` / `agent_token` are live tokens for the agent's
 final text completion. They are not persisted. The completed reply is
@@ -338,24 +453,35 @@ Live `message` events from a human/agent/system write may omit
 
 ## 5. Agent contract (current)
 
-- **Trigger**: any human message where `@<agent_name>` appears
-  case-insensitively, matched as a whole word (`re.search(r"@name\b")`
-  — `@swarmy` does not trigger `@swarm`). Agents are looked up scoped
-  to the channel the message was posted in.
+- **Trigger**:
+  - In a Bot's 1:1 (`kind=dm`, `owner_agent=<name>`), every human
+    message and every `[routine:…]` system message runs that Bot.
+    An `@mention` is not required.
+  - In a room, a human message triggers an agent only when
+    `@<agent_name>` appears case-insensitively as a whole word
+    (`re.search(r"@name\b")` — `@swarmy` does not trigger `@swarm`).
+    Agents are looked up scoped to the channel the message was posted in.
+  - After an agent reply, `@mentions` of *other* Bots in that reply
+    hand off work (depth capped at 2 hops) so you are not the router.
 - **Multiple mentions**: if a message mentions more than one agent,
   they reply **sequentially, in the order they're mentioned in the
-  text** — not the order they're registered, not concurrently. This
-  was a real bug during V2 build (see PROJECT.md "what changed") —
-  the fix runs all mentioned agents inside a single background task
-  rather than one task per agent.
+  text** — not the order they're registered, not concurrently. The DM
+  owner is prepended when the channel is a 1:1. This was a real bug
+  during V2 build (see PROJECT.md "what changed") — the fix runs all
+  mentioned agents inside a single background task rather than one
+  task per agent.
+- **Status**: `_run_agent` sets `working`, then `idle`, or
+  `needs_approval` if `request_approval` ran. Broadcast as `bot_status`.
 - **Context assembly**, in order:
   1. The agent's `system_prompt`.
-  2. Harness policy: which tools are allowed, and "do not tool-call
-     greetings".
-  3. Injected memories: up to 12 most recent `note` rows that are
+  2. Harness policy: primary job, teammate rules (stop for send /
+     publish / delete / purchase / production changes), allowed tools.
+  3. Saved skill names, plus the full body of any `/skill` invoked in
+     the latest human or routine message.
+  4. Injected memories: up to 12 most recent `note` rows that are
      global to the agent or scoped to this channel, plus the latest
      `summary` for this agent+channel if one exists.
-  4. Last `history_window` channel messages (oldest first).
+  5. Last `history_window` channel messages (oldest first).
      `system`-kind messages (tool-call audit logs) are excluded from
      what's sent to the model. The agent's own prior messages map to
      the `assistant` role; everything else to `user`, prefixed with
@@ -368,9 +494,11 @@ Live `message` events from a human/agent/system write may omit
 - **Model**: per-agent `model` column, via Groq. `SWARM_AGENT_MODEL`
   still overrides every agent globally if set.
 - **Tools available**: the agent's `tools` list, exposed via function
-  calling **only when the latest human message looks like a
-  file/history/memory request**. Greetings (`@swarm hi`) get a
-  text-only completion.
+  calling. In a 1:1 (`kind=dm`) and on `[routine:…]` ticks, tools are
+  always offered. In a room they are offered **only when the latest
+  human message looks like a file/history/memory/skill/workspace
+  request**. Greetings in a room (`@swarm hi`) still get a text-only
+  completion.
   - `read_only_shell` runs in a sandboxed working directory
     (`SWARM_SANDBOX_DIR`; default `/tmp/swarm-sandbox`, or `%TEMP%\swarm-sandbox`
     on Windows), 10s timeout, output capped at 4000 chars, minimal `PATH`
@@ -384,6 +512,13 @@ Live `message` events from a human/agent/system write may omit
     `scope` is `channel` (default) or `global`.
   - `recall(query)` does a `LIKE %query%` substring match against
     that agent's notes (global + this channel). Not semantic.
+  - `list_workspace` lists files in the shared sandbox.
+  - `write_workspace(path, content)` writes a text file under the
+    sandbox root (32k char cap). Paths that escape the root are
+    rejected.
+  - `save_skill(name, body)` upserts an account-wide skill.
+  - `request_approval(action, detail)` inserts a pending approval,
+    sets Bot status to `needs_approval`, and tells the model to stop.
   - Capped at the agent's `max_tool_calls` per single trigger (not
     per message — if two agents are mentioned, each gets its own cap).
   - Every tool call is persisted as a `system`-kind message
@@ -422,7 +557,7 @@ Live `message` events from a human/agent/system write may omit
 
 ## 6. Functional requirements — status
 
-All FR numbers below are implemented as of Phase 9 unless noted.
+All FR numbers below are implemented as of Phase 10 unless noted.
 
 | FR | Description | Status |
 |---|---|---|
@@ -448,6 +583,12 @@ All FR numbers below are implemented as of Phase 9 unless noted.
 | FR9.3 | Context injects notes + latest summary | ✅ |
 | FR9.4 | Classified errors, one retry, optional OpenRouter | ✅ |
 | FR9.5 | Partial stream persisted with cutoff note | ✅ |
+| FR10.1 | Named Bot job + 1:1 DM channel; DM hears you without @ | ✅ |
+| FR10.2 | Skills CRUD, `/name` invoke, `save_skill` tool | ✅ |
+| FR10.3 | Routines with interval + test run into the Bot's 1:1 | ✅ |
+| FR10.4 | `request_approval` + Allow once / Deny | ✅ |
+| FR10.5 | Shared workspace list/write + computer panel | ✅ |
+| FR10.6 | Bot-to-bot `@handoff` after an agent reply | ✅ |
 
 ---
 
@@ -468,4 +609,7 @@ All FR numbers below are implemented as of Phase 9 unless noted.
 Unchanged from V1: no Nostr/event-signing, no git hosting, no
 canvas/media comments, no huddle/voice, no multi-tenant hosting, no
 vector search (Phase 6, intentionally unbuilt), no admin role (named
-gap, still gated), no agent delete.
+gap, still gated), no agent delete. Phase 10 does **not** include a
+cloud VM, remote desktop, browser computer-use, connectors to
+Salesforce/Slack, or teach-by-demonstration recording. The shared
+"computer" is the local sandbox workspace.

@@ -1,6 +1,6 @@
 # PROMPTS.md — swarm
 
-Phases 1–5 and 7–9 are built (see PROJECT.md). This file records
+Phases 1–5 and 7–10 are built (see PROJECT.md). This file records
 what actually got built per phase, and keeps paste-ready prompts for
 the remaining gated items (admin role, semantic history, agent delete).
 
@@ -9,7 +9,7 @@ If you're extending this repo with an agentic coding tool, point it at
 
 ---
 
-## Phases 1–5, 7–9 — what shipped (reference, not re-runnable as-is)
+## Phases 1–5, 7–10 — what shipped (reference, not re-runnable as-is)
 
 These prompts describe what was actually implemented. They're kept
 for context, not meant to be re-run — running them again against
@@ -78,6 +78,15 @@ classified; 429/5xx/timeout retry once; `OPENROUTER_API_KEY` is an
 optional fallback. Partial streams persist with a cutoff note. Vanilla
 UI: agent panel, clearer empty/login/status, collapsible tool rows.
 
+**Phase 10 (Grok Bot teammates)**: SPEC updated first against
+https://x.ai/bot and https://docs.x.ai/grok-bot/overview. Named `job`
++ `status` on agents, auto-created `dm-<name>` 1:1 channels that
+trigger without `@mention`, job templates, skills (`/` invoke +
+`save_skill`), interval routines into the 1:1, `request_approval` with
+Allow once / Deny, shared sandbox listed as the computer, bot-to-bot
+handoff after an agent reply. UI: bot roster, computer panel, darker
+theme. Explicitly not a cloud VM or browser computer-use.
+
 ---
 
 ## Open — gated leftovers
@@ -115,6 +124,12 @@ not, report that back and don't implement it.
    (renames, retired personas, or a user asking to remove one).
    If justified: soft-delete or rename-in-place so old messages still
    resolve; do not hard-delete rows that messages still point at.
+
+4. Cloud computer / browser computer-use
+   Condition: the shared sandbox has actually been shown insufficient
+   for the jobs people run here.
+   If justified: a real isolated workspace, not a second chat UI over
+   the same directory.
 ```
 
 ---
