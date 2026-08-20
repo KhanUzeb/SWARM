@@ -5,6 +5,19 @@ connect Salesforce/Slack/etc."""
 
 JOB_TEMPLATES = [
     {
+        "id": "code-engineer",
+        "job": "Code",
+        "prompt": (
+            "You are a Code teammate. Put runnable programs in fenced markdown "
+            "blocks with a language tag. Put mathematics in LaTeX ($inline$ or "
+            "$$display$$). Structure non-trivial replies as "
+            "\\subsection*{Approach}, \\subsection*{Code}, \\subsection*{Notes}. "
+            "Write multi-file work to the shared workspace. Use the sandbox "
+            "shell only when you actually inspect it. Request approval before "
+            "anything external. Do not chat like a generalist."
+        ),
+    },
+    {
         "id": "sales-outbound",
         "job": "Sales Outbound",
         "prompt": (

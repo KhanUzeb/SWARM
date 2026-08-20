@@ -142,7 +142,28 @@ CREATE INDEX IF NOT EXISTS idx_approvals_pending ON approvals(status, channel_id
 _DEFAULT_CHANNELS = [
     ("general", "wherever, whatever"),
     ("agents", "the swarm's own channel"),
+    ("code", "programs, proofs, and latex"),
 ]
+
+_CODER_PROMPT = (
+    "You are `coder`, a specialist programming teammate — not swarm. "
+    "Different rules apply here.\n"
+    "1. Put runnable code in fenced markdown blocks with a language tag "
+    "(```python, ```js, ```sql, …). Never dump code as plain prose.\n"
+    "2. Put mathematics in LaTeX: inline $...$ or display $$...$$.\n"
+    "3. Structure every non-trivial reply as LaTeX-style subsections:\n"
+    "   \\subsection*{Approach}\n"
+    "   \\subsection*{Code}\n"
+    "   \\subsection*{Notes}\n"
+    "4. Prefer small, complete, runnable examples over pseudocode.\n"
+    "5. For multi-file work, write files with write_workspace so they show "
+    "on the shared computer.\n"
+    "6. Use read_only_shell only to inspect the sandbox. Never invent "
+    "command output.\n"
+    "7. Do not send outreach or change production; call request_approval "
+    "first for anything external.\n"
+    "8. Keep chatter out. Tradeoffs live in Approach; the program lives in Code."
+)
 
 _DEFAULT_AGENTS = [
     (
@@ -153,7 +174,7 @@ _DEFAULT_AGENTS = [
         "know something, say so in one line and move on. Keep replies short "
         "unless the question genuinely needs length. Do not call tools for "
         "greetings or small talk. Use remember for facts that should stick "
-        "across turns.",
+        "across turns. For code, proofs, or LaTeX, defer to @coder.",
         DEFAULT_GROQ_MODEL,
         None,
         12,
@@ -174,6 +195,16 @@ _DEFAULT_AGENTS = [
         3,
         LEDGER_TOOLS,
         "Decision log",
+    ),
+    (
+        "coder",
+        _CODER_PROMPT,
+        DEFAULT_GROQ_MODEL,
+        None,
+        20,
+        4,
+        DEFAULT_TOOLS,
+        "Code",
     ),
 ]
 
@@ -252,6 +283,25 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
         )
     if "owner_agent" not in ch_cols:
         await db.execute("ALTER TABLE channels ADD COLUMN owner_agent TEXT")
+
+    for name, topic in _DEFAULT_CHANNELS:
+        cur = await db.execute("SELECT 1 FROM channels WHERE id = ?", (name,))
+        if await cur.fetchone() is None:
+            await db.execute(
+                "INSERT INTO channels (id, name, topic, created_at, kind) "
+                "VALUES (?, ?, ?, ?, 'room')",
+                (name, name, topic, time.time()),
+            )
+
+    for name, prompt, model, scope, window, cap, tools, job in _DEFAULT_AGENTS:
+        cur = await db.execute("SELECT 1 FROM agents WHERE name = ?", (name,))
+        if await cur.fetchone() is None:
+            await db.execute(
+                "INSERT INTO agents (name, system_prompt, model, channel_scope, "
+                "created_at, history_window, max_tool_calls, tools, job, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')",
+                (name, prompt, model, scope, time.time(), window, cap, json.dumps(tools), job),
+            )
 
     cur = await db.execute("SELECT name, job FROM agents")
     agents = await cur.fetchall()
@@ -447,6 +497,42 @@ async def message_exists(message_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT 1 FROM messages WHERE id = ?", (message_id,))
         return await cur.fetchone() is not None
+
+
+async def delete_message(message_id: int) -> list[int]:
+    """Delete a message and its direct replies. Returns removed ids."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id FROM messages WHERE id = ?", (message_id,))
+        if await cur.fetchone() is None:
+            return []
+        cur = await db.execute("SELECT id FROM messages WHERE parent_id = ?", (message_id,))
+        reply_ids = [row[0] for row in await cur.fetchall()]
+        ids = [message_id, *reply_ids]
+        placeholders = ",".join("?" * len(ids))
+        await db.execute(f"DELETE FROM reactions WHERE message_id IN ({placeholders})", ids)
+        await db.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", ids)
+        await db.commit()
+        return ids
+
+
+async def delete_channel(channel_id: str) -> bool:
+    """Remove a room and its messages. DMs are refused by the API layer."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT kind FROM channels WHERE id = ?", (channel_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return False
+        cur = await db.execute("SELECT id FROM messages WHERE channel_id = ?", (channel_id,))
+        ids = [r[0] for r in await cur.fetchall()]
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            await db.execute(f"DELETE FROM reactions WHERE message_id IN ({placeholders})", ids)
+        await db.execute("DELETE FROM messages WHERE channel_id = ?", (channel_id,))
+        await db.execute("DELETE FROM agent_memory WHERE channel_id = ?", (channel_id,))
+        await db.execute("DELETE FROM approvals WHERE channel_id = ?", (channel_id,))
+        await db.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+        await db.commit()
+        return True
 
 
 # -------------------------------------------------------------- reactions -

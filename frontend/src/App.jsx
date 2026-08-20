@@ -1,15 +1,99 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import katex from "katex";
 import {
-  ALL_TOOLS, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, fmtTime, groupedWith,
-  initials, insertMention, mentionQuery, roleLine, statusLabel,
+  ALL_TOOLS, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, escapeHtml, extractPaper,
+  fmtTime, formatInline, groupedWith, initials, insertMention, mentionQuery,
+  roleLine, statusLabel, tokenizeBody,
 } from "./lib.js";
+
+function renderMath(tex, display) {
+  try {
+    return katex.renderToString(tex, { throwOnError: false, displayMode: !!display });
+  } catch {
+    return escapeHtml(tex);
+  }
+}
+
+function CodeBlock({ lang, text }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="code-block">
+      <div className="code-head">
+        <span>{lang || "text"}</span>
+        <button type="button" className="btn ghost" onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1400);
+          } catch { /* ignore */ }
+        }}>{copied ? "Copied" : "Copy"}</button>
+      </div>
+      <pre><code>{text}</code></pre>
+    </div>
+  );
+}
+
+function RichBody({ body }) {
+  const parts = useMemo(() => tokenizeBody(body), [body]);
+  return (
+    <div className="body rich">
+      {parts.map((part, i) => {
+        if (part.type === "code") return <CodeBlock key={i} lang={part.lang} text={part.text} />;
+        if (part.type === "math") {
+          return (
+            <span
+              key={i}
+              className={part.display ? "math-display" : "math-inline"}
+              dangerouslySetInnerHTML={{ __html: renderMath(part.tex, part.display) }}
+            />
+          );
+        }
+        return <span key={i} dangerouslySetInnerHTML={{ __html: formatInline(part.text) }} />;
+      })}
+    </div>
+  );
+}
+
+function PaperView({ title, messages }) {
+  const paper = useMemo(() => extractPaper(messages), [messages]);
+  return (
+    <article className="paper-doc" aria-label="LaTeX paper">
+      <p className="paper-kicker">swarm preprint</p>
+      <h1>{title}</h1>
+      <p className="paper-meta">A compiled view of this channel · talk stays in Talk</p>
+
+      <section>
+        <h2><span className="tex-cmd">{"\\subsection*{Code}"}</span> Code</h2>
+        {!paper.code.length && <p className="paper-empty">No listings yet. Ask @coder — they write fenced programs into this subsection.</p>}
+        {paper.code.map((block, i) => (
+          <figure key={`${block.id}-${i}`} className="listing">
+            <figcaption>Listing {i + 1} · {block.lang} · {block.author}</figcaption>
+            <CodeBlock lang={block.lang} text={block.text} />
+          </figure>
+        ))}
+      </section>
+
+      <section>
+        <h2><span className="tex-cmd">{"\\subsection*{Mathematics}"}</span> Mathematics</h2>
+        {!paper.math.length && <p className="paper-empty">No TeX yet. Inline $...$ or display $$...$$ from @coder lands here.</p>}
+        {paper.math.map((m, i) => (
+          <div
+            key={`${m.id}-${i}`}
+            className="math-display paper-math"
+            dangerouslySetInnerHTML={{ __html: renderMath(m.tex, true) }}
+          />
+        ))}
+      </section>
+    </article>
+  );
+}
 
 function Toast({ toast }) {
   if (!toast) return null;
   return <div id="toast" className={`visible${toast.error ? " error" : ""}`} role="status">{toast.msg}</div>;
 }
 
-function MessageRow({ m, grouped, inThread, reactions, replyCount, onReply, onReact, onOpenThread, onToggleEmoji }) {
+function MessageRow({ m, grouped, inThread, reactions, replyCount, onReply, onReact, onOpenThread, onToggleEmoji, onDelete }) {
   const counts = {};
   for (const r of reactions || []) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
   return (
@@ -19,16 +103,17 @@ function MessageRow({ m, grouped, inThread, reactions, replyCount, onReply, onRe
         <div className="content">
           <div className="meta">
             <span className="who">{m.author}</span>
-            {m.author_kind === "agent" && <span className="badge">agent</span>}
+            {m.author_kind === "agent" && <span className="badge">{m.author === "coder" ? "code" : "agent"}</span>}
             <span className="ts">{fmtTime(m.created_at)}</span>
           </div>
-          <div className="body">{m.body || ""}</div>
+          <RichBody body={m.body || ""} />
         </div>
       </div>
-      {m.author_kind !== "system" && !m.streaming && (
+      {m.author_kind !== "system" && !m.streaming && m.id != null && (
         <div className="row-actions">
           <button type="button" onClick={() => onReply(m.parent_id || m.id)}>Reply</button>
           <button type="button" onClick={(ev) => onToggleEmoji(m.id, ev.currentTarget)}>React</button>
+          {onDelete && <button type="button" className="danger" onClick={() => onDelete(m)}>Delete</button>}
         </div>
       )}
       {!m.streaming && m.id != null && (
@@ -98,6 +183,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [channelModal, setChannelModal] = useState(false);
   const [agentModal, setAgentModal] = useState(null);
+  const [mainView, setMainView] = useState("talk");
   const [mention, setMention] = useState({ open: false, index: 0, items: [] });
   const [emoji, setEmoji] = useState(null);
   const [draft, setDraft] = useState("");
@@ -308,6 +394,7 @@ export default function App() {
     setStreams({});
     setOrder([]);
     setSidebarOpen(false);
+    setMainView("talk");
     setLoadingLog(true);
     setLogError("");
     setHasMore(false);
@@ -363,6 +450,35 @@ export default function App() {
             list.push({ author: data.author, emoji: data.emoji });
           }
           return { ...prev, [data.message_id]: list };
+        });
+      } else if (data.type === "message_deleted") {
+        const ids = new Set(data.ids || [data.message_id]);
+        setMessages((prev) => {
+          const next = { ...prev };
+          for (const id of ids) delete next[id];
+          return next;
+        });
+        setOrder((prev) => prev.filter((id) => !ids.has(id)));
+        setReactions((prev) => {
+          const next = { ...prev };
+          for (const id of ids) delete next[id];
+          return next;
+        });
+        setThreadId((tid) => {
+          if (tid && ids.has(tid)) {
+            setThreadParent(null);
+            setThreadReplies([]);
+            return null;
+          }
+          setThreadReplies((list) => list.filter((m) => !ids.has(m.id)));
+          return tid;
+        });
+      } else if (data.type === "channel_deleted") {
+        loadChannels().then((chs) => {
+          if (channelRef.current === data.channel_id) {
+            const roomsLeft = (chs || []).filter((c) => c.kind !== "dm");
+            switchChannel(roomsLeft[0]?.id || chs?.[0]?.id || "general");
+          }
         });
       } else if (data.type === "error") flash(data.detail || "Something went wrong", true);
       else if (data.type === "agent_stream_start") {
@@ -630,6 +746,49 @@ export default function App() {
     }
   }
 
+  async function deleteChannel(channelId) {
+    const res = await api(`/api/channels/${encodeURIComponent(channelId)}`, { token, method: "DELETE", json: false });
+    if (!res.ok) {
+      flash("Couldn't delete that channel", true);
+      return;
+    }
+    const chs = await loadChannels();
+    flash("Channel deleted");
+    if (channel === channelId) {
+      const roomsLeft = (chs || []).filter((c) => c.kind !== "dm");
+      await switchChannel(roomsLeft[0]?.id || chs?.[0]?.id || "general");
+    }
+  }
+
+  async function deleteMessage(m) {
+    if (!m?.id) return;
+    const res = await api(`/api/messages/${m.id}`, { token, method: "DELETE", json: false });
+    if (!res.ok) {
+      flash("Couldn't delete that message", true);
+      return;
+    }
+    const data = await res.json();
+    const ids = new Set(data.ids || [m.id]);
+    setMessages((prev) => {
+      const next = { ...prev };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+    setOrder((prev) => prev.filter((id) => !ids.has(id)));
+    setReactions((prev) => {
+      const next = { ...prev };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+    if (threadId && ids.has(threadId)) {
+      setThreadId(null);
+      setThreadParent(null);
+      setThreadReplies([]);
+    } else {
+      setThreadReplies((list) => list.filter((row) => !ids.has(row.id)));
+    }
+  }
+
   function openCreateAgent() {
     setAgentErr("");
     setAgentForm({ name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [] });
@@ -732,8 +891,8 @@ export default function App() {
   }
 
   const placeholder = bot
-    ? `Message ${bot.name} — they already hear you`
-    : `Message #${current.name || current.id} — @mention a bot or /skill`;
+    ? (bot.name === "coder" ? `Ask ${bot.name} for a program, proof, or listing` : `Message ${bot.name} — they already hear you`)
+    : `Message #${current.name || current.id} — @coder for code, @swarm to talk`;
 
   const layout = [
     "app",
@@ -741,6 +900,7 @@ export default function App() {
     computerOpen ? "computer-open" : "",
     sidebarOpen ? "sidebar-open" : "",
     showTools ? "" : "hide-tools",
+    mainView === "paper" ? "paper-open" : "",
   ].filter(Boolean).join(" ");
 
   const streamRows = Object.values(streams);
@@ -751,9 +911,9 @@ export default function App() {
       {!user && (
         <div id="login">
           <form className="card" onSubmit={onLogin}>
-            <p className="kicker">Early build</p>
-            <h1>Meet your first Bot</h1>
-            <p>AI teammates you can give real work to. They keep a job, a 1:1, memory, and a shared workspace — and only come back when something needs you.</p>
+            <p className="kicker">A quiet room</p>
+            <h1>Talk. Then put the work on paper.</h1>
+            <p>Teammates live in channels, not a sidebar chatbot. @swarm for conversation, @coder for programs and proofs — code lands in its own LaTeX subsection.</p>
             <label className="sr-only" htmlFor="login-input">Handle</label>
             <input id="login-input" maxLength={24} autoComplete="username" placeholder="your handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
             <button type="submit" className="btn primary" disabled={loginBusy}>Get started</button>
@@ -766,12 +926,12 @@ export default function App() {
       {channelModal && (
         <div className="overlay" onClick={(e) => e.target === e.currentTarget && setChannelModal(false)}>
           <div className="modal-card" role="dialog" aria-modal="true">
-            <h2>New room</h2>
+            <h2>New channel</h2>
             <form onSubmit={createChannel}>
               <label htmlFor="channel-name">Name</label>
               <input id="channel-name" name="name" maxLength={64} required placeholder="release-planning" autoFocus />
               <label htmlFor="channel-topic">Topic <span className="optional">(optional)</span></label>
-              <input id="channel-topic" name="topic" maxLength={200} placeholder="what this room is for" />
+              <input id="channel-topic" name="topic" maxLength={200} placeholder="what this channel is for" />
               <div className="err" role="alert">{channelErr}</div>
               <div className="modal-actions">
                 <button type="button" className="btn" onClick={() => setChannelModal(false)}>Cancel</button>
@@ -804,9 +964,9 @@ export default function App() {
               <textarea id="agent-prompt" required maxLength={4000} rows={5} placeholder="One job, sources, deliverable, and what needs approval." value={agentForm.prompt} onChange={(e) => setAgentForm((f) => ({ ...f, prompt: e.target.value }))} />
               <label htmlFor="agent-model">Model</label>
               <input id="agent-model" maxLength={128} placeholder={DEFAULT_MODEL} value={agentForm.model} onChange={(e) => setAgentForm((f) => ({ ...f, model: e.target.value }))} />
-              <label htmlFor="agent-scope">Room scope</label>
+              <label htmlFor="agent-scope">Channel scope</label>
               <select id="agent-scope" value={agentForm.scope} onChange={(e) => setAgentForm((f) => ({ ...f, scope: e.target.value }))}>
-                <option value="">Every room (plus their 1:1)</option>
+                <option value="">Every channel (plus their 1:1)</option>
                 {rooms.map((c) => <option key={c.id} value={c.id}>#{c.name}</option>)}
               </select>
               <label htmlFor="agent-window">History window</label>
@@ -861,7 +1021,7 @@ export default function App() {
       <div id="sidebar-backdrop" hidden={!sidebarOpen} onClick={() => setSidebarOpen(false)} />
 
       <nav id="sidebar" aria-label="Workspace">
-        <div className="brand">SWARM<small>AI teammates you can give work to</small></div>
+        <div className="brand">swarm<small>talk · code · paper</small></div>
         <div className="section-label">Bots</div>
         <div id="bots-list">
           {!allAgents.length && <div className="empty">No bots yet</div>}
@@ -876,16 +1036,20 @@ export default function App() {
           ))}
         </div>
         <button type="button" id="new-agent" onClick={openCreateAgent}>+ New Bot</button>
-        <div className="section-label">Rooms</div>
+        <div className="section-label">Channels</div>
         <ul id="channel-list">
-          {!rooms.length && <li className="empty-state">No rooms</li>}
+          {!rooms.length && <li className="empty-state">No channels yet</li>}
           {rooms.map((c) => (
-            <li key={c.id}>
-              <button type="button" className={c.id === channel ? "active" : ""} onClick={() => switchChannel(c.id)}>{c.name}</button>
+            <li key={c.id} className="channel-item">
+              <button type="button" className={c.id === channel ? "active" : ""} onClick={() => switchChannel(c.id)}>
+                <span className="ch-name">{c.name}</span>
+                {c.topic ? <span className="ch-topic">{c.topic}</span> : null}
+              </button>
+              <button type="button" className="ch-delete" aria-label={`Delete #${c.name}`} onClick={() => deleteChannel(c.id)}>×</button>
             </li>
           ))}
         </ul>
-        <button type="button" id="new-channel" onClick={() => { setChannelErr(""); setChannelModal(true); }}>+ New room</button>
+        <button type="button" id="new-channel" onClick={() => { setChannelErr(""); setChannelModal(true); }}>+ New channel</button>
         <div id="agents-box">
           <div id="groq-status" className={agentsReady ? "ready" : "missing"}>
             {agentsReady ? "Bots ready" : "Set GROQ_API_KEY in .env so bots can reply"}
@@ -903,10 +1067,14 @@ export default function App() {
 
       <main id="main">
         <div id="topbar">
-          <button type="button" id="menu-btn" aria-label="Open sidebar" onClick={() => setSidebarOpen(true)}>☰</button>
+          <button type="button" id="menu-btn" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}>☰</button>
           <div className="channel-meta">
             <div className="name">{bot ? bot.name : `#${current.name || current.id}`}</div>
             <div className="topic">{bot ? (bot.job || current.topic || "Teammate") : (current.topic || "No topic set")}</div>
+          </div>
+          <div className="view-tabs" role="tablist" aria-label="Channel view">
+            <button type="button" className={`tab${mainView === "talk" ? " active" : ""}`} onClick={() => setMainView("talk")}>Talk</button>
+            <button type="button" className={`tab${mainView === "paper" ? " active" : ""}`} onClick={() => setMainView("paper")}>Paper</button>
           </div>
           {bot && <span className={`status-chip ${bot.status || "idle"}`}>{statusLabel(bot.status)}</span>}
           <span className="who">you're <span>{user || "anon"}</span></span>
@@ -914,15 +1082,23 @@ export default function App() {
           <button type="button" className="btn ghost" onClick={() => setShowTools((v) => !v)}>{showTools ? "Hide tool log" : "Show tool log"}</button>
           <button type="button" className="btn ghost" onClick={() => setComputerOpen((v) => !v)}>Computer</button>
         </div>
+        {mainView === "paper" ? (
+          <div id="log" ref={logRef} className="paper-log" role="document">
+            <PaperView title={bot ? bot.name : (current.name || current.id)} messages={[...roots, ...Object.values(messages).filter((m) => m.parent_id)]} />
+          </div>
+        ) : (
+        <>
         {hasMore && <button type="button" id="load-earlier" onClick={loadEarlier}>Load earlier messages</button>}
         <div id="log" ref={logRef} role="log" aria-live="polite">
           {loadingLog && <div className="loading-state">Loading messages…</div>}
           {!loadingLog && logError && <div className="empty-state">{logError}</div>}
           {!loadingLog && !logError && !roots.length && !streamRows.length && (
-            <div className="empty-state">
-              {bot
-                ? `No messages yet. Give ${bot.name} a real task — outcome, sources, and what needs your approval.`
-                : "No messages yet. Bots live in this room — try @swarm"}
+            <div className="empty-state editorial">
+              {bot?.name === "coder"
+                ? "Empty page. Ask for a function, a proof, or a listing — code and TeX compile into Paper."
+                : bot
+                  ? `A blank channel. Give ${bot.name} a real task.`
+                  : "A blank channel. Talk here, or @coder when you want a listing."}
             </div>
           )}
           {roots.map((m, i) => (
@@ -935,6 +1111,7 @@ export default function App() {
               onReply={openThread}
               onReact={sendReaction}
               onOpenThread={openThread}
+              onDelete={deleteMessage}
               onToggleEmoji={(id, el) => {
                 const r = el.getBoundingClientRect();
                 setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) });
@@ -945,6 +1122,8 @@ export default function App() {
             <MessageRow key={`stream-${m.author}`} m={m} grouped={false} reactions={[]} replyCount={0} onReply={() => {}} onReact={() => {}} onOpenThread={() => {}} onToggleEmoji={() => {}} />
           ))}
         </div>
+        </>
+        )}
         <div id="approval-dock">
           {pendingHere.map((a) => <ApprovalCard key={a.id} a={a} onResolve={resolveApproval} />)}
         </div>
@@ -974,7 +1153,7 @@ export default function App() {
             />
             <button type="button" className="btn primary send" onClick={() => { sendFrom(draft, null); setDraft(""); }}>Send</button>
           </div>
-          <div className="composer-hint">@bot to mention · /skill to invoke · DMs don't need an @</div>
+          <div className="composer-hint">@swarm to talk · @coder for listings · Paper compiles code and TeX</div>
         </div>
       </main>
 
@@ -1114,9 +1293,9 @@ export default function App() {
             <button type="button" className="btn ghost" onClick={() => { setThreadId(null); setThreadParent(null); setThreadReplies([]); }}>Close</button>
           </div>
           <div id="thread-log" ref={threadLogRef} role="log">
-            {threadParent && <MessageRow m={threadParent} inThread reactions={reactions[threadParent.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} />}
+            {threadParent && <MessageRow m={threadParent} inThread reactions={reactions[threadParent.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onDelete={deleteMessage} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} />}
             {threadReplies.map((m, i) => (
-              <MessageRow key={m.id} m={m} inThread grouped={groupedWith(i ? threadReplies[i - 1] : threadParent, m)} reactions={reactions[m.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} />
+              <MessageRow key={m.id} m={m} inThread grouped={groupedWith(i ? threadReplies[i - 1] : threadParent, m)} reactions={reactions[m.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onDelete={deleteMessage} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} />
             ))}
           </div>
           <div className="thread-composer">

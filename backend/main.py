@@ -203,6 +203,36 @@ async def api_post_message(
     return msg
 
 
+@app.delete("/api/channels/{channel_id}")
+async def api_delete_channel(channel_id: str, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    channel = await db.get_channel(channel_id)
+    if channel is None:
+        raise HTTPException(404, "no such channel")
+    if channel.get("kind") == "dm":
+        raise HTTPException(400, "cannot delete a 1:1")
+    await db.delete_channel(channel_id)
+    await hub.broadcast(channel_id, {"type": "channel_deleted", "channel_id": channel_id})
+    return {"ok": True, "id": channel_id}
+
+
+@app.delete("/api/messages/{message_id}")
+async def api_delete_message(message_id: int, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    msg = await db.get_message(message_id)
+    if msg is None:
+        raise HTTPException(404, "no such message")
+    ids = await db.delete_message(message_id)
+    await hub.broadcast(msg["channel_id"], {
+        "type": "message_deleted",
+        "message_id": message_id,
+        "ids": ids,
+    })
+    return {"ok": True, "ids": ids}
+
+
 @app.get("/api/messages/{message_id}/thread")
 async def api_get_thread(message_id: int):
     parent = await db.get_message(message_id)

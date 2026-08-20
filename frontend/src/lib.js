@@ -81,3 +81,54 @@ export async function api(path, { token, method = "GET", body, json = true } = {
   });
   return res;
 }
+
+export function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+const TOKEN_RE = /```([\w+-]*)[ \t]*\n?([\s\S]*?)```|\$\$([\s\S]+?)\$\$|\$(?!\$)([^$\n]+?)\$/g;
+
+export function tokenizeBody(body) {
+  const text = String(body || "");
+  const parts = [];
+  let last = 0;
+  TOKEN_RE.lastIndex = 0;
+  let match;
+  while ((match = TOKEN_RE.exec(text))) {
+    if (match.index > last) parts.push({ type: "text", text: text.slice(last, match.index) });
+    if (match[2] != null) {
+      parts.push({ type: "code", lang: (match[1] || "").trim() || "text", text: match[2].replace(/\n$/, "") });
+    } else if (match[3] != null) {
+      parts.push({ type: "math", display: true, tex: match[3].trim() });
+    } else {
+      parts.push({ type: "math", display: false, tex: match[4].trim() });
+    }
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push({ type: "text", text: text.slice(last) });
+  return parts.length ? parts : [{ type: "text", text }];
+}
+
+export function formatInline(text) {
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\\subsection\*\{([^}]+)\}/g, '<span class="tex-sub">$1</span>')
+    .replace(/\n/g, "<br />");
+}
+
+export function extractPaper(messages) {
+  const code = [];
+  const math = [];
+  for (const m of messages || []) {
+    if (!m?.body || m.author_kind === "system") continue;
+    for (const part of tokenizeBody(m.body)) {
+      if (part.type === "code") code.push({ ...part, author: m.author, id: m.id });
+      if (part.type === "math") math.push({ ...part, author: m.author, id: m.id });
+    }
+  }
+  return { code, math };
+}

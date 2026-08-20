@@ -141,6 +141,54 @@ def test_thread_404(client):
     assert client.get("/api/messages/99999/thread").status_code == 404
 
 
+def test_delete_message_and_replies(client, auth):
+    _clear_rate()
+    parent = client.post(
+        "/api/channels/general/messages",
+        json={"author": "uzeb", "body": "keep me not"},
+        headers=auth,
+    ).json()
+    _clear_rate()
+    client.post(
+        "/api/channels/general/messages",
+        json={"author": "uzeb", "body": "child", "parent_id": parent["id"]},
+        headers=auth,
+    )
+    _clear_rate()
+    gone = client.delete(f"/api/messages/{parent['id']}", headers=auth)
+    assert gone.status_code == 200
+    assert parent["id"] in gone.json()["ids"]
+    history = client.get("/api/channels/general/messages").json()
+    assert all(m["id"] != parent["id"] for m in history)
+    _clear_rate()
+    assert client.delete("/api/messages/99999", headers=auth).status_code == 404
+
+
+def test_create_and_delete_channel(client, auth):
+    _clear_rate()
+    created = client.post(
+        "/api/channels",
+        json={"name": "release-notes", "topic": "ship talk"},
+        headers=auth,
+    )
+    assert created.status_code == 200
+    assert created.json()["id"] == "release-notes"
+    _clear_rate()
+    client.post(
+        "/api/channels/release-notes/messages",
+        json={"author": "uzeb", "body": "temp"},
+        headers=auth,
+    )
+    _clear_rate()
+    deleted = client.delete("/api/channels/release-notes", headers=auth)
+    assert deleted.status_code == 200
+    ids = {c["id"] for c in client.get("/api/channels").json()}
+    assert "release-notes" not in ids
+    _clear_rate()
+    dm = client.delete("/api/channels/dm-swarm", headers=auth)
+    assert dm.status_code == 400
+
+
 def test_ws_bad_token_closes_4001(client):
     with client.websocket_connect("/ws/general") as ws:
         ws.send_json({"token": "nope:invalid"})

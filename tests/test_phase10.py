@@ -15,10 +15,16 @@ def test_seeded_bots_have_jobs_and_dms(client):
     assert agents["swarm"]["status"] == "idle"
     assert agents["swarm"]["dm_channel_id"] == "dm-swarm"
     assert agents["ledger"]["job"] == "Decision log"
+    assert agents["coder"]["job"] == "Code"
+    assert agents["coder"]["dm_channel_id"] == "dm-coder"
+    assert "fenced markdown" in agents["coder"]["system_prompt"]
+    assert "\\subsection*{Code}" in agents["coder"]["system_prompt"]
     channels = {c["id"]: c for c in client.get("/api/channels").json()}
     assert channels["dm-swarm"]["kind"] == "dm"
     assert channels["dm-swarm"]["owner_agent"] == "swarm"
+    assert channels["dm-coder"]["kind"] == "dm"
     assert channels["general"]["kind"] == "room"
+    assert channels["code"]["kind"] == "room"
 
 
 def test_jobs_catalog(client):
@@ -26,6 +32,7 @@ def test_jobs_catalog(client):
     ids = {j["id"] for j in jobs}
     assert "sales-outbound" in ids
     assert "chief-of-staff" in ids
+    assert "code-engineer" in ids
     assert all("prompt" in j and "job" in j for j in jobs)
 
 
