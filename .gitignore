@@ -25,3 +25,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# frontend
+frontend/node_modules/
+frontend/dist/

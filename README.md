@@ -10,7 +10,7 @@ a teammate, not a chatbot sidebar**.
 ```
 swarm/
   backend/          FastAPI relay: REST + WebSocket + auth + agents
-  frontend/         vanilla HTML/CSS/JS (no build step)
+  frontend/         React 19 + Vite 8 (bun). Production build in frontend/dist
   cli/swarm_cli.py  JSON in / JSON out, for scripts and other agents
   tests/            pytest suite (Groq is mocked)
   docs/DEPLOY.md    docker compose
@@ -23,15 +23,19 @@ See `PROJECT.md` and `SPEC.md` for the contract.
 
 ## Run it
 
-Uses [uv](https://docs.astral.sh/uv/) for the venv
+Uses [uv](https://docs.astral.sh/uv/) for the venv and [bun](https://bun.sh) for the UI.
 
 ```powershell
 cd swarm
 
-
 uv venv .venv
 .\.venv\Scripts\Activate.ps1
 uv pip install -r requirements.txt
+
+cd frontend
+bun install
+bun run build
+cd ..
 
 cp .env.example .env
 # edit .env, set GROQ_API_KEY (free tier at console.groq.com)
@@ -50,7 +54,8 @@ Product Performance, Chief of Staff, …). `/skill` invokes a saved
 process; the computer panel shows the shared workspace, routines, and
 approvals.
 
-Docker: see `docs/DEPLOY.md`.
+Docker: see `docs/DEPLOY.md`. For a live UI while uvicorn is running,
+`cd frontend && bun run dev` — Vite is on `:5173` and proxies `/api` and `/ws`.
 
 ## CLI
 

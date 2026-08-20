@@ -307,7 +307,7 @@ last).
 {
   "name": "swarm",
   "system_prompt": "...",
-  "model": "llama-3.3-70b-versatile",
+  "model": "openai/gpt-oss-120b",
   "channel_scope": null,
   "history_window": 12,
   "max_tool_calls": 3,
@@ -333,7 +333,7 @@ Harness fields are optional; omitted values use the defaults above.
 `dm-<name>` is created with the agent.
 ```json
 // request
-{"name": "scribe", "system_prompt": "...", "model": "llama-3.3-70b-versatile",
+{"name": "scribe", "system_prompt": "...", "model": "openai/gpt-oss-120b",
  "channel_scope": null, "history_window": 12, "max_tool_calls": 3,
  "job": "Note taker",
  "tools": ["search_channel_history", "remember", "recall"]}
@@ -491,7 +491,11 @@ Live `message` events from a human/agent/system write may omit
   messages outside the window are compacted into one `summary` row
   for that agent+channel (replacing any previous summary). This is a
   local extract, not a second model call.
-- **Model**: per-agent `model` column, via Groq. `SWARM_AGENT_MODEL`
+- **Model**: per-agent `model` column, via Groq. Default is
+  `openai/gpt-oss-120b` (Groq shut down `llama-3.1-8b-instant` and
+  `llama-3.3-70b-versatile` on 2026-08-16 for free/developer). Those
+  old IDs remap on schema migrate, create/patch, and at call time.
+  Fast/cheap override: `openai/gpt-oss-20b`. `SWARM_AGENT_MODEL`
   still overrides every agent globally if set.
 - **Tools available**: the agent's `tools` list, exposed via function
   calling. In a 1:1 (`kind=dm`) and on `[routine:…]` ticks, tools are

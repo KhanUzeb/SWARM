@@ -18,6 +18,9 @@ docker compose build
 docker compose up -d
 ```
 
+The image is two-stage: bun builds the React UI, then the Python image
+serves `frontend/dist` from uvicorn. You do not need bun on the VPS.
+
 App is on `http://<host>:8000`.
 
 ## Where the data lives
@@ -43,7 +46,7 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 | `GROQ_API_KEY` | yes (or OpenRouter) | Groq inference |
 | `OPENROUTER_API_KEY` | no | fallback if Groq is down or unset |
 | `OPENROUTER_MODEL` | no | OpenRouter model slug; mapped from the agent model if unset |
-| `SWARM_AGENT_MODEL` | no | overrides per-agent model set in the `agents` table's default |
+| `SWARM_AGENT_MODEL` | no | overrides every agent; use `openai/gpt-oss-120b` or `openai/gpt-oss-20b` |
 | `SWARM_SANDBOX_DIR` | no | set by the Dockerfile, don't override unless you know why |
 | `SWARM_DB_PATH` | no | set by the Dockerfile to `/app/data/swarm.db` |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | no | tracing degrades silently if unset |

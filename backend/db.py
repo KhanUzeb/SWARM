@@ -17,7 +17,15 @@ from typing import Any
 
 import aiosqlite
 
-from .models import ALLOWED_TOOLS, DEFAULT_GROQ_MODEL, DEFAULT_JOB, DEFAULT_TOOLS, GROQ_MODEL_ALIASES, LEDGER_TOOLS
+from .models import (
+    ALLOWED_TOOLS,
+    DEFAULT_GROQ_MODEL,
+    DEFAULT_JOB,
+    DEFAULT_TOOLS,
+    GROQ_MODEL_ALIASES,
+    LEDGER_TOOLS,
+    resolve_groq_model,
+)
 
 DB_PATH = Path(os.environ.get("SWARM_DB_PATH", str(Path(__file__).parent / "swarm.db")))
 
@@ -542,6 +550,7 @@ async def create_agent(
 ) -> dict[str, Any]:
     tool_names = tools if tools is not None else list(DEFAULT_TOOLS)
     job_title = (job or DEFAULT_JOB).strip() or DEFAULT_JOB
+    model = resolve_groq_model(model)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO agents (name, system_prompt, model, channel_scope, "
@@ -583,6 +592,8 @@ async def update_agent(name: str, fields: dict[str, Any]) -> dict[str, Any] | No
             continue
         if key == "tools":
             value = json.dumps(parse_tools(value))
+        if key == "model" and value:
+            value = resolve_groq_model(value)
         sets.append(f"{key} = ?")
         values.append(value)
     if not sets:

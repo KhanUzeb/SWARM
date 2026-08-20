@@ -39,6 +39,7 @@ app.add_middleware(
 )
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+DIST_DIR = FRONTEND_DIR / "dist"  # Vite production output
 
 RATE_LIMIT_SECONDS = 0.5
 HISTORY_LIMIT_MAX = 100
@@ -674,9 +675,17 @@ async def _routine_loop() -> None:
 
 # ------------------------------------------------------------ frontend ----
 
-app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+_assets = DIST_DIR / "assets"
+if _assets.is_dir():
+    app.mount("/assets", StaticFiles(directory=_assets), name="assets")
 
 
 @app.get("/")
 async def index():
-    return FileResponse(FRONTEND_DIR / "index.html")
+    built = DIST_DIR / "index.html"
+    if not built.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="frontend not built — run `bun run build` in frontend/",
+        )
+    return FileResponse(built)

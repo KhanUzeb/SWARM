@@ -22,18 +22,21 @@ html, body {
   margin: 0; height: 100%; background: var(--bg); color: var(--text);
   font-family: var(--sans); font-size: 15px;
 }
-body {
+#root, .app {
+  height: 100%;
+}
+.app {
   display: grid;
   grid-template-columns: 260px 1fr;
-  grid-template-rows: 100vh;
+  grid-template-rows: 100%;
 }
-body.thread-open {
+.app.thread-open {
   grid-template-columns: 260px 1fr 360px;
 }
-body.computer-open {
+.app.computer-open {
   grid-template-columns: 260px 1fr 340px;
 }
-body.computer-open.thread-open {
+.app.computer-open.thread-open {
   grid-template-columns: 260px 1fr 340px;
 }
 
@@ -128,10 +131,9 @@ body.computer-open.thread-open {
 .status-chip.needs_approval { color: var(--amber2); border-color: var(--amber); }
 
 #computer-panel {
-  display: none; flex-direction: column; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
   background: var(--panel); border-left: 1px solid var(--border);
 }
-body.computer-open #computer-panel { display: flex; }
 .computer-head {
   padding: 12px 16px; border-bottom: 1px solid var(--border);
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
@@ -295,7 +297,7 @@ body.computer-open #computer-panel { display: flex; }
 .row .ts { color: var(--dim); font-size: 12px; }
 .row .body { color: var(--text); white-space: pre-wrap; word-break: break-word; line-height: 1.45; margin-top: 2px; }
 .row.system .body { color: var(--dim); font-family: var(--mono); font-size: 12.5px; }
-body.hide-tools .row.system { display: none; }
+body.hide-tools .row.system, .app.hide-tools .row.system { display: none; }
 .row.agent .body { color: var(--amber2); }
 .row.streaming .body::after {
   content: "▍"; animation: blink 1s step-end infinite; color: var(--amber);
@@ -441,7 +443,7 @@ body.hide-tools .row.system { display: none; }
 .err { color: var(--red); font-size: 13px; min-height: 16px; }
 
 #emoji-pop {
-  position: absolute; z-index: 15; display: flex; gap: 4px; flex-wrap: wrap;
+  position: fixed; z-index: 15; display: flex; gap: 4px; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
 }
@@ -479,7 +481,7 @@ body.hide-tools .row.system { display: none; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
 @media (max-width: 1100px) {
-  body.computer-open, body.computer-open.thread-open { grid-template-columns: 260px 1fr; }
+  .app.computer-open, .app.computer-open.thread-open { grid-template-columns: 260px 1fr; }
   #computer-panel {
     position: fixed; top: 0; right: 0; bottom: 0; width: min(340px, 100vw);
     z-index: 6; box-shadow: -8px 0 24px rgba(0,0,0,0.45);
@@ -487,7 +489,7 @@ body.hide-tools .row.system { display: none; }
 }
 
 @media (max-width: 900px) {
-  body.thread-open { grid-template-columns: 260px 1fr; }
+  .app.thread-open { grid-template-columns: 260px 1fr; }
   #thread-panel {
     position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 100vw);
     z-index: 6; box-shadow: -8px 0 24px rgba(0,0,0,0.35);
@@ -495,15 +497,16 @@ body.hide-tools .row.system { display: none; }
 }
 
 @media (max-width: 720px) {
-  body, body.thread-open, body.computer-open, body.computer-open.thread-open { grid-template-columns: 1fr; }
+  .app, .app.thread-open, .app.computer-open, .app.computer-open.thread-open { grid-template-columns: 1fr; }
   #menu-btn { display: block; }
   #topbar .who { display: none; }
   #sidebar {
     position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
     transform: translateX(-100%); transition: transform 0.2s ease;
   }
-  body.sidebar-open #sidebar { transform: translateX(0); }
-  body.sidebar-open #sidebar-backdrop { display: block; }
+  .app.sidebar-open #sidebar { transform: translateX(0); }
+  .app.sidebar-open #sidebar-backdrop { display: block; }
+  #sidebar-backdrop[hidden] { display: none !important; }
   #thread-panel, #computer-panel { width: 100vw; }
   .row-actions { display: flex; position: static; margin: 4px 0 0 52px; box-shadow: none; }
   .row.grouped .row-actions { margin-left: 52px; }

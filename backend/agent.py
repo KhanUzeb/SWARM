@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import db
-from .models import ALLOWED_TOOLS, DEFAULT_TOOLS, resolve_groq_model, resolve_groq_model
+from .models import ALLOWED_TOOLS, DEFAULT_TOOLS, resolve_groq_model
 
 HISTORY_WINDOW = 12
 MAX_TOOL_CALLS = 3
@@ -56,7 +56,7 @@ def _default_sandbox_dir() -> str:
 
 SANDBOX_DIR = _default_sandbox_dir()
 
-# Small Groq models (e.g. llama-3.1-8b-instant) call tools on "hi" unless
+# Fast Groq models (e.g. openai/gpt-oss-20b) call tools on "hi" unless
 # we withhold the tool schema. Only offer tools when the last human message
 # actually looks like a file/history/memory request.
 _TOOL_HINT = re.compile(
@@ -613,8 +613,17 @@ async def _complete_stream(
     partial content returns that content plus a cutoff note instead of
     raising."""
     kwargs: dict[str, Any] = dict(
-        model=model, messages=messages, temperature=0.4, max_tokens=600, stream=True,
+        model=model, messages=messages, temperature=0.4, stream=True,
     )
+    if model.startswith("openai/gpt-oss-"):
+        # Reasoning tokens count against max_tokens; 600 was cutting replies off.
+        kwargs["max_tokens"] = 2048
+        base = str(getattr(client, "base_url", "") or "")
+        if "openrouter.ai" not in base:
+            kwargs["reasoning_effort"] = "low"
+            kwargs["include_reasoning"] = False
+    else:
+        kwargs["max_tokens"] = 600
     if tool_schemas:
         kwargs["tools"] = tool_schemas
         kwargs["tool_choice"] = "auto"
@@ -820,7 +829,9 @@ async def generate_reply(
     live; on_tools_ready is invoked before the first streamed token so
     audit messages land first."""
     name = agent_row["name"]
-    model = os.environ.get("SWARM_AGENT_MODEL") or agent_row["model"]
+    model = resolve_groq_model(
+        (os.environ.get("SWARM_AGENT_MODEL") or "").strip() or agent_row["model"]
+    )
     window = history_window_of(agent_row)
     allowed = agent_tools(agent_row)
     notes, summary = await db.get_context_memories(name, channel_id, MEMORY_INJECT_LIMIT)

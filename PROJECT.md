@@ -17,7 +17,7 @@ built. There is no cloud VM; the "computer" is the shared sandbox.
 | DB         | SQLite via `aiosqlite`           | zero-ops for a portfolio project; swap to Postgres if this ever needs concurrent writers at scale |
 | Realtime   | Native WebSocket, in-memory hub  | one process, one hub — no Redis pub/sub needed at this scale |
 | LLM        | Groq (primary), OpenRouter fallback | Groq first; one retry then OpenRouter if `OPENROUTER_API_KEY` is set |
-| Frontend   | Vanilla HTML/CSS/JS, no framework | no build step; Slack/Discord-style dark UI with a thread panel |
+| Frontend   | React 19 + Vite 8, built with bun | small SPA, hashed assets, FastAPI serves `frontend/dist` |
 | Tracing    | Langfuse                         | reuses the eval/observability pattern from VERIS; degrades to no-op if unconfigured |
 | Deployment | Docker + docker-compose          | single VPS, named volume for the SQLite file |
 
@@ -32,9 +32,8 @@ swarm/
     jobs.py      Grok Bot-style job templates for create-Bot
     models.py     pydantic schemas
   frontend/
-    index.html    markup
-    styles.css    dark Grok-like theme, computer panel, bot roster
-    app.js        auth, WS, DMs, skills/routines/approvals, streaming
+    src/          React UI (login, DMs, computer panel, streaming)
+    dist/         production build (`bun run build`)
   cli/
     swarm_cli.py  JSON in/out CLI: register, post, react, history, agents, create/patch agent
   tests/          pytest + httpx; Groq mocked
@@ -61,7 +60,7 @@ swarm/
 | 5     | Observability             | ✅ done | Langfuse trace per generation, tagged by channel + agent, silent no-op if unconfigured |
 | 6     | Semantic history (opt.)   | ⛔ intentionally skipped | keyword search hasn't been shown insufficient — building Qdrant now would be exactly the speculative work Phase 6's own spec forbids |
 | 7     | Deployment                | ✅ done (verified) | Dockerfile, compose, DEPLOY.md — `docker compose build && up -d` run live; `/api/channels` ok; SQLite volume survived down/up; sandbox tool ran in-container at `/tmp/swarm-sandbox` |
-| 8     | Reliability + streaming UI | ✅ done | WS `last_seen_id` catch-up, history `before_id` pagination, `GET /api/messages/{id}/thread`, AsyncGroq token streaming, pytest, vanilla UI split into html/css/js with thread panel, mention picker, reconnect, mobile layout |
+| 8     | Reliability + streaming UI | ✅ done | WS `last_seen_id` catch-up, history `before_id` pagination, `GET /api/messages/{id}/thread`, AsyncGroq token streaming, pytest, React UI with thread panel, mention picker, reconnect, mobile layout |
 | 9     | Custom agents + memory     | ✅ done | Agent create/edit UI + GET/PATCH, per-agent harness (window, tool toggles), `agent_memory` notes via remember/recall, context injects notes + rolling summary, classified errors, one retry, optional OpenRouter |
 | 10    | Grok Bot teammates         | ✅ done | Named jobs, 1:1 DMs (no @ needed), job templates, skills, interval routines, approvals, shared workspace/"computer" panel, bot-to-bot handoff, status chips |
 

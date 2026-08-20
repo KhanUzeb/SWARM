@@ -3,6 +3,15 @@ import asyncio
 import backend.agent as agent
 import backend.db as db
 import backend.main as main
+from backend.models import AgentCreate, DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, resolve_groq_model
+
+
+def test_groq_model_aliases():
+    assert resolve_groq_model("llama-3.1-8b-instant") == FAST_GROQ_MODEL
+    assert resolve_groq_model("llama-3.3-70b-versatile") == DEFAULT_GROQ_MODEL
+    assert resolve_groq_model("openai/gpt-oss-20b") == "openai/gpt-oss-20b"
+    created = AgentCreate(name="x", system_prompt="hi", model="llama-3.1-8b-instant")
+    assert created.model == FAST_GROQ_MODEL
 
 
 def _clear_rate():
@@ -16,6 +25,8 @@ def test_seeded_harness(client):
     assert "read_only_shell" not in agents["ledger"]["tools"]
     assert agents["swarm"]["history_window"] == 12
     assert agents["ledger"]["max_tool_calls"] == 3
+    assert agents["swarm"]["model"] == DEFAULT_GROQ_MODEL
+    assert agents["ledger"]["model"] == DEFAULT_GROQ_MODEL
 
 
 def test_get_agent_includes_memories(client):
@@ -43,6 +54,7 @@ def test_create_and_patch_agent(client, auth):
     assert body["name"] == "scribe"
     assert body["tools"] == ["remember", "recall"]
     assert body["history_window"] == 8
+    assert body["model"] == DEFAULT_GROQ_MODEL
 
     _clear_rate()
     patched = client.patch(
@@ -110,10 +122,11 @@ def test_compact_summary_only_when_window_full():
 
 
 def test_retry_once_then_succeeds(client, monkeypatch):
-    calls = {"n": 0}
+    calls = {"n": 0, "model": None}
 
-    async def fake_complete(*_args, **_kwargs):
+    async def fake_complete(_client, model, *_args, **_kwargs):
         calls["n"] += 1
+        calls["model"] = model
         if calls["n"] == 1:
             err = RuntimeError("rate limit")
             err.status_code = 429
@@ -137,6 +150,7 @@ def test_retry_once_then_succeeds(client, monkeypatch):
     result = asyncio.run(agent.generate_reply(row, "general", history))
     assert result["reply"] == "hello after retry"
     assert calls["n"] == 2
+    assert calls["model"] == DEFAULT_GROQ_MODEL
 
 
 def test_classified_error_when_no_provider(client, monkeypatch):
