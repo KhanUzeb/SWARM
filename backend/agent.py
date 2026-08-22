@@ -34,6 +34,7 @@ RETRY_DELAY_SECONDS = 0.8
 CUTOFF_NOTE = "\n\n[reply cut off]"
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEMO_STREAM_DELAY = 0.012
 _GROQ_TO_OPENROUTER = {
     "openai/gpt-oss-120b": "openai/gpt-oss-120b",
     "openai/gpt-oss-20b": "openai/gpt-oss-20b",
@@ -812,6 +813,68 @@ async def _run_with_client(
     }
 
 
+def demo_mode_enabled() -> bool:
+    return (os.environ.get("SWARM_DEMO") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _last_human_message(history: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for m in reversed(history):
+        if m.get("author_kind") == "human":
+            return m
+    return None
+
+
+def compose_demo_reply(agent_row: dict[str, Any], history: list[dict[str, Any]]) -> str:
+    """Deterministic mock reply for portfolio demos without API keys."""
+    name = agent_row["name"]
+    job = (agent_row.get("job") or "Teammate").strip()
+    last = _last_human_message(history)
+    body = (last.get("body") or "").strip() if last else ""
+    snippet = body[:120] + ("…" if len(body) > 120 else "")
+    if not body:
+        return (
+            f"[demo mode] I'm @{name}, your {job} teammate. "
+            "Ask me anything — replies are mocked locally, no API key needed."
+        )
+    lower = body.lower()
+    if any(w in lower for w in ("approve", "send", "publish", "delete", "purchase")):
+        return (
+            f'[demo mode] I\'d pause here and call `request_approval` before anything external. '
+            f'For "{snippet}", my next step would be a review-ready draft in the workspace.'
+        )
+    if "?" in body or lower.startswith(("what", "why", "how", "who", "when", "summar")):
+        return (
+            f'[demo mode] On "{snippet}" — as your {job}, I\'d pull evidence from this channel '
+            "and the shared workspace first, then return a short ranked answer with sources."
+        )
+    return (
+        f'[demo mode] Got it — "{snippet}". I\'d break this into a concrete deliverable, '
+        f"write notes to the workspace if it should stick, and stop for approval before anything external."
+    )
+
+
+async def _demo_generate_reply(
+    agent_row: dict[str, Any],
+    history: list[dict[str, Any]],
+    on_stream_start: OnStreamStart | None = None,
+    on_token: OnToken | None = None,
+) -> dict[str, Any]:
+    reply = compose_demo_reply(agent_row, history)
+    if on_stream_start is not None:
+        await on_stream_start()
+    words = reply.split(" ")
+    for i, word in enumerate(words):
+        chunk = word if i == len(words) - 1 else word + " "
+        if on_token is not None:
+            await on_token(chunk)
+        await asyncio.sleep(DEMO_STREAM_DELAY)
+    return {
+        "reply": reply,
+        "tool_events": [],
+        "usage": {"prompt_tokens": 0, "completion_tokens": len(words)},
+    }
+
+
 async def generate_reply(
     agent_row: dict[str, Any],
     channel_id: str,
@@ -828,6 +891,14 @@ async def generate_reply(
     and do not forward tokens. The first content round forwards tokens
     live; on_tools_ready is invoked before the first streamed token so
     audit messages land first."""
+    if demo_mode_enabled():
+        result = await _demo_generate_reply(
+            agent_row, history, on_stream_start=on_stream_start, on_token=on_token,
+        )
+        window = history_window_of(agent_row)
+        await _maybe_write_summary(agent_row["name"], channel_id, history, window)
+        return result
+
     name = agent_row["name"]
     model = resolve_groq_model(
         (os.environ.get("SWARM_AGENT_MODEL") or "").strip() or agent_row["model"]

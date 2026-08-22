@@ -140,7 +140,12 @@ def _key_set(name: str) -> bool:
 @app.get("/api/status")
 async def api_status():
     """Boolean-only — never returns the keys themselves."""
-    return {"groq": _key_set("GROQ_API_KEY"), "openrouter": _key_set("OPENROUTER_API_KEY")}
+    demo = agent.demo_mode_enabled()
+    return {
+        "groq": _key_set("GROQ_API_KEY"),
+        "openrouter": _key_set("OPENROUTER_API_KEY"),
+        "demo": demo,
+    }
 
 
 # ---------------------------------------------------------------- auth ----
@@ -151,7 +156,11 @@ async def api_register(payload: RegisterRequest):
         raise HTTPException(409, "handle already registered")
     raw = db.generate_token()
     await db.create_user(payload.handle, raw)
-    return {"handle": payload.handle, "token": f"{payload.handle}:{raw}"}
+    return {
+        "handle": payload.handle,
+        "token": f"{payload.handle}:{raw}",
+        "created": True,
+    }
 
 
 # ---------------------------------------------------------------- REST ----

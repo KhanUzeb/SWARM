@@ -177,6 +177,8 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [loginErr, setLoginErr] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
+  const [onboarding, setOnboarding] = useState(null);
+  const [demoMode, setDemoMode] = useState(false);
   const [handleDraft, setHandleDraft] = useState(() => localStorage.getItem("swarm_last_handle") || "");
   const [computerOpen, setComputerOpen] = useState(() => localStorage.getItem("swarm_computer") !== "0");
   const [showTools, setShowTools] = useState(() => localStorage.getItem("swarm_show_tools") === "1");
@@ -292,9 +294,11 @@ export default function App() {
   async function loadGroqStatus() {
     try {
       const res = await fetch("/api/status");
-      const data = res.ok ? await res.json() : { groq: false, openrouter: false };
-      setAgentsReady(!!(data.groq || data.openrouter));
+      const data = res.ok ? await res.json() : { groq: false, openrouter: false, demo: false };
+      setDemoMode(!!data.demo);
+      setAgentsReady(!!(data.groq || data.openrouter || data.demo));
     } catch {
+      setDemoMode(false);
       setAgentsReady(false);
     }
   }
@@ -553,7 +557,7 @@ export default function App() {
     localStorage.setItem("swarm_show_tools", showTools ? "1" : "0");
   }, [showTools]);
 
-  async function enterWorkspace(handle, tok, preferred) {
+  async function enterWorkspace(handle, tok, preferred, { suggestedDraft } = {}) {
     setToken(tok);
     setUser(handle);
     localStorage.setItem(`swarm_token_${handle}`, tok);
@@ -563,6 +567,7 @@ export default function App() {
       ? (preferred || "dm-swarm")
       : (chs[0]?.id || "general");
     await switchChannel(next);
+    if (suggestedDraft) setDraft(suggestedDraft);
   }
 
   useEffect(() => {
@@ -606,16 +611,78 @@ export default function App() {
         body: JSON.stringify({ handle }),
       });
       let tok = null;
-      if (res.ok) tok = (await res.json()).token;
-      else if (res.status === 409) {
+      if (res.ok) {
+        tok = (await res.json()).token;
+        setToken(tok);
+        setUser(handle);
+        localStorage.setItem(`swarm_token_${handle}`, tok);
+        localStorage.setItem("swarm_last_handle", handle);
+        await Promise.all([loadChannels(), loadAllAgents(), loadJobs(), loadGroqStatus()]);
+        const templates = await fetch("/api/jobs").then((r) => (r.ok ? r.json() : []));
+        const pick = templates.find((j) => j.id === "chief-of-staff") || templates[0] || null;
+        setOnboarding({
+          step: 1,
+          template: pick,
+          name: pick?.suggested_name || "",
+          err: "",
+          busy: false,
+        });
+      } else if (res.status === 409) {
         tok = localStorage.getItem(`swarm_token_${handle}`);
         if (!tok) setLoginErr("handle taken and no saved session — pick another");
+        else await enterWorkspace(handle, tok);
       } else setLoginErr("registration failed");
-      if (tok) await enterWorkspace(handle, tok);
     } catch {
       setLoginErr("couldn't reach the relay");
     }
     setLoginBusy(false);
+  }
+
+  async function skipOnboarding() {
+    if (!user || !token) return;
+    setOnboarding(null);
+    await enterWorkspace(user, token);
+  }
+
+  async function createOnboardingBot(ev) {
+    ev.preventDefault();
+    if (!onboarding?.template || !token) return;
+    const name = onboarding.name.trim();
+    const tpl = onboarding.template;
+    if (!name || !/^[A-Za-z0-9_\-]+$/.test(name)) {
+      setOnboarding((o) => ({ ...o, err: "pick a name — letters, numbers, _ or -" }));
+      return;
+    }
+    setOnboarding((o) => ({ ...o, busy: true, err: "" }));
+    try {
+      const res = await api("/api/agents", {
+        token,
+        method: "POST",
+        body: {
+          name,
+          system_prompt: tpl.prompt,
+          job: tpl.job,
+          model: DEFAULT_MODEL,
+          channel_scope: null,
+          history_window: 12,
+          max_tool_calls: 3,
+          tools: ALL_TOOLS,
+        },
+      });
+      if (!res.ok) {
+        const msg = res.status === 409 ? "that name is taken — try another" : "couldn't create bot";
+        setOnboarding((o) => ({ ...o, busy: false, err: msg }));
+        return;
+      }
+      const created = await res.json();
+      setOnboarding(null);
+      await enterWorkspace(user, token, created.dm_channel_id, {
+        suggestedDraft: tpl.suggested_prompt || "",
+      });
+      flash(`@${name} is ready — say hi in their 1:1`);
+    } catch {
+      setOnboarding((o) => ({ ...o, busy: false, err: "couldn't create bot" }));
+    }
   }
 
   function sendFrom(body, parentId) {
@@ -627,7 +694,7 @@ export default function App() {
       return;
     }
     if (!agentsReady && /@[a-zA-Z0-9_\-]+/.test(text)) {
-      flash("Bots can't reply until GROQ_API_KEY is set in .env", true);
+      flash("Bots can't reply until GROQ_API_KEY is set (or SWARM_DEMO=1)", true);
     }
     const payload = { body: text };
     if (parentId) payload.parent_id = parentId;
@@ -911,9 +978,9 @@ export default function App() {
       {!user && (
         <div id="login">
           <form className="card" onSubmit={onLogin}>
-            <p className="kicker">A quiet room</p>
-            <h1>Talk. Then put the work on paper.</h1>
-            <p>Teammates live in channels, not a sidebar chatbot. @swarm for conversation, @coder for programs and proofs — code lands in its own LaTeX subsection.</p>
+            <p className="kicker">Agents as teammates</p>
+            <h1>Same room. Same audit trail.</h1>
+            <p>Named LLM Bots join your channels — not a sidebar chatbot. Pick a handle to register or reconnect.</p>
             <label className="sr-only" htmlFor="login-input">Handle</label>
             <input id="login-input" maxLength={24} autoComplete="username" placeholder="your handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
             <button type="submit" className="btn primary" disabled={loginBusy}>Get started</button>
@@ -923,6 +990,77 @@ export default function App() {
         </div>
       )}
 
+      {user && onboarding && (
+        <div id="onboarding">
+          <div className="card onboarding-card">
+            {onboarding.step === 1 && (
+              <>
+                <p className="kicker">Step 1 of 2</p>
+                <h1>Pick your first Bot</h1>
+                <p>Each template is a named job with tools, memory, and a 1:1 channel. You can add more later.</p>
+                <div className="job-templates onboarding-jobs">
+                  {jobs.map((job) => (
+                    <button
+                      key={job.id}
+                      type="button"
+                      className={onboarding.template?.id === job.id ? "active" : ""}
+                      onClick={() => setOnboarding((o) => ({
+                        ...o,
+                        template: job,
+                        name: job.suggested_name || o.name,
+                        err: "",
+                      }))}
+                    >
+                      <span className="job-title">{job.job}</span>
+                      {job.id === "chief-of-staff" && <span className="job-badge">Recommended</span>}
+                    </button>
+                  ))}
+                </div>
+                <div className="modal-actions onboarding-actions">
+                  <button type="button" className="btn ghost" onClick={skipOnboarding}>Skip — use default teammates</button>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={!onboarding.template}
+                    onClick={() => setOnboarding((o) => ({ ...o, step: 2, err: "" }))}
+                  >
+                    Continue
+                  </button>
+                </div>
+              </>
+            )}
+            {onboarding.step === 2 && onboarding.template && (
+              <form onSubmit={createOnboardingBot}>
+                <p className="kicker">Step 2 of 2</p>
+                <h1>Name @{onboarding.name || "…"}</h1>
+                <p>Primary job: <strong>{onboarding.template.job}</strong>. You'll land in their 1:1 with a suggested first message.</p>
+                <label htmlFor="onboard-name">Bot name</label>
+                <input
+                  id="onboard-name"
+                  required
+                  maxLength={32}
+                  pattern="[A-Za-z0-9_\-]+"
+                  placeholder="chief"
+                  autoFocus
+                  value={onboarding.name}
+                  onChange={(e) => setOnboarding((o) => ({ ...o, name: e.target.value, err: "" }))}
+                />
+                <div className="hint">Mention as @{onboarding.name || "name"} in rooms, or talk in dm-{onboarding.name || "name"} without @.</div>
+                <div className="err" role="alert">{onboarding.err}</div>
+                <div className="modal-actions onboarding-actions">
+                  <button type="button" className="btn" onClick={() => setOnboarding((o) => ({ ...o, step: 1, err: "" }))}>Back</button>
+                  <button type="submit" className="btn primary" disabled={onboarding.busy}>
+                    {onboarding.busy ? "Creating…" : "Create & open 1:1"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {user && !onboarding && (
+      <>
       {channelModal && (
         <div className="overlay" onClick={(e) => e.target === e.currentTarget && setChannelModal(false)}>
           <div className="modal-card" role="dialog" aria-modal="true">
@@ -1052,7 +1190,7 @@ export default function App() {
         <button type="button" id="new-channel" onClick={() => { setChannelErr(""); setChannelModal(true); }}>+ New channel</button>
         <div id="agents-box">
           <div id="groq-status" className={agentsReady ? "ready" : "missing"}>
-            {agentsReady ? "Bots ready" : "Set GROQ_API_KEY in .env so bots can reply"}
+            {demoMode ? "Demo mode — mock replies" : agentsReady ? "Bots ready" : "Set GROQ_API_KEY or SWARM_DEMO=1"}
           </div>
         </div>
         <div id="me">
@@ -1311,6 +1449,8 @@ export default function App() {
             </div>
           </div>
         </aside>
+      )}
+      </>
       )}
     </div>
   );

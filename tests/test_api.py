@@ -9,14 +9,14 @@ def _clear_rate():
 def test_status_reports_groq_unset(client):
     res = client.get("/api/status")
     assert res.status_code == 200
-    assert res.json() == {"groq": False, "openrouter": False}
+    assert res.json() == {"groq": False, "openrouter": False, "demo": False}
 
 
 def test_status_reports_groq_set(client, monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
     res = client.get("/api/status")
     assert res.status_code == 200
-    assert res.json() == {"groq": True, "openrouter": False}
+    assert res.json() == {"groq": True, "openrouter": False, "demo": False}
 
 
 def test_register_and_409(client):

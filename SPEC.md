@@ -208,7 +208,7 @@ separately from the token on every call.
 // request
 {"handle": "uzeb"}
 // response 200
-{"handle": "uzeb", "token": "uzeb:2y0-_JDXp9NN..."}
+{"handle": "uzeb", "token": "uzeb:2y0-_JDXp9NN...", "created": true}
 // response 409 if handle taken
 {"detail": "handle already registered"}
 ```
@@ -284,9 +284,10 @@ reply whose `parent_id` equals that id, oldest-first, each with
 
 ### `GET /api/status`
 No auth. Reports whether inference keys are loaded — booleans only,
-never the keys.
+never the keys. `demo` is true when `SWARM_DEMO=1` (mock replies, no
+Groq/OpenRouter required).
 ```json
-{"groq": true, "openrouter": false}
+{"groq": true, "openrouter": false, "demo": false}
 ```
 The app loads `.env` from the project root and from `backend/.env` on
 import (process env still wins). If this is `false` after you set a
@@ -354,8 +355,9 @@ Auth required. Any subset of `system_prompt`, `model`,
 ```
 
 ### `GET /api/jobs`
-No auth. Job templates used by the create-Bot UI (id, job, prompt).
-These fill the form; they do not connect Salesforce/Slack/etc.
+No auth. Job templates used by onboarding and the create-Bot UI. Each
+row includes `id`, `job`, `prompt`, `suggested_name`, and
+`suggested_prompt` (first message hint for the Bot's 1:1).
 
 ### `GET /api/skills` / `POST /api/skills`
 List is unauthenticated. Create/upsert requires auth. Body:
@@ -556,6 +558,11 @@ Live `message` events from a human/agent/system write may omit
 - **Env loading**: `backend/__init__.py` loads project-root `.env` then
   `backend/.env` via python-dotenv (`override=False`, so real process
   env / Docker `env_file` still win). Tests set `PYTHON_DOTENV_DISABLED`.
+- **Demo mode**: when `SWARM_DEMO` is `1`, `true`, or `yes`,
+  `generate_reply` returns deterministic mock text (streamed locally),
+  skips Groq/OpenRouter, and `GET /api/status` sets `demo: true`. On
+  first boot with an empty `#general`, `seed_demo_thread()` inserts a
+  four-message sample thread authored by `demo` / `swarm`.
 
 ---
 
@@ -593,6 +600,9 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR10.4 | `request_approval` + Allow once / Deny | ✅ |
 | FR10.5 | Shared workspace list/write + computer panel | ✅ |
 | FR10.6 | Bot-to-bot `@handoff` after an agent reply | ✅ |
+| FR11.1 | Onboarding: register → job template → create Bot → 1:1 + suggested prompt | ✅ (UI) |
+| FR11.2 | `SWARM_DEMO=1` mock replies + optional `#general` seed thread | ✅ |
+| FR11.3 | `/api/status.demo`, `/api/jobs` suggested fields, register `created` | ✅ |
 
 ---
 

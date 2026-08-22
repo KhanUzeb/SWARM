@@ -346,6 +346,70 @@ async def init_db() -> None:
             await _ensure_schema(db)
         await db.commit()
 
+    if _demo_mode():
+        await seed_demo_thread()
+
+
+_DEMO_SEED = [
+    (
+        "demo",
+        "human",
+        "What's blocking the release?",
+    ),
+    (
+        "swarm",
+        "agent",
+        "[demo] Three items: migration script still running in staging, "
+        "one flaky integration test on auth refresh, and the changelog "
+        "hasn't been reviewed. Highest risk is the migration — I'd verify "
+        "rollback before calling ship.",
+    ),
+    (
+        "demo",
+        "human",
+        "@swarm draft a one-liner for the team",
+    ),
+    (
+        "swarm",
+        "agent",
+        "[demo] Ship candidate: auth refresh fix is merged; migration finishes "
+        "tonight; we'll go green once staging is clean and changelog is approved.",
+    ),
+]
+
+
+def _demo_mode() -> bool:
+    return (os.environ.get("SWARM_DEMO") or "").strip().lower() in ("1", "true", "yes")
+
+
+async def seed_demo_thread() -> None:
+    """Sample thread in #general when SWARM_DEMO=1 and the channel is empty."""
+    if not _demo_mode():
+        return
+    if not await channel_exists("general"):
+        return
+    cur_count = await _count_messages("general")
+    if cur_count > 0:
+        return
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        for i, (author, kind, body) in enumerate(_DEMO_SEED):
+            await db.execute(
+                "INSERT INTO messages (channel_id, parent_id, author, author_kind, body, created_at) "
+                "VALUES (?, NULL, ?, ?, ?, ?)",
+                ("general", author, kind, body, now + i * 0.01),
+            )
+        await db.commit()
+
+
+async def _count_messages(channel_id: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM messages WHERE channel_id = ?", (channel_id,)
+        )
+        (count,) = await cur.fetchone()
+        return int(count)
+
 
 # ------------------------------------------------------------- channels ---
 

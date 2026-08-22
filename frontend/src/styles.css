@@ -525,6 +525,44 @@ body.hide-tools .row.system, .app.hide-tools .row.system { display: none; }
 #login input:focus { border-color: var(--pin); }
 #login .hint { color: var(--dim); font-size: 12px; }
 
+#onboarding {
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(1200px 500px at 20% -10%, rgba(230,0,35,0.10), transparent 50%),
+    var(--bg);
+  display: flex; align-items: center; justify-content: center; z-index: 11;
+}
+#onboarding .onboarding-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 28px;
+  padding: 36px 32px; width: min(560px, 92vw); display: flex; flex-direction: column; gap: 14px;
+  box-shadow: 0 30px 80px rgba(33,25,34,0.12);
+}
+#onboarding .onboarding-card h1 {
+  margin: 0; font-size: 32px; letter-spacing: -0.04em; color: var(--ink);
+  font-family: var(--serif); font-weight: 700; line-height: 1.05;
+}
+#onboarding .onboarding-card p { margin: 0; color: var(--dim); font-size: 15px; line-height: 1.5; }
+#onboarding .onboarding-jobs {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px;
+  max-height: 280px; overflow-y: auto;
+}
+#onboarding .onboarding-jobs button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  text-align: left; min-height: 52px;
+}
+#onboarding .job-title { font-weight: 600; font-size: 13px; }
+#onboarding .job-badge {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--pin); font-weight: 700;
+}
+#onboarding .onboarding-actions { margin-top: 8px; flex-wrap: wrap; }
+#onboarding label { font-size: 13px; color: var(--dim); margin-top: 4px; }
+#onboarding input {
+  background: var(--input); border: 1px solid var(--border); color: var(--text);
+  font-family: var(--sans); font-size: 15px; padding: 12px 14px; border-radius: 14px; outline: none;
+}
+#onboarding input:focus { border-color: var(--pin); }
+
 #sidebar-backdrop {
   display: none; position: fixed; inset: 0; background: rgba(33,25,34,0.4); z-index: 3;
 }
