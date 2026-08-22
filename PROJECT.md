@@ -1,13 +1,20 @@
 # PROJECT.md — swarm
 
-A mini Buzz. Chat workspace where LLM agents are channel members, not
-a sidebar. See `PROBLEM.md` for why, `SPEC.md` for the technical
-contract, `PROMPTS.md` for what built each phase and what's left.
+**Agents as teammates, not a sidebar.** Self-hosted workspace where LLM
+Bots are channel members with jobs, 1:1s, skills, routines, and a
+shared audit trail — the minimum test of [Buzz](https://github.com/block/buzz)'s
+thesis without Nostr/git/workflows.
 
-**Status: V2 + Phase 10 shipped.** Phases 1–5, 7, 8, 9, and 10 are
-built. Phase 6 is deliberately not built — see its entry below. Admin
-role for `POST /api/agents` remains a named gap. Agent delete is not
-built. There is no cloud VM; the "computer" is the shared sandbox.
+| Doc | Role |
+|-----|------|
+| `VISION.md` | Product thesis, competitive map (Buzz, SlackHive, Operator, OpenTag, Grok Bot), V3 scope, demo script |
+| `PROBLEM.md` | Why this exists and what hypothesis we're testing |
+| `SPEC.md` | Technical contract — if code disagrees, file a bug |
+| `PROMPTS.md` | Phase history + gated build prompts |
+
+**Status: V2 + Phase 10 + V3.2/V3.7 shipped.** Phases 1–5, 7–10 built.
+V3.2 onboarding and V3.7 demo mode are live. Remaining V3 items (admin,
+agent teams, human DMs, audit export) gated in `VISION.md`.
 
 ## Stack
 
@@ -44,6 +51,7 @@ swarm/
   PROBLEM.md
   PROJECT.md
   SPEC.md
+  VISION.md      product thesis, competitive map, V3 scope, demo script
   PROMPTS.md
   README.md
 ```
@@ -63,6 +71,7 @@ swarm/
 | 8     | Reliability + streaming UI | ✅ done | WS `last_seen_id` catch-up, history `before_id` pagination, `GET /api/messages/{id}/thread`, AsyncGroq token streaming, pytest, React UI with thread panel, mention picker, reconnect, mobile layout |
 | 9     | Custom agents + memory     | ✅ done | Agent create/edit UI + GET/PATCH, per-agent harness (window, tool toggles), `agent_memory` notes via remember/recall, context injects notes + rolling summary, classified errors, one retry, optional OpenRouter |
 | 10    | Grok Bot teammates         | ✅ done | Named jobs, 1:1 DMs (no @ needed), job templates, skills, interval routines, approvals, shared workspace/"computer" panel, bot-to-bot handoff, status chips |
+| 11    | V3 onboarding + demo       | ✅ done | Register → job picker → create Bot → 1:1 with suggested prompt; `SWARM_DEMO=1` mock replies + `#general` seed thread |
 
 ## What changed from the original plan
 
@@ -118,21 +127,46 @@ swarm/
   visible to every Bot on the account — same boundary as Grok Bot's
   docs, without the cloud isolation story.
 
+## V3 roadmap (product-complete, not Buzz-complete)
+
+Full detail in `VISION.md`. Summary:
+
+| Item | Gated on |
+|------|----------|
+| V3.1 Admin role | Multi-user deploy or open endpoint abuse |
+| V3.2 Onboarding flow | Always (UI polish) |
+| V3.3 Agent teams (`@team-name`) | Handoffs insufficient for "run the pod" |
+| V3.4 Human DMs | Small team needs private human chat |
+| V3.5 Semantic history (Phase 6) | Keyword search fails in daily use |
+| V3.6 Audit export | Demo / compliance story |
+| V3.7 Demo mode (mock LLM) | Portfolio reviewers without API keys |
+
+Permanently out of V3: Nostr signing, git hosting, Slack connectors,
+cloud VM, browser computer-use, container-per-agent isolation.
+
 ## Natural next steps (still gated)
 
-These remain gated the same way Phase 6 was — don't build them
-speculatively:
+Same rule as Phase 6 — don't build speculatively:
 
-1. Admin auth for `POST`/`PATCH /api/agents` (closes the named gap above).
-2. Semantic history (Phase 6) — only if keyword search has actually
-   proven insufficient.
-3. Agent delete — only if dangling history is actually a problem.
-4. Real computer-use (browser + cloud VM) — only if the sandbox
-   workspace has actually been shown insufficient for the jobs people
-   run here.
+1. **V3.2 onboarding + V3.7 demo mode** — highest leverage polish, no new primitives.
+2. **V3.1 admin auth** — when more than one trusted user exists.
+3. Semantic history — only if keyword search has proven insufficient.
+4. Agent delete — only if dangling history is actually a problem.
+5. Real computer-use — only if sandbox has proven insufficient.
 
-## Success criteria for the project as a whole
+## Competitive positioning (web research, Aug 2026)
 
-Unchanged from V1: could someone read `SPEC.md` cold and extend this
-without asking me anything? The spec describes what's actually
-running, not what was planned — that's the bar met.
+| Project | Layer | swarm difference |
+|---------|-------|------------------|
+| block/buzz | Full workspace + Nostr | swarm = chat-native agents only, 10-min Docker deploy |
+| pelago-labs/slackhive | Slack + Boss + specialists | swarm owns the workspace; no Slack OAuth |
+| geekforbrains/operator | Slack agents + spawn | swarm has routines/approvals/computer in-app |
+| linxidnju/OpenTag | Slack gateway + runtimes | swarm is runtime + UI, not a gateway |
+| xAI Grok Bot | Cloud job Bots | same job/1:1/routine model, self-hosted |
+| Orloj / Clawix / GAIA | Orchestration runtime | different layer; potential integration later |
+
+## Success criteria
+
+**V2 (met):** `SPEC.md` matches running code; extend without asking the author.
+
+**V3 (target):** Five-minute demo (`VISION.md` script); reviewer places swarm vs Buzz vs SlackHive in one sentence; small-team trust (admin-gated Bot creation).

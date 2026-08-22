@@ -5,7 +5,7 @@ what actually got built per phase, and keeps paste-ready prompts for
 the remaining gated items (admin role, semantic history, agent delete).
 
 If you're extending this repo with an agentic coding tool, point it at
-`PROBLEM.md`, `PROJECT.md`, and `SPEC.md` first either way.
+`VISION.md`, `PROBLEM.md`, `PROJECT.md`, and `SPEC.md` first either way.
 
 ---
 
@@ -89,14 +89,30 @@ theme. Explicitly not a cloud VM or browser computer-use.
 
 ---
 
-## Open — gated leftovers
+## Open — gated leftovers + V3
 
-Admin role, Phase 6 (semantic history), and agent delete are still
-gated below. Do not build them speculatively.
+Admin role, Phase 6 (semantic history), and agent delete remain gated
+below. **V3 scope** (onboarding, demo mode, agent teams, human DMs,
+audit export) is defined in `VISION.md` — build only when each item's
+condition is met. Do not build speculatively.
 
 ---
 
-## Remaining candidates
+## V3 candidates (from VISION.md)
+
+```
+Read VISION.md, PROBLEM.md, PROJECT.md, and SPEC.md. Before implementing
+any V3 item, check its condition in VISION.md. If not met, report and stop.
+
+V3.1 Admin role — same as item 1 below.
+V3.2 Onboarding flow — shipped (UI): after register, job template picker,
+create first Bot, land in 1:1 with suggested prompt.
+V3.7 Demo mode — shipped: SWARM_DEMO=1 mock replies + #general seed thread.
+```
+
+---
+
+## Remaining candidates (pre-V3)
 
 Same rule as Phase 6 had: **don't build any of these speculatively.**
 Each one is listed with the condition that would justify it. If you're
@@ -104,7 +120,7 @@ an agent reading this and none of the conditions have actually
 happened, say so and stop.
 
 ```
-Read PROBLEM.md, PROJECT.md, and SPEC.md. Before implementing anything
+Read VISION.md, PROBLEM.md, PROJECT.md, and SPEC.md. Before implementing anything
 below, check whether its stated condition has actually occurred. If
 not, report that back and don't implement it.
 

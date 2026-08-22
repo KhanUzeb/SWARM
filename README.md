@@ -1,82 +1,84 @@
 # swarm
 
-A mini Buzz that grew a Grok Bot layer. One FastAPI relay, humans and
-named LLM teammates in the same workspace. Each Bot has a job, a 1:1,
-memory, skills, optional routines, and a shared sandbox they all treat
-as their computer. SQLite instead of a Nostr event log, no signing, no
-cloud VM — the thing kept from both Buzz and Grok Bot is **the agent is
-a teammate, not a chatbot sidebar**.
+**Agents as teammates, not a sidebar.** A self-hosted team workspace where named LLM Bots join channels, take jobs, hand off to each other, and leave a visible audit trail — the minimum experiment behind [Block Buzz](https://github.com/block/buzz)'s thesis, with [Grok Bot](https://docs.x.ai/grok-bot/overview)-style roles you can run on your own VPS.
+
+```
+Human posts in #general or a Bot 1:1
+        │
+        ▼
+  @mention or DM triggers Bot(s)
+        │
+        ├── tool calls → system audit messages in-thread
+        ├── streaming reply → persisted as normal message
+        └── optional @handoff to another Bot
+```
+
+| vs Buzz | vs SlackHive / Operator / OpenTag |
+|---------|-----------------------------------|
+| Same "agent in the room" model | Own workspace — no Slack app or OAuth |
+| No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
+| `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
+
+**Status:** V2 + Phase 10 + V3.2/V3.7 shipped. Onboarding flow and demo mode live — see [`VISION.md`](VISION.md) for remaining V3 items.
 
 ```
 swarm/
   backend/          FastAPI relay: REST + WebSocket + auth + agents
   frontend/         React 19 + Vite 8 (bun). Production build in frontend/dist
-  cli/swarm_cli.py  JSON in / JSON out, for scripts and other agents
-  tests/            pytest suite (Groq is mocked)
+  cli/swarm_cli.py  JSON in / JSON out — scripts and other agents post here
+  tests/            pytest (Groq mocked)
   docs/DEPLOY.md    docker compose
+  VISION.md         product thesis, competitive map, V3 scope, demo script
+  SPEC.md           technical contract for what's running
 ```
 
-**Status: V2 + Phase 10.** Auth, rooms, 1:1 Bot DMs, job templates,
-skills, routines, approvals, shared workspace, threads, reactions,
-tool calling, per-agent memory, Langfuse, Docker, streaming replies.
-See `PROJECT.md` and `SPEC.md` for the contract.
+## Quick start
 
-## Run it
-
-Uses [uv](https://docs.astral.sh/uv/) for the venv and [bun](https://bun.sh) for the UI.
+Uses [uv](https://docs.astral.sh/uv/) and [bun](https://bun.sh).
 
 ```powershell
 cd swarm
-
 uv venv .venv
 .\.venv\Scripts\Activate.ps1
 uv pip install -r requirements.txt
 
-cd frontend
-bun install
-bun run build
-cd ..
+cd frontend && bun install && bun run build && cd ..
 
 cp .env.example .env
-# edit .env, set GROQ_API_KEY (free tier at console.groq.com)
-# backend/.env also works — the app loads both on startup
+# Set GROQ_API_KEY (console.groq.com). Optional: OPENROUTER_API_KEY, Langfuse keys.
 
 uvicorn backend.main:app --reload
 ```
 
-On macOS/Linux the activate line is `source .venv/bin/activate`; the rest is
-the same.
+Open `http://localhost:8000`. Register a handle → onboarding picks your first Bot → land in their 1:1 with a suggested prompt. Or set `SWARM_DEMO=1` in `.env` for mock replies without an API key.
 
-Open `http://localhost:8000`. Pick a handle, then talk to `swarm` in
-their 1:1 — no `@mention` needed there. In a room, `@swarm <task>`
-still works. Create more Bots from job templates (Sales Outbound,
-Product Performance, Chief of Staff, …). `/skill` invokes a saved
-process; the computer panel shows the shared workspace, routines, and
-approvals.
+**Docker:** [`docs/DEPLOY.md`](docs/DEPLOY.md)
 
-Docker: see `docs/DEPLOY.md`. For a live UI while uvicorn is running,
-`cd frontend && bun run dev` — Vite is on `:5173` and proxies `/api` and `/ws`.
+**Dev UI:** `cd frontend && bun run dev` — Vite `:5173` proxies `/api` and `/ws`.
+
+## What you can show in a demo
+
+1. **Room:** `@swarm what's blocking release?` — streaming reply + optional tool audit line.
+2. **1:1:** Talk to `dm-swarm` or a custom Bot without mentions.
+3. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
+4. **Governance:** Bot requests approval → Allow once / Deny in UI.
+5. **Computer:** Shared sandbox files Bots wrote; routines tick in the background.
+
+Full script: [`VISION.md` § Demo narrative](VISION.md).
 
 ## CLI
 
 ```bash
 python cli/swarm_cli.py register uzeb
-export SWARM_TOKEN='uzeb:...'   # printed on stderr after register
+export SWARM_TOKEN='uzeb:...'
 
-python cli/swarm_cli.py channels
-python cli/swarm_cli.py history dm-swarm --limit 20
 python cli/swarm_cli.py post dm-swarm uzeb "summarize this week"
 python cli/swarm_cli.py post general uzeb "hey @swarm shipping the fix"
-python cli/swarm_cli.py react 1 uzeb "🔥"
+python cli/swarm_cli.py create-agent piper --job "Product Performance" --prompt "Investigate latency."
 python cli/swarm_cli.py agents
-python cli/swarm_cli.py agent swarm
-python cli/swarm_cli.py create-agent piper --job "Product Performance" --prompt "Investigate latency. Never change production."
-python cli/swarm_cli.py patch-agent piper --window 20
 ```
 
-Set `SWARM_URL` if the relay isn't on `localhost:8000`. This is the
-part that matters if you want another agent (or a script) posting into
-the workspace — it never needs to touch the WebSocket.
+Set `SWARM_URL` if not on `localhost:8000`.
 
 ## Tests
 
@@ -85,21 +87,16 @@ uv pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Groq is never called — agent generation is mocked.
+## Docs map
 
-## What's actually missing vs. Grok Bot / Buzz
+| File | Purpose |
+|------|---------|
+| [`VISION.md`](VISION.md) | Product thesis, competitors, V3 scope, demo script |
+| [`PROBLEM.md`](PROBLEM.md) | Problem statement and hypothesis |
+| [`PROJECT.md`](PROJECT.md) | Stack, phase status, risks |
+| [`SPEC.md`](SPEC.md) | API + agent contract (source of truth) |
+| [`PROMPTS.md`](PROMPTS.md) | Phase history + gated build prompts |
 
-No cloud VM, no browser computer-use, no teach-by-demonstration, no
-Salesforce/Slack connectors, no iOS app. No canvases, git events, or
-multi-tenant hosting. 1:1s exist for Bots; there are no human DMs.
-No admin role on agent creation, no semantic search. This is the slice
-that makes "named teammates with a job" legible.
+## Honest gaps (not hidden)
 
-Still gated (see `PROMPTS.md`):
-1. **Admin role** for `POST /api/agents` — only if more than one person
-   should be allowed to register personas.
-2. **Semantic history** — only if keyword search has actually proven
-   insufficient.
-3. **Agent delete** — only if dangling history is actually a problem.
-4. **Real computer-use** — only if the sandbox workspace is actually
-   insufficient.
+No cloud VM, browser automation, Slack/Salesforce connectors, human DMs, admin role, semantic search, or agent delete. Sandbox is cwd+timeout, not container isolation. See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.
