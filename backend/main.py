@@ -16,26 +16,33 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import agent, db
+from .ai_support import store as ai_store
+from .ai_support.providers import get_provider, list_providers, providers_by_priority
 from .jobs import JOB_TEMPLATES
 from .models import (
-    AgentCreate, AgentPatch, ApprovalResolve, ChannelCreate, MessageCreate,
+    AgentCreate, AgentPatch, AiProviderConnect, ApprovalResolve, ChannelCreate,
+    CustomToolCreate, CustomToolPatch, MessageCreate,
     ReactionCreate, RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate,
     SkillPatch,
 )
+from .security import allowed_origins, install_api_guard, optional_auth, parse_token, require_auth
+from .tools.registry import get_registry, reload_registry
 
 app = FastAPI(title="swarm")
+install_api_guard(app)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=list(allowed_origins()),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Swarm-Client"],
 )
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -53,28 +60,6 @@ def _rate_limited(handle: str) -> bool:
         return True
     _last_write[handle] = now
     return False
-
-
-def parse_token(raw: str) -> tuple[str, str] | None:
-    if ":" not in raw:
-        return None
-    handle, _, token = raw.partition(":")
-    if not handle or not token:
-        return None
-    return handle, token
-
-
-async def require_auth(authorization: str | None = Header(default=None)) -> str:
-    """Returns the authenticated handle or raises 401."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "missing bearer token")
-    parsed = parse_token(authorization.removeprefix("Bearer ").strip())
-    if parsed is None:
-        raise HTTPException(401, "malformed token")
-    handle, token = parsed
-    if not await db.verify_token(handle, token):
-        raise HTTPException(401, "invalid token")
-    return handle
 
 
 async def _with_reactions(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -122,6 +107,7 @@ HANDOFF_DEPTH = 2
 async def on_startup() -> None:
     global _routine_task
     await db.init_db()
+    await reload_registry()
     _routine_task = asyncio.create_task(_routine_loop())
 
 
@@ -138,14 +124,28 @@ def _key_set(name: str) -> bool:
 
 
 @app.get("/api/status")
-async def api_status():
-    """Boolean-only — never returns the keys themselves."""
+async def api_status(handle: str | None = Depends(optional_auth)):
+    """Boolean-only — never returns raw keys. Connection details require auth."""
     demo = agent.demo_mode_enabled()
-    return {
-        "groq": _key_set("GROQ_API_KEY"),
-        "openrouter": _key_set("OPENROUTER_API_KEY"),
+    connections = await ai_store.status()
+    connected_ids = {c["provider_id"] for c in connections}
+    providers_ready: dict[str, bool] = {}
+    for spec in providers_by_priority():
+        pid = spec["id"]
+        env_name = spec.get("env_fallback")
+        env_ok = _key_set(env_name) if env_name else False
+        providers_ready[pid] = env_ok or pid in connected_ids
+    llm_ready = demo or any(providers_ready.values())
+    body: dict[str, Any] = {
+        "groq": providers_ready.get("groq", False),
+        "openrouter": providers_ready.get("openrouter", False),
         "demo": demo,
+        "llm_ready": llm_ready,
+        "providers_ready": providers_ready,
     }
+    if handle:
+        body["ai_providers"] = connections
+    return body
 
 
 # ---------------------------------------------------------------- auth ----
@@ -166,7 +166,7 @@ async def api_register(payload: RegisterRequest):
 # ---------------------------------------------------------------- REST ----
 
 @app.get("/api/channels")
-async def api_list_channels():
+async def api_list_channels(handle: str = Depends(require_auth)):
     return await db.list_channels()
 
 
@@ -182,7 +182,10 @@ async def api_create_channel(payload: ChannelCreate, handle: str = Depends(requi
 
 @app.get("/api/channels/{channel_id}/messages")
 async def api_get_history(
-    channel_id: str, limit: int = 50, before_id: int | None = None
+    channel_id: str,
+    limit: int = 50,
+    before_id: int | None = None,
+    handle: str = Depends(require_auth),
 ):
     if not await db.channel_exists(channel_id):
         raise HTTPException(404, "no such channel")
@@ -243,7 +246,7 @@ async def api_delete_message(message_id: int, handle: str = Depends(require_auth
 
 
 @app.get("/api/messages/{message_id}/thread")
-async def api_get_thread(message_id: int):
+async def api_get_thread(message_id: int, handle: str = Depends(require_auth)):
     parent = await db.get_message(message_id)
     if parent is None:
         raise HTTPException(404, "no such message")
@@ -273,16 +276,25 @@ async def api_add_reaction(
 # --------------------------------------------------------------- agents ---
 
 @app.get("/api/agents")
-async def api_list_agents(channel_id: str | None = None):
+async def api_list_agents(channel_id: str | None = None, handle: str = Depends(require_auth)):
     return await db.list_agents(channel_id)
 
 
 @app.get("/api/agents/{name}")
-async def api_get_agent(name: str):
+async def api_get_agent(name: str, handle: str = Depends(require_auth)):
     row = await db.get_agent(name)
     if row is None:
         raise HTTPException(404, "no such agent")
     return row
+
+
+async def _validate_tool_names(names: list[str] | None) -> None:
+    if not names:
+        return
+    reg = get_registry()
+    invalid = [n for n in names if n not in reg.all_names()]
+    if invalid:
+        raise HTTPException(400, detail=f"unknown tools: {invalid}")
 
 
 @app.post("/api/agents")
@@ -296,6 +308,7 @@ async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_a
         raise HTTPException(409, "agent name already registered")
     if payload.channel_scope and not await db.channel_exists(payload.channel_scope):
         raise HTTPException(404, "no such channel")
+    await _validate_tool_names(payload.tools)
     return await db.create_agent(
         payload.name,
         payload.system_prompt,
@@ -317,6 +330,7 @@ async def api_patch_agent(name: str, payload: AgentPatch, handle: str = Depends(
     fields = payload.model_dump(exclude_unset=True)
     if "channel_scope" in fields and fields["channel_scope"] and not await db.channel_exists(fields["channel_scope"]):
         raise HTTPException(404, "no such channel")
+    await _validate_tool_names(fields.get("tools"))
     updated = await db.update_agent(name, fields)
     if updated is None:
         raise HTTPException(404, "no such agent")
@@ -324,12 +338,106 @@ async def api_patch_agent(name: str, payload: AgentPatch, handle: str = Depends(
 
 
 @app.get("/api/jobs")
-async def api_list_jobs():
+async def api_list_jobs(handle: str = Depends(require_auth)):
     return JOB_TEMPLATES
 
 
+@app.get("/api/tools")
+async def api_list_tools(handle: str = Depends(require_auth)):
+    reg = get_registry()
+    return {"tools": reg.list_catalog(), "plugins": reg.plugins()}
+
+
+@app.post("/api/tools/custom")
+async def api_create_custom_tool(payload: CustomToolCreate, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    reg = get_registry()
+    if payload.name in reg.all_names():
+        raise HTTPException(409, "tool name already exists")
+    row = await db.create_custom_tool(
+        payload.name, payload.description,
+        parameters=payload.parameters,
+        handler_type=payload.handler_type,
+        handler_config=payload.handler_config,
+        enabled=payload.enabled,
+    )
+    await reload_registry()
+    return row
+
+
+@app.patch("/api/tools/custom/{tool_id}")
+async def api_patch_custom_tool(
+    tool_id: int, payload: CustomToolPatch, handle: str = Depends(require_auth)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    updated = await db.update_custom_tool(tool_id, payload.model_dump(exclude_unset=True))
+    if updated is None:
+        raise HTTPException(404, "no such custom tool")
+    await reload_registry()
+    return updated
+
+
+@app.delete("/api/tools/custom/{tool_id}")
+async def api_delete_custom_tool(tool_id: int, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await db.delete_custom_tool(tool_id):
+        raise HTTPException(404, "no such custom tool")
+    await reload_registry()
+    return {"ok": True}
+
+
+@app.post("/api/plugins/reload")
+async def api_reload_plugins(handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    reg = await reload_registry()
+    return {"ok": True, "plugins": reg.plugins(), "tool_count": len(reg.list_catalog())}
+
+
+@app.get("/api/ai-support/providers")
+async def api_ai_providers(handle: str = Depends(require_auth)):
+    catalog = list_providers()
+    connections = {c["provider_id"]: c for c in await ai_store.status()}
+    for p in catalog:
+        conn = connections.get(p["id"])
+        p["connected"] = conn is not None
+        if conn:
+            p["model"] = conn.get("model")
+            p["key_hint"] = conn.get("key_hint")
+            p["connected_at"] = conn.get("connected_at")
+    return catalog
+
+
+@app.get("/api/ai-support/connections")
+async def api_ai_connections(handle: str = Depends(require_auth)):
+    return await ai_store.status()
+
+
+@app.post("/api/ai-support/connect/{provider_id}")
+async def api_ai_connect(
+    provider_id: str, payload: AiProviderConnect, handle: str = Depends(require_auth)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if get_provider(provider_id) is None:
+        raise HTTPException(404, "unknown provider")
+    return await ai_store.connect(provider_id, payload.api_key, model=payload.model)
+
+
+@app.delete("/api/ai-support/connect/{provider_id}")
+async def api_ai_disconnect(provider_id: str, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await ai_store.disconnect(provider_id):
+        raise HTTPException(404, "not connected")
+    return {"ok": True}
+
+
 @app.get("/api/skills")
-async def api_list_skills():
+async def api_list_skills(handle: str = Depends(require_auth)):
     return await db.list_skills()
 
 
@@ -368,7 +476,7 @@ async def api_delete_skill(skill_id: int, handle: str = Depends(require_auth)):
 
 
 @app.get("/api/routines")
-async def api_list_routines(agent_name: str | None = None):
+async def api_list_routines(agent_name: str | None = None, handle: str = Depends(require_auth)):
     return await db.list_routines(agent_name)
 
 
@@ -428,14 +536,18 @@ async def api_run_routine(routine_id: int, handle: str = Depends(require_auth)):
 
 
 @app.get("/api/routines/{routine_id}/runs")
-async def api_routine_runs(routine_id: int):
+async def api_routine_runs(routine_id: int, handle: str = Depends(require_auth)):
     if await db.get_routine(routine_id) is None:
         raise HTTPException(404, "no such routine")
     return await db.list_routine_runs(routine_id)
 
 
 @app.get("/api/approvals")
-async def api_list_approvals(channel_id: str | None = None, status: str | None = "pending"):
+async def api_list_approvals(
+    channel_id: str | None = None,
+    status: str | None = "pending",
+    handle: str = Depends(require_auth),
+):
     return await db.list_approvals(channel_id=channel_id, status=status)
 
 
@@ -471,7 +583,7 @@ async def api_resolve_approval(
 
 
 @app.get("/api/computer")
-async def api_computer():
+async def api_computer(handle: str = Depends(require_auth)):
     return {
         "workspace": agent.SANDBOX_DIR,
         "shared": True,
@@ -485,7 +597,7 @@ async def api_computer():
 
 
 @app.get("/api/computer/file")
-async def api_computer_file(path: str):
+async def api_computer_file(path: str, handle: str = Depends(require_auth)):
     target = agent._safe_workspace_path(path)
     if target is None or not target.is_file():
         raise HTTPException(404, "no such file")

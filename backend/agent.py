@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from . import db
-from .models import ALLOWED_TOOLS, DEFAULT_TOOLS, resolve_groq_model
+from .models import DEFAULT_TOOLS, resolve_groq_model
+from .tools.registry import BUILTIN_SCHEMAS, get_registry, reload_registry
 
 HISTORY_WINDOW = 12
 MAX_TOOL_CALLS = 3
@@ -66,7 +67,7 @@ _TOOL_HINT = re.compile(
     r"inspect|look\s+up|search(?:\s+the)?\s+history|earlier\s+messages?|"
     r"what\s+did\s+we|last\s+time|"
     r"remember|recall|forget|notes?|memor(?:y|ies)|"
-    r"workspace|write|save|skill|routine|schedule|approv|"
+    r"workspace|write|read|fetch|url|digest|save|skill|routine|schedule|approv|"
     r"computer|handoff|draft|research"
     r")\b",
     re.I,
@@ -86,165 +87,19 @@ OnToolsReady = Callable[[list[dict[str, Any]]], Awaitable[None]]
 OnStreamStart = Callable[[], Awaitable[None]]
 OnToken = Callable[[str], Awaitable[None]]
 
-TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
-    "read_only_shell": {
-        "type": "function",
-        "function": {
-            "name": "read_only_shell",
-            "description": (
-                "Run a read-only shell command inside a sandboxed working "
-                "directory. Use only when the user asks to list/read/grep files. "
-                "On Windows prefer dir / findstr, not ls / grep. Never for writes "
-                "or greetings."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "the shell command to run"}
-                },
-                "required": ["command"],
-            },
-        },
-    },
-    "search_channel_history": {
-        "type": "function",
-        "function": {
-            "name": "search_channel_history",
-            "description": (
-                "Keyword-search this channel's older message history. "
-                "Use only when the user asks about past messages beyond "
-                "what's already in context. Not for greetings."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "keyword or phrase to search for"}
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    "remember": {
-        "type": "function",
-        "function": {
-            "name": "remember",
-            "description": (
-                "Persist a short fact this agent should keep. "
-                "scope=channel (default) is for this room; scope=global "
-                "follows the agent everywhere."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "body": {"type": "string", "description": "the fact to remember"},
-                    "scope": {
-                        "type": "string",
-                        "enum": ["channel", "global"],
-                        "description": "channel (default) or global",
-                    },
-                },
-                "required": ["body"],
-            },
-        },
-    },
-    "recall": {
-        "type": "function",
-        "function": {
-            "name": "recall",
-            "description": (
-                "Keyword-search this agent's saved notes. Use when the user "
-                "asks what you remember beyond the notes already in context."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "keyword or phrase to search for"}
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    "list_workspace": {
-        "type": "function",
-        "function": {
-            "name": "list_workspace",
-            "description": (
-                "List files on the shared computer workspace all Bots use. "
-                "Prefer this over a raw shell listing."
-            ),
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    "write_workspace": {
-        "type": "function",
-        "function": {
-            "name": "write_workspace",
-            "description": (
-                "Write a text file into the shared workspace. Use for drafts, "
-                "reports, and other durable deliverables. Paths stay under the "
-                "workspace root."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "relative path, e.g. reports/weekly.md"},
-                    "content": {"type": "string", "description": "file contents"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    "save_skill": {
-        "type": "function",
-        "function": {
-            "name": "save_skill",
-            "description": (
-                "Save a reusable skill: when to use it, required inputs, the "
-                "sequence of work, how to validate, what to return, and what "
-                "requires approval. Available to every Bot."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "slug, e.g. weekly-account-health"},
-                    "body": {"type": "string", "description": "the skill instructions"},
-                },
-                "required": ["name", "body"],
-            },
-        },
-    },
-    "request_approval": {
-        "type": "function",
-        "function": {
-            "name": "request_approval",
-            "description": (
-                "Pause and ask the human to approve a consequential action "
-                "(send, publish, delete, purchase, production change). "
-                "Do not proceed until they approve."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "short label for the action"},
-                    "detail": {"type": "string", "description": "what would happen, to whom, and why"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-}
+TOOL_SCHEMAS: dict[str, dict[str, Any]] = BUILTIN_SCHEMAS
 
 # Back-compat alias for tests that imported TOOLS.
-TOOLS = [TOOL_SCHEMAS[name] for name in DEFAULT_TOOLS if name in TOOL_SCHEMAS]
+TOOLS = [BUILTIN_SCHEMAS[name] for name in DEFAULT_TOOLS if name in BUILTIN_SCHEMAS]
 
 
 def agent_tools(agent_row: dict[str, Any]) -> list[str]:
     names = db.parse_tools(agent_row.get("tools"))
-    return [n for n in names if n in ALLOWED_TOOLS]
+    return get_registry().filter_allowed(names)
 
 
 def tools_schema_for(names: list[str]) -> list[dict[str, Any]]:
-    return [TOOL_SCHEMAS[n] for n in names if n in TOOL_SCHEMAS]
+    return get_registry().schemas_for(names)
 
 
 def should_offer_tools(
@@ -282,21 +137,37 @@ def _env_key(name: str) -> str:
     return (os.environ.get(name) or "").strip().strip('"').strip("'")
 
 
-def _groq_client():
+async def _groq_api_key() -> str | None:
+    key = _env_key("GROQ_API_KEY")
+    if key:
+        return key
+    try:
+        from .ai_support.store import resolve_key
+        return await resolve_key("groq", env_fallback="GROQ_API_KEY")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _openrouter_api_key() -> str | None:
+    key = _env_key("OPENROUTER_API_KEY")
+    if key:
+        return key
+    try:
+        from .ai_support.store import resolve_key
+        return await resolve_key("openrouter", env_fallback="OPENROUTER_API_KEY")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _groq_client(api_key: str):
     from groq import AsyncGroq
 
-    api_key = _env_key("GROQ_API_KEY")
-    if not api_key:
-        raise RuntimeError("missing_key")
     return AsyncGroq(api_key=api_key)
 
 
-def _openrouter_client():
+def _openrouter_client(api_key: str):
     from groq import AsyncGroq
 
-    api_key = _env_key("OPENROUTER_API_KEY")
-    if not api_key:
-        return None
     return AsyncGroq(
         api_key=api_key,
         base_url=OPENROUTER_BASE_URL,
@@ -681,6 +552,21 @@ async def _complete_stream(
     return content, tool_calls, usage
 
 
+async def _run_read_workspace(rel: str) -> str:
+    target = _safe_workspace_path(rel)
+    if target is None:
+        return "(invalid path — stay under the workspace root)"
+    if not target.is_file():
+        return "(file not found)"
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"(read error: {exc})"
+    if len(text) > 32_000:
+        return text[:32_000] + "\n…[truncated]"
+    return text
+
+
 async def _execute_tool(
     name: str,
     args: dict[str, Any],
@@ -689,29 +575,22 @@ async def _execute_tool(
     channel_id: str,
     allowed: list[str],
 ) -> str:
-    if name not in allowed:
-        return f"(tool {name} is disabled for this agent)"
-    if name == "read_only_shell":
-        return _run_shell_tool(args.get("command", ""))
-    if name == "search_channel_history":
-        return await _run_search_tool(args.get("query", ""), channel_id)
-    if name == "remember":
-        return await _run_remember_tool(
-            agent_name, channel_id, args.get("body", ""), args.get("scope") or "channel",
-        )
-    if name == "recall":
-        return await _run_recall_tool(agent_name, channel_id, args.get("query", ""))
-    if name == "list_workspace":
-        return await _run_list_workspace()
-    if name == "write_workspace":
-        return await _run_write_workspace(args.get("path", ""), args.get("content", ""))
-    if name == "save_skill":
-        return await _run_save_skill(args.get("name", ""), args.get("body", ""))
-    if name == "request_approval":
-        return await _run_approval_tool(
-            agent_name, channel_id, args.get("action", ""), args.get("detail", ""),
-        )
-    return f"(unknown tool {name})"
+    helpers = {
+        "list": _run_list_workspace,
+        "read": _run_read_workspace,
+        "write": _run_write_workspace,
+        "save_skill": _run_save_skill,
+        "approval": _run_approval_tool,
+    }
+    return await get_registry().execute(
+        name, args,
+        agent_name=agent_name,
+        channel_id=channel_id,
+        allowed=allowed,
+        sandbox_dir=SANDBOX_DIR,
+        shell_runner=_run_shell_tool,
+        workspace_helpers=helpers,
+    )
 
 
 async def _run_with_client(
@@ -949,15 +828,26 @@ async def generate_reply(
         )
 
     last_exc: BaseException | None = None
-    groq_client = None
-    try:
-        groq_client = _groq_client()
-    except Exception as exc:  # noqa: BLE001
-        last_exc = exc
+    from .ai_support.resolver import any_provider_ready, iter_openai_compatible_attempts
 
-    if groq_client is not None:
+    if not await any_provider_ready():
+        return {
+            "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect in Computer → AI]",
+            "tool_events": [],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        }
+
+    attempts = await iter_openai_compatible_attempts(model)
+    if not attempts:
+        return {
+            "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect in Computer → AI]",
+            "tool_events": [],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        }
+
+    for client, used_model, _provider_id in attempts:
         try:
-            result = await attempt(groq_client, model)
+            result = await attempt(client, used_model)
             await _maybe_write_summary(name, channel_id, history, window)
             return result
         except Exception as exc:  # noqa: BLE001
@@ -965,20 +855,11 @@ async def generate_reply(
             if is_retryable(exc):
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
                 try:
-                    result = await attempt(groq_client, model)
+                    result = await attempt(client, used_model)
                     await _maybe_write_summary(name, channel_id, history, window)
                     return result
                 except Exception as retry_exc:  # noqa: BLE001
                     last_exc = retry_exc
-
-    or_client = _openrouter_client()
-    if or_client is not None:
-        try:
-            result = await attempt(or_client, openrouter_model(model))
-            await _maybe_write_summary(name, channel_id, history, window)
-            return result
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
 
     return {
         "reply": classify_error(last_exc or RuntimeError("couldn't reach the model")),

@@ -25,8 +25,8 @@ def test_register_includes_created(client):
     assert body["token"].startswith("newbie:")
 
 
-def test_jobs_include_suggested_fields(client):
-    jobs = client.get("/api/jobs").json()
+def test_jobs_include_suggested_fields(client, auth):
+    jobs = client.get("/api/jobs", headers=auth).json()
     chief = next(j for j in jobs if j["id"] == "chief-of-staff")
     assert chief["suggested_name"] == "chief"
     assert "attention" in chief["suggested_prompt"].lower()
@@ -49,7 +49,7 @@ def test_demo_mode_reply_without_groq(client, auth, monkeypatch):
     asyncio.run(run())
 
 
-def test_demo_seed_general_thread(client, monkeypatch):
+def test_demo_seed_general_thread(client, auth, monkeypatch):
     monkeypatch.setenv("SWARM_DEMO", "1")
     import backend.db as db_mod
 
@@ -57,7 +57,7 @@ def test_demo_seed_general_thread(client, monkeypatch):
         await db_mod.init_db()
 
     asyncio.run(reinit())
-    msgs = client.get("/api/channels/general/messages").json()
+    msgs = client.get("/api/channels/general/messages", headers=auth).json()
     assert len(msgs) >= 4
     assert msgs[0]["body"] == "What's blocking the release?"
     assert msgs[0]["author_kind"] == "human"

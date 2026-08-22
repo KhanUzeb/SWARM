@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import katex from "katex";
+import ApiConfigStep from "./ai-support/ApiConfigStep.jsx";
+import ProviderPanel from "./ai-support/ProviderPanel.jsx";
+import ToolsPanel from "./ai-support/ToolsPanel.jsx";
+import Mascot from "./components/Mascot.jsx";
 import {
-  ALL_TOOLS, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, escapeHtml, extractPaper,
-  fmtTime, formatInline, groupedWith, initials, insertMention, mentionQuery,
-  roleLine, statusLabel, tokenizeBody,
+  ALL_TOOLS, CACHE_TTL, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, apiJson, authHeaders, bustCache,
+  escapeHtml, extractPaper, fmtTime, formatInline, groupedWith, initials, insertMention,
+  mentionQuery, roleLine, statusLabel, tokenizeBody,
 } from "./lib.js";
 
 function renderMath(tex, display) {
@@ -179,6 +183,8 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [onboarding, setOnboarding] = useState(null);
   const [demoMode, setDemoMode] = useState(false);
+  const [toolCatalog, setToolCatalog] = useState([]);
+  const [pluginList, setPluginList] = useState([]);
   const [handleDraft, setHandleDraft] = useState(() => localStorage.getItem("swarm_last_handle") || "");
   const [computerOpen, setComputerOpen] = useState(() => localStorage.getItem("swarm_computer") !== "0");
   const [showTools, setShowTools] = useState(() => localStorage.getItem("swarm_show_tools") === "1");
@@ -266,26 +272,29 @@ export default function App() {
   }, []);
 
   async function loadChannels() {
-    const res = await fetch("/api/channels");
+    if (!tokenRef.current) return [];
+    const res = await apiJson("/api/channels", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
     if (!res.ok) throw new Error("channels");
-    const data = await res.json();
-    setChannels(data);
-    return data;
+    setChannels(res.data);
+    return res.data;
   }
 
   async function loadAllAgents() {
+    if (!tokenRef.current) return;
     try {
-      const res = await fetch("/api/agents");
-      setAllAgents(res.ok ? await res.json() : []);
+      const res = await apiJson("/api/agents", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      setAllAgents(res.ok ? res.data : []);
     } catch {
       setAllAgents([]);
     }
   }
 
   async function loadAgents(channelId) {
+    if (!tokenRef.current) return;
     try {
-      const res = await fetch(`/api/agents?channel_id=${encodeURIComponent(channelId)}`);
-      setAgents(res.ok ? await res.json() : []);
+      const path = `/api/agents?channel_id=${encodeURIComponent(channelId)}`;
+      const res = await apiJson(path, { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      setAgents(res.ok ? res.data : []);
     } catch {
       setAgents([]);
     }
@@ -293,67 +302,91 @@ export default function App() {
 
   async function loadGroqStatus() {
     try {
-      const res = await fetch("/api/status");
-      const data = res.ok ? await res.json() : { groq: false, openrouter: false, demo: false };
+      const pub = await apiJson("/api/status", { cacheTtl: CACHE_TTL.status });
+      const authed = tokenRef.current
+        ? await apiJson("/api/status", { token: tokenRef.current, cacheTtl: CACHE_TTL.status })
+        : pub;
+      const data = authed.ok ? authed.data : (pub.data || {});
       setDemoMode(!!data.demo);
-      setAgentsReady(!!(data.groq || data.openrouter || data.demo));
+      setAgentsReady(!!(data.llm_ready || data.groq || data.openrouter || data.demo));
     } catch {
       setDemoMode(false);
       setAgentsReady(false);
     }
   }
 
-  async function loadJobs() {
+  async function loadToolCatalog() {
+    if (!tokenRef.current) return;
     try {
-      const res = await fetch("/api/jobs");
-      setJobs(res.ok ? await res.json() : []);
+      const res = await apiJson("/api/tools", { token: tokenRef.current, cacheTtl: CACHE_TTL.catalog });
+      if (!res.ok) return;
+      setToolCatalog(res.data.tools || []);
+      setPluginList(res.data.plugins || []);
+    } catch {
+      setToolCatalog([]);
+      setPluginList([]);
+    }
+  }
+
+  async function loadJobs() {
+    if (!tokenRef.current) return;
+    try {
+      const res = await apiJson("/api/jobs", { token: tokenRef.current, cacheTtl: CACHE_TTL.catalog });
+      setJobs(res.ok ? res.data : []);
     } catch {
       setJobs([]);
     }
   }
 
   async function loadSkills() {
+    if (!tokenRef.current) return;
     try {
-      const res = await fetch("/api/skills");
-      setSkills(res.ok ? await res.json() : []);
+      const res = await apiJson("/api/skills", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      setSkills(res.ok ? res.data : []);
     } catch {
       setSkills([]);
     }
   }
 
   async function loadRoutines() {
+    if (!tokenRef.current) return;
     try {
-      const res = await fetch("/api/routines");
-      setRoutines(res.ok ? await res.json() : []);
+      const res = await apiJson("/api/routines", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      setRoutines(res.ok ? res.data : []);
     } catch {
       setRoutines([]);
     }
   }
 
   async function loadApprovals() {
+    if (!tokenRef.current) return;
     try {
-      const res = await fetch("/api/approvals?status=pending");
-      setApprovals(res.ok ? await res.json() : []);
+      const res = await apiJson("/api/approvals?status=pending", { token: tokenRef.current, cacheTtl: 10_000 });
+      setApprovals(res.ok ? res.data : []);
     } catch {
       setApprovals([]);
     }
   }
 
   async function loadComputer() {
+    if (!tokenRef.current) return;
     try {
-      const res = await fetch("/api/computer");
-      setComputer(res.ok ? await res.json() : null);
+      const res = await apiJson("/api/computer", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      setComputer(res.ok ? res.data : null);
     } catch {
       setComputer(null);
     }
   }
 
   async function loadHistory(channelId, beforeId) {
+    if (!tokenRef.current) throw new Error("auth");
     const params = new URLSearchParams({ limit: String(HISTORY_LIMIT) });
     if (beforeId) params.set("before_id", String(beforeId));
-    const res = await fetch(`/api/channels/${channelId}/messages?${params}`);
+    const res = await apiJson(`/api/channels/${channelId}/messages?${params}`, {
+      token: tokenRef.current,
+    });
     if (!res.ok) throw new Error("history");
-    return res.json();
+    return res.data;
   }
 
   function applyHistory(history, prepend = false) {
@@ -562,7 +595,7 @@ export default function App() {
     setUser(handle);
     localStorage.setItem(`swarm_token_${handle}`, tok);
     localStorage.setItem("swarm_last_handle", handle);
-    const [chs] = await Promise.all([loadChannels(), loadAllAgents(), loadJobs(), loadSkills(), loadRoutines()]);
+    const [chs] = await Promise.all([loadChannels(), loadAllAgents(), loadJobs(), loadSkills(), loadRoutines(), loadToolCatalog()]);
     const next = (chs || []).some((c) => c.id === (preferred || "dm-swarm"))
       ? (preferred || "dm-swarm")
       : (chs[0]?.id || "general");
@@ -607,18 +640,21 @@ export default function App() {
     try {
       const res = await fetch("/api/register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(null),
         body: JSON.stringify({ handle }),
       });
       let tok = null;
       if (res.ok) {
         tok = (await res.json()).token;
         setToken(tok);
+        tokenRef.current = tok;
         setUser(handle);
         localStorage.setItem(`swarm_token_${handle}`, tok);
         localStorage.setItem("swarm_last_handle", handle);
-        await Promise.all([loadChannels(), loadAllAgents(), loadJobs(), loadGroqStatus()]);
-        const templates = await fetch("/api/jobs").then((r) => (r.ok ? r.json() : []));
+        await Promise.all([loadChannels(), loadAllAgents(), loadGroqStatus()]);
+        const templatesRes = await apiJson("/api/jobs", { token: tok, cacheTtl: CACHE_TTL.catalog });
+        const templates = templatesRes.ok ? templatesRes.data : [];
+        setJobs(templates);
         const pick = templates.find((j) => j.id === "chief-of-staff") || templates[0] || null;
         setOnboarding({
           step: 1,
@@ -779,9 +815,9 @@ export default function App() {
   async function openThread(id) {
     setThreadId(id);
     try {
-      const res = await fetch(`/api/messages/${id}/thread`);
+      const res = await apiJson(`/api/messages/${id}/thread`, { token: tokenRef.current });
       if (!res.ok) throw new Error("thread");
-      const data = await res.json();
+      const data = res.data;
       remember(data.parent);
       data.replies.forEach(remember);
       setThreadParent(data.parent);
@@ -865,9 +901,9 @@ export default function App() {
   async function openAgentPanel(name) {
     setAgentErr("");
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(name)}`);
+      const res = await apiJson(`/api/agents/${encodeURIComponent(name)}`, { token: tokenRef.current });
       if (!res.ok) throw new Error("agent");
-      const a = await res.json();
+      const a = res.data;
       setAgentForm({
         name: a.name, job: a.job || "", prompt: a.system_prompt || "", model: a.model || DEFAULT_MODEL,
         scope: a.channel_scope || "", window: a.history_window || 12, tools: a.tools || ALL_TOOLS, memories: a.memories || [],
@@ -937,9 +973,9 @@ export default function App() {
 
   async function previewFile(path) {
     try {
-      const res = await fetch(`/api/computer/file?path=${encodeURIComponent(path)}`);
+      const res = await apiJson(`/api/computer/file?path=${encodeURIComponent(path)}`, { token: tokenRef.current });
       if (!res.ok) throw new Error("file");
-      setFilePreview((await res.json()).content);
+      setFilePreview(res.data.content);
     } catch {
       flash("Couldn't open that file", true);
     }
@@ -971,6 +1007,11 @@ export default function App() {
   ].filter(Boolean).join(" ");
 
   const streamRows = Object.values(streams);
+  const catalogNames = useMemo(
+    () => (toolCatalog.length ? toolCatalog.map((t) => t.name) : ALL_TOOLS),
+    [toolCatalog],
+  );
+  const mascotWorking = streamRows.length > 0 || allAgents.some((a) => a.status === "working");
 
   return (
     <div className={layout}>
@@ -994,8 +1035,20 @@ export default function App() {
         <div id="onboarding">
           <div className="card onboarding-card">
             {onboarding.step === 1 && (
+              <ApiConfigStep
+                token={token}
+                flash={flash}
+                onSkip={() => setOnboarding((o) => ({ ...o, step: 2, err: "" }))}
+                onContinue={async () => {
+                  bustCache("/api/status");
+                  await loadGroqStatus();
+                  setOnboarding((o) => ({ ...o, step: 2, err: "" }));
+                }}
+              />
+            )}
+            {onboarding.step === 2 && (
               <>
-                <p className="kicker">Step 1 of 2</p>
+                <p className="kicker">Step 2 of 3</p>
                 <h1>Pick your first Bot</h1>
                 <p>Each template is a named job with tools, memory, and a 1:1 channel. You can add more later.</p>
                 <div className="job-templates onboarding-jobs">
@@ -1020,18 +1073,25 @@ export default function App() {
                   <button type="button" className="btn ghost" onClick={skipOnboarding}>Skip — use default teammates</button>
                   <button
                     type="button"
+                    className="btn"
+                    onClick={() => setOnboarding((o) => ({ ...o, step: 1, err: "" }))}
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
                     className="btn primary"
                     disabled={!onboarding.template}
-                    onClick={() => setOnboarding((o) => ({ ...o, step: 2, err: "" }))}
+                    onClick={() => setOnboarding((o) => ({ ...o, step: 3, err: "" }))}
                   >
                     Continue
                   </button>
                 </div>
               </>
             )}
-            {onboarding.step === 2 && onboarding.template && (
+            {onboarding.step === 3 && onboarding.template && (
               <form onSubmit={createOnboardingBot}>
-                <p className="kicker">Step 2 of 2</p>
+                <p className="kicker">Step 3 of 3</p>
                 <h1>Name @{onboarding.name || "…"}</h1>
                 <p>Primary job: <strong>{onboarding.template.job}</strong>. You'll land in their 1:1 with a suggested first message.</p>
                 <label htmlFor="onboard-name">Bot name</label>
@@ -1048,7 +1108,7 @@ export default function App() {
                 <div className="hint">Mention as @{onboarding.name || "name"} in rooms, or talk in dm-{onboarding.name || "name"} without @.</div>
                 <div className="err" role="alert">{onboarding.err}</div>
                 <div className="modal-actions onboarding-actions">
-                  <button type="button" className="btn" onClick={() => setOnboarding((o) => ({ ...o, step: 1, err: "" }))}>Back</button>
+                  <button type="button" className="btn" onClick={() => setOnboarding((o) => ({ ...o, step: 2, err: "" }))}>Back</button>
                   <button type="submit" className="btn primary" disabled={onboarding.busy}>
                     {onboarding.busy ? "Creating…" : "Create & open 1:1"}
                   </button>
@@ -1111,15 +1171,21 @@ export default function App() {
               <input id="agent-window" type="number" min={1} max={50} value={agentForm.window} onChange={(e) => setAgentForm((f) => ({ ...f, window: e.target.value }))} />
               <fieldset className="tool-toggles">
                 <legend>Tools</legend>
-                {ALL_TOOLS.map((t) => (
-                  <label key={t} className="check">
-                    <input type="checkbox" checked={agentForm.tools.includes(t)} onChange={(e) => setAgentForm((f) => ({
-                      ...f,
-                      tools: e.target.checked ? [...f.tools, t] : f.tools.filter((x) => x !== t),
-                    }))} />
-                    {t}
-                  </label>
-                ))}
+                {catalogNames.map((t) => {
+                  const meta = toolCatalog.find((x) => x.name === t);
+                  return (
+                    <label key={t} className="check">
+                      <input type="checkbox" checked={agentForm.tools.includes(t)} onChange={(e) => setAgentForm((f) => ({
+                        ...f,
+                        tools: e.target.checked ? [...f.tools, t] : f.tools.filter((x) => x !== t),
+                      }))} />
+                      {t}
+                      {meta?.kind && meta.kind !== "builtin" && (
+                        <span className="tool-kind">{meta.kind}</span>
+                      )}
+                    </label>
+                  );
+                })}
               </fieldset>
               {agentForm.memories?.length > 0 && (
                 <div id="agent-memories">
@@ -1160,6 +1226,12 @@ export default function App() {
 
       <nav id="sidebar" aria-label="Workspace">
         <div className="brand">swarm<small>talk · code · paper</small></div>
+        <Mascot
+          wsStatus={wsStatus}
+          demoMode={demoMode}
+          botStatus={bot?.status}
+          working={mascotWorking}
+        />
         <div className="section-label">Bots</div>
         <div id="bots-list">
           {!allAgents.length && <div className="empty">No bots yet</div>}
@@ -1307,10 +1379,50 @@ export default function App() {
             <button type="button" className="btn ghost" onClick={() => setComputerOpen(false)}>Close</button>
           </div>
           <div className="panel-tabs" role="tablist">
-            {["files", "skills", "routines", "approvals"].map((tab) => (
-              <button key={tab} type="button" className={`tab${panelTab === tab ? " active" : ""}`} onClick={() => setPanelTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>
+            {["files", "tools", "plugins", "ai", "skills", "routines", "approvals"].map((tab) => (
+              <button key={tab} type="button" className={`tab${panelTab === tab ? " active" : ""}`} onClick={() => setPanelTab(tab)}>{tab === "ai" ? "AI" : tab[0].toUpperCase() + tab.slice(1)}</button>
             ))}
           </div>
+          {panelTab === "tools" && (
+            <ToolsPanel
+              token={token}
+              toolCatalog={toolCatalog}
+              plugins={pluginList}
+              flash={flash}
+              onReload={loadToolCatalog}
+            />
+          )}
+          {panelTab === "plugins" && (
+            <div className="panel-body">
+              <p className="panel-note">
+                Drop folders with <code>manifest.json</code> into <code>plugins/</code>, then reload.
+              </p>
+              <button type="button" className="btn primary" onClick={async () => {
+                const res = await api("/api/plugins/reload", { token, method: "POST", body: {} });
+                if (res.ok) {
+                  const data = await res.json();
+                  setPluginList(data.plugins || []);
+                  await loadToolCatalog();
+                  flash(`Reloaded — ${data.tool_count} tools`);
+                } else flash("Couldn't reload plugins", true);
+              }}>Reload plugins</button>
+              <ul className="panel-list">
+                {!pluginList.length && <li className="empty-state">No plugins loaded.</li>}
+                {pluginList.map((p) => (
+                  <li key={p.id}>
+                    <strong>{p.name}</strong> v{p.version}
+                    <div className="bot-job">{p.description}</div>
+                    <div className="hint">{p.path}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {panelTab === "ai" && (
+            <div className="panel-body">
+              <ProviderPanel token={token} flash={flash} onStatusChange={loadGroqStatus} />
+            </div>
+          )}
           {panelTab === "files" && (
             <div className="panel-body">
               <p className="panel-note">{computer?.note || ""}</p>

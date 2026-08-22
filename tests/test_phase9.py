@@ -1,6 +1,7 @@
 import asyncio
 
 import backend.agent as agent
+import backend.ai_support.resolver as ai_resolver
 import backend.db as db
 import backend.main as main
 from backend.models import AgentCreate, DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, resolve_groq_model
@@ -18,8 +19,8 @@ def _clear_rate():
     main._last_write.clear()
 
 
-def test_seeded_harness(client):
-    agents = {a["name"]: a for a in client.get("/api/agents").json()}
+def test_seeded_harness(client, auth):
+    agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
     assert "read_only_shell" in agents["swarm"]["tools"]
     assert "remember" in agents["swarm"]["tools"]
     assert "read_only_shell" not in agents["ledger"]["tools"]
@@ -29,12 +30,12 @@ def test_seeded_harness(client):
     assert agents["ledger"]["model"] == DEFAULT_GROQ_MODEL
 
 
-def test_get_agent_includes_memories(client):
-    data = client.get("/api/agents/swarm").json()
+def test_get_agent_includes_memories(client, auth):
+    data = client.get("/api/agents/swarm", headers=auth).json()
     assert data["name"] == "swarm"
     assert "memories" in data
     assert data["memories"] == []
-    assert client.get("/api/agents/nope").status_code == 404
+    assert client.get("/api/agents/nope", headers=auth).status_code == 404
 
 
 def test_create_and_patch_agent(client, auth):
@@ -133,8 +134,20 @@ def test_retry_once_then_succeeds(client, monkeypatch):
             raise err
         return "hello after retry", [], None
 
-    monkeypatch.setattr(agent, "_groq_client", lambda: object())
-    monkeypatch.setattr(agent, "_openrouter_client", lambda: None)
+    async def fake_groq_key():
+        return "test-key"
+
+    async def no_or_key():
+        return None
+
+    async def fake_attempts(_model):
+        return [(object(), DEFAULT_GROQ_MODEL, "groq")]
+
+    async def yes_ready():
+        return True
+
+    monkeypatch.setattr(ai_resolver, "any_provider_ready", yes_ready)
+    monkeypatch.setattr(ai_resolver, "iter_openai_compatible_attempts", fake_attempts)
     monkeypatch.setattr(agent, "_complete_stream", fake_complete)
     monkeypatch.setattr(agent, "RETRY_DELAY_SECONDS", 0)
 
@@ -154,11 +167,10 @@ def test_retry_once_then_succeeds(client, monkeypatch):
 
 
 def test_classified_error_when_no_provider(client, monkeypatch):
-    def boom():
-        raise RuntimeError("missing_key")
+    async def no_ready():
+        return False
 
-    monkeypatch.setattr(agent, "_groq_client", boom)
-    monkeypatch.setattr(agent, "_openrouter_client", lambda: None)
+    monkeypatch.setattr(ai_resolver, "any_provider_ready", no_ready)
     row = {
         "name": "swarm",
         "system_prompt": "You are swarm.",

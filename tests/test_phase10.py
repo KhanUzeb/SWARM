@@ -9,8 +9,8 @@ def _clear_rate():
     main._last_write.clear()
 
 
-def test_seeded_bots_have_jobs_and_dms(client):
-    agents = {a["name"]: a for a in client.get("/api/agents").json()}
+def test_seeded_bots_have_jobs_and_dms(client, auth):
+    agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
     assert agents["swarm"]["job"] == "Generalist"
     assert agents["swarm"]["status"] == "idle"
     assert agents["swarm"]["dm_channel_id"] == "dm-swarm"
@@ -19,7 +19,7 @@ def test_seeded_bots_have_jobs_and_dms(client):
     assert agents["coder"]["dm_channel_id"] == "dm-coder"
     assert "fenced markdown" in agents["coder"]["system_prompt"]
     assert "\\subsection*{Code}" in agents["coder"]["system_prompt"]
-    channels = {c["id"]: c for c in client.get("/api/channels").json()}
+    channels = {c["id"]: c for c in client.get("/api/channels", headers=auth).json()}
     assert channels["dm-swarm"]["kind"] == "dm"
     assert channels["dm-swarm"]["owner_agent"] == "swarm"
     assert channels["dm-coder"]["kind"] == "dm"
@@ -27,8 +27,8 @@ def test_seeded_bots_have_jobs_and_dms(client):
     assert channels["code"]["kind"] == "room"
 
 
-def test_jobs_catalog(client):
-    jobs = client.get("/api/jobs").json()
+def test_jobs_catalog(client, auth):
+    jobs = client.get("/api/jobs", headers=auth).json()
     ids = {j["id"] for j in jobs}
     assert "sales-outbound" in ids
     assert "chief-of-staff" in ids
@@ -47,7 +47,7 @@ def test_create_agent_opens_dm(client, auth):
     body = created.json()
     assert body["job"] == "Product Performance"
     assert body["dm_channel_id"] == "dm-piper"
-    channels = {c["id"]: c for c in client.get("/api/channels").json()}
+    channels = {c["id"]: c for c in client.get("/api/channels", headers=auth).json()}
     assert channels["dm-piper"]["kind"] == "dm"
     assert channels["dm-piper"]["owner_agent"] == "piper"
 
@@ -92,7 +92,7 @@ def test_room_still_requires_mention(client, auth, monkeypatch):
         assert event["type"] == "message"
         assert event["message"]["author_kind"] == "human"
         # No agent follow-up: a second receive would block. Check history instead.
-    history = client.get("/api/channels/general/messages").json()
+    history = client.get("/api/channels/general/messages", headers=auth).json()
     assert not any(m["author_kind"] == "agent" for m in history)
 
 
@@ -106,7 +106,7 @@ def test_skills_crud(client, auth):
     assert created.status_code == 200
     skill = created.json()
     assert skill["name"] == "weekly-health"
-    listed = client.get("/api/skills").json()
+    listed = client.get("/api/skills", headers=auth).json()
     assert any(s["name"] == "weekly-health" for s in listed)
     _clear_rate()
     patched = client.patch(
@@ -118,7 +118,7 @@ def test_skills_crud(client, auth):
     assert "Cite sources" in patched.json()["body"]
     _clear_rate()
     assert client.delete(f"/api/skills/{skill['id']}", headers=auth).status_code == 200
-    assert client.get("/api/skills").json() == []
+    assert client.get("/api/skills", headers=auth).json() == []
 
 
 def test_routines_and_due(client, auth, monkeypatch):
@@ -151,7 +151,7 @@ def test_routines_and_due(client, auth, monkeypatch):
 
     ran = asyncio.run(_force_due())
     assert ran == 1
-    history = client.get("/api/channels/dm-swarm/messages").json()
+    history = client.get("/api/channels/dm-swarm/messages", headers=auth).json()
     assert any("[routine:Morning digest]" in (m["body"] or "") for m in history)
     assert any(m["author_kind"] == "agent" and m["body"] == "digest ready" for m in history)
 
@@ -174,7 +174,7 @@ def test_approvals_roundtrip(client, auth, monkeypatch):
         return await db.create_approval("swarm", "dm-swarm", "send outreach", "email Dana")
 
     row = asyncio.run(_make())
-    pending = client.get("/api/approvals").json()
+    pending = client.get("/api/approvals", headers=auth).json()
     assert any(a["id"] == row["id"] for a in pending)
     _clear_rate()
     resolved = client.post(
@@ -184,21 +184,21 @@ def test_approvals_roundtrip(client, auth, monkeypatch):
     )
     assert resolved.status_code == 200
     assert resolved.json()["status"] == "approved"
-    history = client.get("/api/channels/dm-swarm/messages").json()
+    history = client.get("/api/channels/dm-swarm/messages", headers=auth).json()
     assert any("Approved: send outreach" in m["body"] for m in history)
 
 
-def test_computer_workspace(client, tmp_path, monkeypatch):
+def test_computer_workspace(client, auth, tmp_path, monkeypatch):
     sandbox = tmp_path / "box"
     sandbox.mkdir()
     (sandbox / "notes.md").write_text("hello", encoding="utf-8")
     monkeypatch.setattr(agent, "SANDBOX_DIR", str(sandbox))
-    data = client.get("/api/computer").json()
+    data = client.get("/api/computer", headers=auth).json()
     assert data["shared"] is True
     assert any(f["path"] == "notes.md" for f in data["files"])
-    preview = client.get("/api/computer/file", params={"path": "notes.md"}).json()
+    preview = client.get("/api/computer/file", params={"path": "notes.md"}, headers=auth).json()
     assert preview["content"] == "hello"
-    assert client.get("/api/computer/file", params={"path": "../secret"}).status_code == 404
+    assert client.get("/api/computer/file", params={"path": "../secret"}, headers=auth).status_code == 404
 
 
 def test_handoff_from_agent_mention(client, auth, monkeypatch):

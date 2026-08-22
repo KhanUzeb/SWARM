@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
+from typing import Any
 
-ALLOWED_TOOLS = (
-    "read_only_shell",
-    "search_channel_history",
-    "remember",
-    "recall",
-    "list_workspace",
-    "write_workspace",
-    "save_skill",
-    "request_approval",
+from .tools.registry import (
+    BUILTIN_TOOL_NAMES,
+    DEFAULT_BUILTIN_TOOLS,
+    LEDGER_BUILTIN_TOOLS,
 )
-DEFAULT_TOOLS = list(ALLOWED_TOOLS)
-LEDGER_TOOLS = ["search_channel_history", "remember", "recall"]
+
+ALLOWED_TOOLS = BUILTIN_TOOL_NAMES
+DEFAULT_TOOLS = DEFAULT_BUILTIN_TOOLS
+LEDGER_TOOLS = LEDGER_BUILTIN_TOOLS
 DEFAULT_JOB = "Teammate"
 AGENT_STATUSES = ("idle", "working", "needs_approval")
 
@@ -36,10 +34,14 @@ def resolve_groq_model(model: str) -> str:
 def normalize_tools(value: list[str] | None) -> list[str] | None:
     if value is None:
         return None
-    unknown = [t for t in value if t not in ALLOWED_TOOLS]
-    if unknown:
-        raise ValueError(f"unknown tools: {unknown}")
-    return list(dict.fromkeys(value))
+    out: list[str] = []
+    for t in value:
+        name = (t or "").strip()
+        if not name:
+            continue
+        if name not in out:
+            out.append(name)
+    return out
 
 
 class ChannelCreate(BaseModel):
@@ -52,6 +54,28 @@ class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=8000)
     author_kind: str = "human"
     parent_id: int | None = None
+
+
+class CustomToolCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
+    description: str = Field(min_length=1, max_length=500)
+    parameters: dict[str, Any] | None = None
+    handler_type: str = Field(default="template", pattern=r"^[a-z_]+$")
+    handler_config: dict[str, Any] | None = None
+    enabled: bool = True
+
+
+class CustomToolPatch(BaseModel):
+    description: str | None = Field(default=None, min_length=1, max_length=500)
+    parameters: dict[str, Any] | None = None
+    handler_type: str | None = Field(default=None, pattern=r"^[a-z_]+$")
+    handler_config: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class AiProviderConnect(BaseModel):
+    api_key: str = Field(min_length=8, max_length=512)
+    model: str | None = Field(default=None, max_length=128)
 
 
 class RegisterRequest(BaseModel):

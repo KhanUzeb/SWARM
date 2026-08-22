@@ -137,6 +137,26 @@ CREATE TABLE IF NOT EXISTS approvals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_approvals_pending ON approvals(status, channel_id);
+
+CREATE TABLE IF NOT EXISTS custom_tools (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT UNIQUE NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    parameters      TEXT NOT NULL DEFAULT '{{}}',
+    handler_type    TEXT NOT NULL DEFAULT 'template',
+    handler_config  TEXT NOT NULL DEFAULT '{{}}',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      REAL NOT NULL,
+    updated_at      REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_providers (
+    provider_id     TEXT PRIMARY KEY,
+    secret          TEXT NOT NULL,
+    key_hint        TEXT NOT NULL DEFAULT '',
+    model           TEXT,
+    connected_at    REAL NOT NULL
+);
 """
 
 _DEFAULT_CHANNELS = [
@@ -223,7 +243,7 @@ def parse_tools(raw: Any) -> list[str]:
             names = list(DEFAULT_TOOLS)
     else:
         names = list(DEFAULT_TOOLS)
-    return [n for n in names if n in ALLOWED_TOOLS]
+    return [n for n in names if n]
 
 
 def public_agent(row: dict[str, Any]) -> dict[str, Any]:
@@ -1161,3 +1181,160 @@ async def resolve_approval(approval_id: int, status: str) -> dict[str, Any] | No
     row["status"] = status
     row["resolved_at"] = ts
     return row
+
+
+# ---------------------------------------------------------- custom tools --
+
+def _json_obj(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            val = json.loads(raw)
+            return val if isinstance(val, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _public_custom_tool(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    out["parameters"] = _json_obj(out.get("parameters"))
+    out["handler_config"] = _json_obj(out.get("handler_config"))
+    out["enabled"] = bool(out.get("enabled"))
+    return out
+
+
+async def list_custom_tools(*, enabled_only: bool = False) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        q = "SELECT * FROM custom_tools"
+        if enabled_only:
+            q += " WHERE enabled = 1"
+        q += " ORDER BY name"
+        cur = await db.execute(q)
+        return [_public_custom_tool(dict(r)) for r in await cur.fetchall()]
+
+
+async def create_custom_tool(
+    name: str,
+    description: str,
+    *,
+    parameters: dict[str, Any] | None = None,
+    handler_type: str = "template",
+    handler_config: dict[str, Any] | None = None,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    ts = time.time()
+    params = json.dumps(parameters or {"type": "object", "properties": {}})
+    config = json.dumps(handler_config or {})
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO custom_tools (name, description, parameters, handler_type, "
+            "handler_config, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, description, params, handler_type, config, int(enabled), ts, ts),
+        )
+        await db.commit()
+        tid = cur.lastrowid
+    return _public_custom_tool({
+        "id": tid, "name": name, "description": description,
+        "parameters": parameters, "handler_type": handler_type,
+        "handler_config": handler_config, "enabled": enabled,
+        "created_at": ts, "updated_at": ts,
+    })
+
+
+async def update_custom_tool(tool_id: int, fields: dict[str, Any]) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM custom_tools WHERE id = ?", (tool_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        sets: list[str] = []
+        args: list[Any] = []
+        for key, col in (
+            ("description", "description"),
+            ("handler_type", "handler_type"),
+            ("enabled", "enabled"),
+        ):
+            if key in fields and fields[key] is not None:
+                val = fields[key]
+                if key == "enabled":
+                    val = int(bool(val))
+                sets.append(f"{col} = ?")
+                args.append(val)
+        if "parameters" in fields and fields["parameters"] is not None:
+            sets.append("parameters = ?")
+            args.append(json.dumps(fields["parameters"]))
+        if "handler_config" in fields and fields["handler_config"] is not None:
+            sets.append("handler_config = ?")
+            args.append(json.dumps(fields["handler_config"]))
+        if not sets:
+            return _public_custom_tool(dict(row))
+        sets.append("updated_at = ?")
+        args.append(time.time())
+        args.append(tool_id)
+        await db.execute(
+            f"UPDATE custom_tools SET {', '.join(sets)} WHERE id = ?",
+            args,
+        )
+        await db.commit()
+        cur = await db.execute("SELECT * FROM custom_tools WHERE id = ?", (tool_id,))
+        updated = await cur.fetchone()
+        return _public_custom_tool(dict(updated)) if updated else None
+
+
+async def delete_custom_tool(tool_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM custom_tools WHERE id = ?", (tool_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+# -------------------------------------------------------- ai providers ---
+
+async def upsert_ai_provider(
+    provider_id: str, secret: str, *, model: str | None = None
+) -> dict[str, Any]:
+    ts = time.time()
+    hint = f"…{secret[-4:]}" if len(secret) > 4 else "****"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO ai_providers (provider_id, secret, key_hint, model, connected_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider_id) DO UPDATE SET secret=excluded.secret, "
+            "key_hint=excluded.key_hint, model=excluded.model, connected_at=excluded.connected_at",
+            (provider_id, secret, hint, model, ts),
+        )
+        await db.commit()
+    return {
+        "provider_id": provider_id, "connected": True,
+        "model": model, "connected_at": ts, "key_hint": hint,
+    }
+
+
+async def list_ai_providers() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM ai_providers ORDER BY provider_id")
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_ai_provider(provider_id: str) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM ai_providers WHERE provider_id = ?", (provider_id,)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def delete_ai_provider(provider_id: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM ai_providers WHERE provider_id = ?", (provider_id,)
+        )
+        await db.commit()
+        return cur.rowcount > 0

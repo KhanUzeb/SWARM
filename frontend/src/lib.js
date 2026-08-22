@@ -1,12 +1,21 @@
 export const HISTORY_LIMIT = 50;
 export const DEFAULT_MODEL = "openai/gpt-oss-120b";
+export const SWARM_CLIENT = "web";
+export const CACHE_TTL = {
+  status: 15_000,
+  catalog: 60_000,
+  list: 30_000,
+};
 export const ALL_TOOLS = [
   "read_only_shell",
   "search_channel_history",
   "remember",
   "recall",
   "list_workspace",
+  "read_workspace",
   "write_workspace",
+  "fetch_url",
+  "channel_digest",
   "save_skill",
   "request_approval",
 ];
@@ -23,8 +32,10 @@ export function fmtTime(ts) {
   return new Date(ts * 1000).toTimeString().slice(0, 5);
 }
 
+import { cacheGet, cacheInvalidate, cacheKey, cacheSet } from "./lib/cache.js";
+
 export function authHeaders(token, json = true) {
-  const h = {};
+  const h = { "X-Swarm-Client": SWARM_CLIENT };
   if (json) h["Content-Type"] = "application/json";
   if (token) h.Authorization = `Bearer ${token}`;
   return h;
@@ -78,8 +89,44 @@ export async function api(path, { token, method = "GET", body, json = true } = {
     method,
     headers: authHeaders(token, json && body != null),
     body: body == null ? undefined : (json ? JSON.stringify(body) : body),
+    credentials: "same-origin",
   });
   return res;
+}
+
+/** GET with TTL cache; mutations can pass invalidate prefix to bust related keys. */
+export async function apiJson(path, {
+  token,
+  method = "GET",
+  body,
+  cacheTtl = 0,
+  invalidate = null,
+} = {}) {
+  if (invalidate) cacheInvalidate(invalidate);
+
+  const isGet = method === "GET";
+  const key = isGet && cacheTtl > 0 ? cacheKey(path, token) : null;
+  if (key) {
+    const hit = cacheGet(key);
+    if (hit !== undefined) return hit;
+  }
+
+  const res = await api(path, { token, method, body });
+  let data = null;
+  if (res.status !== 204) {
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+  }
+  const out = { ok: res.ok, status: res.status, data };
+  if (key && res.ok) cacheSet(key, out, cacheTtl);
+  return out;
+}
+
+export function bustCache(...prefixes) {
+  for (const p of prefixes) cacheInvalidate(p);
 }
 
 export function escapeHtml(value) {

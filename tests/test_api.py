@@ -9,14 +9,21 @@ def _clear_rate():
 def test_status_reports_groq_unset(client):
     res = client.get("/api/status")
     assert res.status_code == 200
-    assert res.json() == {"groq": False, "openrouter": False, "demo": False}
+    body = res.json()
+    assert body["groq"] is False
+    assert body["openrouter"] is False
+    assert body["demo"] is False
+    assert "ai_providers" not in body
 
 
 def test_status_reports_groq_set(client, monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
     res = client.get("/api/status")
     assert res.status_code == 200
-    assert res.json() == {"groq": True, "openrouter": False, "demo": False}
+    body = res.json()
+    assert body["groq"] is True
+    assert body["openrouter"] is False
+    assert body["demo"] is False
 
 
 def test_register_and_409(client):
@@ -28,6 +35,19 @@ def test_register_and_409(client):
 
     again = client.post("/api/register", json={"handle": "uzeb"})
     assert again.status_code == 409
+
+
+def test_read_requires_bearer(client):
+    assert client.get("/api/channels").status_code == 401
+    assert client.get("/api/channels/general/messages").status_code == 401
+
+
+def test_forbidden_browser_origin(client, auth):
+    res = client.get(
+        "/api/channels",
+        headers={**auth, "Origin": "https://evil.example", "X-Swarm-Client": "web"},
+    )
+    assert res.status_code == 403
 
 
 def test_write_requires_bearer(client):
@@ -55,7 +75,7 @@ def test_post_and_history(client, auth):
     assert msg["author"] == "uzeb"
     assert msg["body"] == "shipping the fix"
 
-    history = client.get("/api/channels/general/messages").json()
+    history = client.get("/api/channels/general/messages", headers=auth).json()
     assert any(m["id"] == msg["id"] for m in history)
     assert "reactions" in history[0]
 
@@ -95,7 +115,7 @@ def test_reactions_idempotent(client, auth):
         headers=auth,
     )
     assert r2.status_code == 204
-    history = client.get("/api/channels/general/messages").json()
+    history = client.get("/api/channels/general/messages", headers=auth).json()
     row = next(m for m in history if m["id"] == mid)
     assert len(row["reactions"]) == 1
 
@@ -110,7 +130,7 @@ def test_pagination_before_id(client, auth):
             headers=auth,
         ).json()
         ids.append(msg["id"])
-    page = client.get(f"/api/channels/general/messages?limit=2&before_id={ids[-1]}")
+    page = client.get(f"/api/channels/general/messages?limit=2&before_id={ids[-1]}", headers=auth)
     assert page.status_code == 200
     bodies = [m["body"] for m in page.json()]
     assert bodies[-1] == "m2"
@@ -130,15 +150,15 @@ def test_thread_endpoint(client, auth):
         json={"author": "uzeb", "body": "child", "parent_id": parent["id"]},
         headers=auth,
     ).json()
-    data = client.get(f"/api/messages/{parent['id']}/thread").json()
+    data = client.get(f"/api/messages/{parent['id']}/thread", headers=auth).json()
     assert data["parent"]["id"] == parent["id"]
     assert len(data["replies"]) == 1
     assert data["replies"][0]["id"] == reply["id"]
     assert "reactions" in data["parent"]
 
 
-def test_thread_404(client):
-    assert client.get("/api/messages/99999/thread").status_code == 404
+def test_thread_404(client, auth):
+    assert client.get("/api/messages/99999/thread", headers=auth).status_code == 404
 
 
 def test_delete_message_and_replies(client, auth):
@@ -158,7 +178,7 @@ def test_delete_message_and_replies(client, auth):
     gone = client.delete(f"/api/messages/{parent['id']}", headers=auth)
     assert gone.status_code == 200
     assert parent["id"] in gone.json()["ids"]
-    history = client.get("/api/channels/general/messages").json()
+    history = client.get("/api/channels/general/messages", headers=auth).json()
     assert all(m["id"] != parent["id"] for m in history)
     _clear_rate()
     assert client.delete("/api/messages/99999", headers=auth).status_code == 404
@@ -182,7 +202,7 @@ def test_create_and_delete_channel(client, auth):
     _clear_rate()
     deleted = client.delete("/api/channels/release-notes", headers=auth)
     assert deleted.status_code == 200
-    ids = {c["id"] for c in client.get("/api/channels").json()}
+    ids = {c["id"] for c in client.get("/api/channels", headers=auth).json()}
     assert "release-notes" not in ids
     _clear_rate()
     dm = client.delete("/api/channels/dm-swarm", headers=auth)
