@@ -1,0 +1,17 @@
+{
+  "id": "time-helper",
+  "name": "Time Helper",
+  "version": "1.0.0",
+  "description": "Example plugin — adds a plugin:time-helper:utc_now tool.",
+  "tools": [
+    {
+      "name": "utc_now",
+      "description": "Return the current UTC timestamp as ISO text.",
+      "parameters": { "type": "object", "properties": {} },
+      "handler": {
+        "type": "template",
+        "template": "UTC now (demo): use channel_digest or shell for live time in production."
+      }
+    }
+  ]
+}
