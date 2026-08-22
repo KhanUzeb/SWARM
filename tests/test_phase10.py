@@ -11,7 +11,10 @@ def _clear_rate():
 
 def test_seeded_bots_have_jobs_and_dms(client, auth):
     agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
+    assert agents["swarm"]["display_name"] == "Swarm"
     assert agents["swarm"]["job"] == "Generalist"
+    assert agents["ledger"]["display_name"] == "Ledger"
+    assert agents["coder"]["display_name"] == "Coder"
     assert agents["swarm"]["status"] == "idle"
     assert agents["swarm"]["dm_channel_id"] == "dm-swarm"
     assert agents["ledger"]["job"] == "Decision log"
@@ -237,9 +240,82 @@ def test_dm_offers_tools():
         channel_kind="room",
     )
     assert agent.should_offer_tools(
-        [{"author_kind": "system", "body": "[routine:digest] go"}],
-        channel_kind="room",
+        [{"author_kind": "human", "body": "hi"}],
+        channel_kind="group",
     )
+
+
+def test_custom_display_name(client, auth):
+    _clear_rate()
+    created = client.post(
+        "/api/agents",
+        json={"display_name": "Maya Chen", "system_prompt": "Help with ops.", "job": "Operations"},
+        headers=auth,
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["name"] == "maya-chen"
+    assert body["display_name"] == "Maya Chen"
+    agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
+    assert agents["maya-chen"]["display_name"] == "Maya Chen"
+    _clear_rate()
+    patched = client.patch(
+        "/api/agents/maya-chen",
+        json={"display_name": "Maya"},
+        headers=auth,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["display_name"] == "Maya"
+    assert patched.json()["name"] == "maya-chen"
+
+
+def test_group_chat_triggers_members_without_mention(client, auth, monkeypatch):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+        if on_stream_start is not None:
+            await on_stream_start()
+        if on_token is not None:
+            await on_token("here")
+        return {"reply": agent_row["name"], "tool_events": [], "usage": {}}
+
+    monkeypatch.setattr("backend.agent.generate_reply", fake_reply)
+    monkeypatch.setattr("backend.main.agent.generate_reply", fake_reply)
+    _clear_rate()
+    created = client.post(
+        "/api/channels",
+        json={"name": "launch team", "kind": "group", "members": ["swarm", "ledger"]},
+        headers=auth,
+    )
+    assert created.status_code == 200
+    group = created.json()
+    assert group["kind"] == "group"
+    assert group["id"] == "launch-team"
+    assert group["members"] == ["swarm", "ledger"]
+    channels = {c["id"]: c for c in client.get("/api/channels", headers=auth).json()}
+    assert channels["launch-team"]["members"] == ["swarm", "ledger"]
+
+    _clear_rate()
+    token = auth["Authorization"].removeprefix("Bearer ")
+    with client.websocket_connect("/ws/launch-team") as ws:
+        ws.send_json({"token": token})
+        ws.send_json({"body": "what's the status"})
+        authors = []
+        for _ in range(20):
+            event = ws.receive_json()
+            if event["type"] == "message" and event["message"].get("author_kind") == "agent":
+                authors.append(event["message"]["author"])
+                if "swarm" in authors and "ledger" in authors:
+                    break
+        assert authors[:2] == ["swarm", "ledger"]
+
+
+def test_group_needs_members(client, auth):
+    _clear_rate()
+    res = client.post(
+        "/api/channels",
+        json={"name": "empty-group", "kind": "group", "members": []},
+        headers=auth,
+    )
+    assert res.status_code == 400
 
 
 def test_workspace_write_stays_in_sandbox(tmp_path, monkeypatch):

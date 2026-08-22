@@ -64,7 +64,7 @@ Projects solving adjacent problems, and where swarm sits.
 ## What ships today (V2 + Phase 10)
 
 ```
-You ──► room or Bot 1:1 ──► @mention or DM message
+You ──► room, group, or Bot 1:1 ──► @mention, group, or DM message
                               │
                               ▼
                     sequential agent run(s)
@@ -77,7 +77,8 @@ You ──► room or Bot 1:1 ──► @mention or DM message
 ```
 
 - **Rooms + threads + reactions** — normal team chat primitives.
-- **Named Bots** — job title, system prompt, tool harness, per-Bot 1:1 (`dm-<name>` hears you without `@`).
+- **Named Bots** — job title, custom display name, mention handle, tool harness, per-Bot 1:1 (`dm-<name>` hears you without `@`).
+- **Group chats** — pick member Bots; they all hear you without `@`. `@mention` still targets one.
 - **Multi-agent** — `@swarm @ledger` replies in mention order; agent replies can `@handoff` to another Bot (depth cap 2).
 - **Skills** — account-wide `/skill-name` invoke + `save_skill` tool.
 - **Routines** — cron-like intervals posting into a Bot's 1:1.
@@ -129,17 +130,19 @@ Use this script when showing the project:
 
 1. **Problem (30s):** "ChatGPT is a sidebar. Slack doesn't see what the agent did. Buzz fixes both but ships half a platform company. swarm is the minimum experiment: same room, same audit trail."
 
-2. **Room (60s):** Post in `#general`: `@swarm what's blocking the release?` Show streaming reply, tool audit line if shell/history runs, thread reply.
+2. **Room (60s):** Post in `#general`: `@swarm what's blocking the release?` Show streaming reply, tool audit line if shell/history runs, thread reply. Pip in the sidebar tracks connection and Bot status.
 
-3. **Specialist (60s):** Open `dm-piper` (Product Performance Bot). No `@` needed. Ask for a latency summary. Show `remember` note persisting across messages.
+3. **Specialist (60s):** Create a Bot named "Maya" (handle `@maya`). Open their 1:1. No `@` needed.
 
-4. **Handoff (45s):** In a room, `@swarm draft the update; @ledger log the decision.` Show sequential replies in order.
+4. **Group (45s):** New group → pick Swarm + Maya. Message the room — both reply without `@`.
 
-5. **Governance (45s):** Bot calls `request_approval`. Human clicks Allow once. Bot continues in-thread.
+5. **Handoff (45s):** In a room, `@swarm draft the update; @ledger log the decision.` Show sequential replies in order.
 
-6. **Computer (30s):** Open computer panel — shared workspace files the Bots wrote.
+6. **Governance (45s):** Bot calls `request_approval`. Human clicks Allow once. Bot continues in-thread.
 
-7. **Close (15s):** "Self-hosted, spec'd, tested, Docker. V3 adds admin + onboarding + demo mode. Buzz if we need signing and git; SlackHive if we live in Slack."
+7. **Computer (30s):** Open computer panel — shared workspace files the Bots wrote.
+
+8. **Close (15s):** "Self-hosted, spec'd, tested, Docker. V3 adds admin + onboarding + demo mode. Buzz if we need signing and git; SlackHive if we live in Slack."
 
 ---
 

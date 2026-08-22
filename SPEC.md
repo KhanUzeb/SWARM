@@ -17,8 +17,8 @@ to leave broken.
 | name       | TEXT  | unique, display name |
 | topic      | TEXT  | default `''` |
 | created_at | REAL  | unix timestamp |
-| kind       | TEXT  | `room` (shared channel) or `dm` (a Bot's 1:1). default `room` |
-| owner_agent | TEXT | for `dm`: the Bot that always hears this channel. NULL for rooms |
+| kind       | TEXT  | `room` (shared channel), `dm` (a Bot's 1:1), or `group` (selected Bots). default `room` |
+| owner_agent | TEXT | for `dm`: the Bot that always hears this channel. NULL for rooms/groups |
 
 ### `messages`
 
@@ -68,6 +68,7 @@ a duplicate row or an error.
 | tools           | TEXT    | JSON array of allowed tool names |
 | job             | TEXT    | primary job title; default `Teammate` |
 | status          | TEXT    | `idle` \| `working` \| `needs_approval` |
+| display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
 
 Allowed tool names include **11 builtins** (`read_only_shell`,
 `search_channel_history`, `remember`, `recall`, `list_workspace`,
@@ -91,6 +92,16 @@ Existing databases that predate these columns are upgraded in
 `ledger`'s tools are rewritten to the no-shell default only when the
 `tools` column is first added. Pre-Phase-10 `swarm` rows keep whatever
 `tools` JSON they already had; a fresh DB gets the full builtin default.
+
+### `channel_members`
+
+| column     | type    | notes |
+|------------|---------|-------|
+| channel_id | TEXT    | FK → channels.id |
+| agent_name | TEXT    | Bot handle |
+| sort_order | INTEGER | reply order in a group |
+
+`PRIMARY KEY (channel_id, agent_name)`. Used by `kind=group` rooms. Cap 8 members. List/get channel payloads include `members: string[]`.
 
 ### `custom_tools`
 
@@ -279,16 +290,20 @@ Auth required. List provider catalog; connect/disconnect encrypted keys.
 Auth required.
 ```json
 [{"id": "general", "name": "general", "topic": "wherever, whatever",
-  "created_at": 1786353998.09, "kind": "room", "owner_agent": null}]
+  "created_at": 1786353998.09, "kind": "room", "owner_agent": null, "members": []}]
 ```
 
 ### `POST /api/channels`
 Auth required.
 ```json
-// request
+// request — room
 {"name": "release-planning", "topic": "optional"}
+// request — group (members hear without @)
+{"name": "launch team", "kind": "group", "members": ["swarm", "ledger"], "topic": "optional"}
 // response 200
-{"id": "release-planning", "name": "release-planning", "topic": "optional"}
+{"id": "release-planning", "name": "release-planning", "topic": "optional",
+ "kind": "room", "owner_agent": null, "members": []}
+// 400 if kind=group with no members, 404 if a member handle is unknown,
 // 409 if id exists, 401 if unauthenticated, 429 if rate limited
 ```
 
@@ -360,7 +375,7 @@ Agents can reply if either `groq` or `openrouter` is true.
 No auth. Without `channel_id`, returns every agent. With it, returns
 agents scoped to that channel plus unscoped (global) agents. Each row
 includes harness fields; `tools` is a JSON array. Each row also has
-`job`, `status`, and `dm_channel_id`. Memories are not embedded on
+`job`, `status`, `display_name`, and `dm_channel_id`. Memories are not embedded on
 the list.
 
 ### `GET /api/agents/{name}`
@@ -377,6 +392,7 @@ last).
   "tools": ["read_only_shell", "search_channel_history", "remember", "recall"],
   "job": "Generalist",
   "status": "idle",
+  "display_name": "Swarm",
   "dm_channel_id": "dm-swarm",
   "created_at": 1786353998.09,
   "memories": [
@@ -392,11 +408,13 @@ last).
 Auth required (any valid token — no admin check, see section 2).
 Harness fields are optional; omitted values use the defaults above.
 `tools` defaults to all eight names. `job` defaults to `Teammate`.
-`channel_scope`, if set, must be an existing channel id. A 1:1 channel
+`display_name` is the friendly name (spaces allowed, max 40). If
+`name` is omitted, it is slugified from `display_name` (`Maya Chen` →
+`maya-chen`). `channel_scope`, if set, must be an existing channel id. A 1:1 channel
 `dm-<name>` is created with the agent.
 ```json
 // request
-{"name": "scribe", "system_prompt": "...", "model": "openai/gpt-oss-120b",
+{"name": "scribe", "display_name": "Scribe", "system_prompt": "...", "model": "openai/gpt-oss-120b",
  "channel_scope": null, "history_window": 12, "max_tool_calls": 3,
  "job": "Note taker",
  "tools": ["search_channel_history", "remember", "recall"]}
@@ -405,7 +423,7 @@ Harness fields are optional; omitted values use the defaults above.
 ```
 
 ### `PATCH /api/agents/{name}`
-Auth required. Any subset of `system_prompt`, `model`,
+Auth required. Any subset of `display_name`, `system_prompt`, `model`,
 `channel_scope`, `history_window`, `max_tool_calls`, `tools`, `job`.
 `channel_scope: null` unscope the agent. Seeded personas (`swarm`,
 `ledger`) are editable like any other.
@@ -521,6 +539,9 @@ Live `message` events from a human/agent/system write may omit
   - In a Bot's 1:1 (`kind=dm`, `owner_agent=<name>`), every human
     message and every `[routine:…]` system message runs that Bot.
     An `@mention` is not required.
+  - In a group (`kind=group`), every human message runs **all member
+    Bots** in `sort_order` unless the body `@mentions` specific Bots —
+    then only those run. Tools are always offered (same as a 1:1).
   - In a room, a human message triggers an agent only when
     `@<agent_name>` appears case-insensitively as a whole word
     (`re.search(r"@name\b")` — `@swarmy` does not trigger `@swarm`).
@@ -562,7 +583,7 @@ Live `message` events from a human/agent/system write may omit
   Fast/cheap override: `openai/gpt-oss-20b`. `SWARM_AGENT_MODEL`
   still overrides every agent globally if set.
 - **Tools available**: the agent's `tools` list, exposed via function
-  calling. In a 1:1 (`kind=dm`) and on `[routine:…]` ticks, tools are
+  calling. In a 1:1 (`kind=dm`), a group (`kind=group`), and on `[routine:…]` ticks, tools are
   always offered. In a room they are offered **only when the latest
   human message looks like a file/history/memory/skill/workspace
   request**. Greetings in a room (`@swarm hi`) still get a text-only
@@ -665,6 +686,8 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR11.1 | Onboarding: register → job template → create Bot → 1:1 + suggested prompt | ✅ (UI) |
 | FR11.2 | `SWARM_DEMO=1` mock replies + optional `#general` seed thread | ✅ |
 | FR11.3 | `/api/status.demo`, `/api/jobs` suggested fields, register `created` | ✅ |
+| FR12.1 | Custom Bot `display_name`; mention handle stays `@name` | ✅ |
+| FR12.2 | Group chats: members hear without `@`; `@` still targets one | ✅ |
 
 ---
 

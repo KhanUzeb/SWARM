@@ -27,6 +27,16 @@ export function initials(name) {
   return String(name || "?").slice(0, 2).toUpperCase();
 }
 
+export function slugFromName(text) {
+  const slug = String(text || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+  return slug || "bot";
+}
+
+export function botLabel(agent) {
+  if (!agent) return "";
+  return String(agent.display_name || agent.name || "").trim() || agent.name;
+}
+
 export function fmtTime(ts) {
   if (!ts) return "";
   return new Date(ts * 1000).toTimeString().slice(0, 5);

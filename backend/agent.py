@@ -107,7 +107,7 @@ def should_offer_tools(
 ) -> bool:
     """True if this turn looks like work. DMs and routines always offer tools.
     Shared rooms still skip greetings so small models don't tool-call 'hi'."""
-    if channel_kind == "dm":
+    if channel_kind in ("dm", "group"):
         return True
     for m in reversed(history):
         body = m.get("body") or ""
@@ -375,9 +375,13 @@ def _build_messages(
     job: str | None = None,
     skills: list[dict[str, Any]] | None = None,
     invoked_skills: list[dict[str, Any]] | None = None,
+    group_mates: list[str] | None = None,
+    display_name: str | None = None,
 ) -> list[dict[str, Any]]:
     tools = allowed_tools if allowed_tools is not None else list(DEFAULT_TOOLS)
     policy = _TOOL_POLICY
+    if display_name:
+        policy = f"Your name in chat is {display_name}.\n" + policy
     if job:
         policy = f"Primary job: {job}.\n" + policy
     if tools:
@@ -385,6 +389,15 @@ def _build_messages(
     else:
         policy += " You have no tools for this turn."
     blocks = [system_prompt, policy]
+    if group_mates:
+        others = [n for n in group_mates if n]
+        if others:
+            blocks.append(
+                "You are in a group chat with: "
+                + ", ".join(f"@{n}" for n in others)
+                + ". Reply as yourself. If another member already covered it, "
+                "keep your reply short or @mention them to hand off."
+            )
     if skills:
         names = ", ".join(f"/{s['name']}" for s in skills)
         blocks.append(
@@ -797,10 +810,12 @@ async def generate_reply(
                 if slug in by_name and by_name[slug] not in invoked:
                     invoked.append(by_name[slug])
             break
+    group_mates = (channel or {}).get("members") if channel_kind == "group" else None
     messages = _build_messages(
         agent_row["system_prompt"], history,
         window=window, allowed_tools=allowed, notes=notes, summary=summary,
         job=agent_row.get("job"), skills=skills, invoked_skills=invoked,
+        group_mates=group_mates, display_name=agent_row.get("display_name"),
     )
     use_tools = should_offer_tools(history, channel_kind=channel_kind) and bool(allowed)
 

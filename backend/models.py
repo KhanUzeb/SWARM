@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+import re
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Any
 
 from .tools.registry import (
@@ -14,6 +16,17 @@ DEFAULT_TOOLS = DEFAULT_BUILTIN_TOOLS
 LEDGER_TOOLS = LEDGER_BUILTIN_TOOLS
 DEFAULT_JOB = "Teammate"
 AGENT_STATUSES = ("idle", "working", "needs_approval")
+HANDLE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+MAX_GROUP_MEMBERS = 8
+
+
+def slugify_handle(text: str, fallback: str = "bot") -> str:
+    raw = re.sub(r"[^a-z0-9]+", "-", (text or "").strip().lower()).strip("-")[:32]
+    return raw if HANDLE_RE.match(raw) else fallback
+
+
+def pretty_name(handle: str) -> str:
+    return (handle or "bot").replace("-", " ").replace("_", " ").strip().title() or "Bot"
 
 # Groq shut down llama-3.1-8b-instant and llama-3.3-70b-versatile on
 # 2026-08-16 for free/developer tiers.
@@ -47,6 +60,18 @@ def normalize_tools(value: list[str] | None) -> list[str] | None:
 class ChannelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     topic: str = ""
+    kind: str = Field(default="room", pattern=r"^(room|group)$")
+    members: list[str] = Field(default_factory=list, max_length=MAX_GROUP_MEMBERS)
+
+    @field_validator("members")
+    @classmethod
+    def members_ok(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in value:
+            name = (raw or "").strip()
+            if name and name not in out:
+                out.append(name)
+        return out[:MAX_GROUP_MEMBERS]
 
 
 class MessageCreate(BaseModel):
@@ -88,7 +113,8 @@ class ReactionCreate(BaseModel):
 
 
 class AgentCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=32, pattern=r"^[a-zA-Z0-9_\-]+$")
+    name: str = Field(default="", max_length=32)
+    display_name: str = Field(default="", max_length=40)
     system_prompt: str = Field(min_length=1, max_length=4000)
     model: str = DEFAULT_GROQ_MODEL
     channel_scope: str | None = None
@@ -96,6 +122,20 @@ class AgentCreate(BaseModel):
     max_tool_calls: int = Field(default=3, ge=1, le=8)
     tools: list[str] | None = None
     job: str = Field(default=DEFAULT_JOB, min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def names_ok(self) -> AgentCreate:
+        handle = (self.name or "").strip()
+        display = (self.display_name or "").strip()
+        if not handle and not display:
+            raise ValueError("name is required")
+        if not handle:
+            handle = slugify_handle(display)
+        if not HANDLE_RE.match(handle) or not (1 <= len(handle) <= 32):
+            raise ValueError("name must be 1-32 letters, numbers, _ or -")
+        if not display:
+            display = pretty_name(handle)
+        return self.model_copy(update={"name": handle, "display_name": display[:40]})
 
     @field_validator("model")
     @classmethod
@@ -109,6 +149,7 @@ class AgentCreate(BaseModel):
 
 
 class AgentPatch(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=40)
     system_prompt: str | None = Field(default=None, min_length=1, max_length=4000)
     model: str | None = Field(default=None, min_length=1, max_length=128)
     channel_scope: str | None = None

@@ -3,10 +3,10 @@
 **Agents as teammates, not a sidebar.** A self-hosted team workspace where named LLM Bots join channels, take jobs, hand off to each other, and leave a visible audit trail — the minimum experiment behind [Block Buzz](https://github.com/block/buzz)'s thesis, with [Grok Bot](https://docs.x.ai/grok-bot/overview)-style roles you can run on your own VPS.
 
 ```
-Human posts in #general or a Bot 1:1
+Human posts in #general, a Bot 1:1, or a group chat
         │
         ▼
-  @mention or DM triggers Bot(s)
+  @mention, DM, or group membership triggers Bot(s)
         │
         ├── tool calls → system audit messages in-thread
         ├── streaming reply → persisted as normal message
@@ -66,10 +66,11 @@ Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/Ope
 ## What you can show in a demo
 
 1. **Room:** `@swarm what's blocking release?` — streaming reply + optional tool audit line.
-2. **1:1:** Talk to `dm-swarm` or a custom Bot without mentions.
-3. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
-4. **Governance:** Bot requests approval → Allow once / Deny in UI.
-5. **Computer:** Shared sandbox files Bots wrote; routines tick in the background.
+2. **1:1:** Talk to `dm-swarm` or a custom-named Bot without mentions.
+3. **Group:** Create a group, pick Bots — they all hear you without `@`. `@mention` still targets one.
+4. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
+5. **Governance:** Bot requests approval → Allow once / Deny in UI.
+6. **Computer:** Shared sandbox files Bots wrote; routines tick in the background. Pip (sidebar mascot) tracks connection and Bot status.
 
 Full script: [`VISION.md` § Demo narrative](VISION.md).
 

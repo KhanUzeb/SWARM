@@ -9,12 +9,14 @@ Track feature layers for easy `git revert` / bisect. Each row maps to one commit
 | Add API security guard and frontend provider UI shell | `backend/security.py`, mascot, `frontend/src/ai-support/`, cache | Removes origin guard + UI panels (backend still has providers) |
 | Wire tools, providers, security, and onboarding into app | `db.py`, `agent.py`, `main.py`, `App.jsx`, tests | Breaks features if reverted alone — revert prior commits first |
 | Document tools, providers, and API security in specs | `README.md`, `SPEC.md`, `PROJECT.md`, this file | Docs only |
+| Add Pip mascot, custom Bot names, and group chats | mascot, `display_name`, `channel_members`, group trigger | Reverts companion UI, friendly names, and group rooms |
 
 ## Feature summary (post-merge)
 
 - **Tools:** 11 builtins + `plugins/*/manifest.json` + DB custom tools (`POST /api/tools/custom`)
 - **AI providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together (tau-inspired resolver); UI in Computer → AI; onboarding step 1
 - **Security:** Bearer required on data reads; CORS allowlist; `X-Swarm-Client: web` for browser origins
-- **Frontend:** Bee mascot, cached `apiJson()`, 3-step onboarding with API key save
+- **Frontend:** Pip mascot (idle/think/sleep), cached `apiJson()`, 3-step onboarding with API key save
+- **Bots:** Custom `display_name` (mention handle stays `@slug`); group chats where members hear without `@`
 
 Reference: [Hugging Face tau `src/tau_ai`](https://github.com/huggingface/tau/tree/main/src/tau_ai)

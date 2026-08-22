@@ -78,6 +78,7 @@ swarm/
 | 9     | Custom agents + memory     | ✅ done | Agent create/edit UI + GET/PATCH, per-agent harness (window, tool toggles), `agent_memory` notes via remember/recall, context injects notes + rolling summary, classified errors, one retry, optional OpenRouter |
 | 10    | Grok Bot teammates         | ✅ done | Named jobs, 1:1 DMs (no @ needed), job templates, skills, interval routines, approvals, shared workspace/"computer" panel, bot-to-bot handoff, status chips |
 | 11    | V3 onboarding + demo       | ✅ done | Register → job picker → create Bot → 1:1 with suggested prompt; `SWARM_DEMO=1` mock replies + `#general` seed thread |
+| 12    | Companion + groups         | ✅ done | Pip mascot, custom Bot display names, group chats with member trigger |
 
 ## What changed from the original plan
 

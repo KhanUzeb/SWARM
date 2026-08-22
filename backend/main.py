@@ -177,7 +177,17 @@ async def api_create_channel(payload: ChannelCreate, handle: str = Depends(requi
     channel_id = payload.name.strip().lower().replace(" ", "-")
     if await db.channel_exists(channel_id):
         raise HTTPException(409, "channel already exists")
-    return await db.create_channel(channel_id, payload.name, payload.topic)
+    kind = payload.kind if payload.kind in ("room", "group") else "room"
+    members = payload.members if kind == "group" else []
+    if kind == "group":
+        if not members:
+            raise HTTPException(400, "group needs at least one bot")
+        missing = [n for n in members if not await db.agent_exists(n)]
+        if missing:
+            raise HTTPException(404, f"no such agent: {missing[0]}")
+    return await db.create_channel(
+        channel_id, payload.name, payload.topic, kind=kind, members=members,
+    )
 
 
 @app.get("/api/channels/{channel_id}/messages")
@@ -318,6 +328,7 @@ async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_a
         payload.max_tool_calls,
         payload.tools,
         payload.job,
+        payload.display_name,
     )
 
 
@@ -680,15 +691,17 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
 
     to_run: list[dict] = []
     seen: set[str] = set()
+    channel = await db.get_channel(channel_id)
+    ch_kind = (channel or {}).get("kind") or "room"
 
     if kind in ("human", "system"):
-        channel = await db.get_channel(channel_id)
-        owner = (channel or {}).get("owner_agent") if channel and channel.get("kind") == "dm" else None
-        if owner:
-            row = await db.fetch_agent(owner)
-            if row:
-                to_run.append(row)
-                seen.add(row["name"])
+        if ch_kind == "dm":
+            owner = (channel or {}).get("owner_agent")
+            if owner:
+                row = await db.fetch_agent(owner)
+                if row:
+                    to_run.append(row)
+                    seen.add(row["name"])
 
     scoped_agents = await db.list_agents(channel_id)
     mentioned = agent.find_mentioned_agents(body, scoped_agents)
@@ -699,6 +712,15 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
         asyncio.create_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1))
         return
 
+    if kind in ("human", "system") and ch_kind == "group" and not mentioned:
+        for name in (channel or {}).get("members") or []:
+            if name in seen:
+                continue
+            row = await db.fetch_agent(name)
+            if row:
+                to_run.append(row)
+                seen.add(row["name"])
+
     for a in mentioned:
         if a["name"] not in seen:
             to_run.append(a)
@@ -708,7 +730,8 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
         # one task for the whole batch, agents run in order inside it —
         # asyncio.create_task per-agent would race and violate FR4.2's
         # "in the order mentioned" guarantee. DM owner is prepended so a
-        # 1:1 always hears you without an @mention.
+        # 1:1 always hears you without an @mention. Group members hear
+        # the same way unless the message @mentions specific bots.
         asyncio.create_task(_run_agents_in_order(channel_id, to_run, depth=depth))
 
 

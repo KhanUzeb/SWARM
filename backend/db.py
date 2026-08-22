@@ -24,6 +24,7 @@ from .models import (
     DEFAULT_TOOLS,
     GROQ_MODEL_ALIASES,
     LEDGER_TOOLS,
+    pretty_name,
     resolve_groq_model,
 )
 
@@ -79,7 +80,15 @@ CREATE TABLE IF NOT EXISTS agents (
     max_tool_calls  INTEGER NOT NULL DEFAULT 3,
     tools           TEXT NOT NULL DEFAULT '{_DEFAULT_TOOLS_JSON}',
     job             TEXT NOT NULL DEFAULT '{DEFAULT_JOB}',
-    status          TEXT NOT NULL DEFAULT 'idle'
+    status          TEXT NOT NULL DEFAULT 'idle',
+    display_name    TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS channel_members (
+    channel_id  TEXT NOT NULL REFERENCES channels(id),
+    agent_name  TEXT NOT NULL,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (channel_id, agent_name)
 );
 
 CREATE TABLE IF NOT EXISTS agent_memory (
@@ -253,7 +262,10 @@ def public_agent(row: dict[str, Any]) -> dict[str, Any]:
     out["max_tool_calls"] = int(out.get("max_tool_calls") or 3)
     out["job"] = (out.get("job") or DEFAULT_JOB).strip() or DEFAULT_JOB
     out["status"] = out.get("status") or "idle"
-    out["dm_channel_id"] = dm_channel_id(out["name"])
+    handle = out.get("name") or "bot"
+    display = (out.get("display_name") or "").strip()
+    out["display_name"] = display or pretty_name(handle)
+    out["dm_channel_id"] = dm_channel_id(handle)
     return out
 
 
@@ -292,6 +304,24 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'"
         )
+    if "display_name" not in cols:
+        await db.execute(
+            "ALTER TABLE agents ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"
+        )
+        await db.execute(
+            "UPDATE agents SET display_name = name WHERE display_name = '' OR display_name IS NULL"
+        )
+        for handle in ("swarm", "ledger", "coder"):
+            await db.execute(
+                "UPDATE agents SET display_name = ? WHERE name = ?",
+                (pretty_name(handle), handle),
+            )
+    await db.execute(
+        "CREATE TABLE IF NOT EXISTS channel_members ("
+        "channel_id TEXT NOT NULL, agent_name TEXT NOT NULL, "
+        "sort_order INTEGER NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (channel_id, agent_name))"
+    )
     for old, new in GROQ_MODEL_ALIASES.items():
         await db.execute("UPDATE agents SET model = ? WHERE model = ?", (new, old))
 
@@ -318,9 +348,9 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
         if await cur.fetchone() is None:
             await db.execute(
                 "INSERT INTO agents (name, system_prompt, model, channel_scope, "
-                "created_at, history_window, max_tool_calls, tools, job, status) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')",
-                (name, prompt, model, scope, time.time(), window, cap, json.dumps(tools), job),
+                "created_at, history_window, max_tool_calls, tools, job, status, display_name) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?)",
+                (name, prompt, model, scope, time.time(), window, cap, json.dumps(tools), job, pretty_name(name)),
             )
 
     cur = await db.execute("SELECT name, job FROM agents")
@@ -358,9 +388,9 @@ async def init_db() -> None:
             for name, prompt, model, scope, window, cap, tools, job in _DEFAULT_AGENTS:
                 await db.execute(
                     "INSERT INTO agents (name, system_prompt, model, channel_scope, "
-                    "created_at, history_window, max_tool_calls, tools, job, status) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')",
-                    (name, prompt, model, scope, time.time(), window, cap, json.dumps(tools), job),
+                    "created_at, history_window, max_tool_calls, tools, job, status, display_name) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?)",
+                    (name, prompt, model, scope, time.time(), window, cap, json.dumps(tools), job, pretty_name(name)),
                 )
             await db.commit()
             await _ensure_schema(db)
@@ -433,12 +463,55 @@ async def _count_messages(channel_id: str) -> int:
 
 # ------------------------------------------------------------- channels ---
 
+def public_channel(row: dict[str, Any], members: list[str] | None = None) -> dict[str, Any]:
+    out = dict(row)
+    out["members"] = list(members or [])
+    return out
+
+
+async def _members_by_channel(db: aiosqlite.Connection) -> dict[str, list[str]]:
+    cur = await db.execute(
+        "SELECT channel_id, agent_name FROM channel_members ORDER BY sort_order, agent_name"
+    )
+    grouped: dict[str, list[str]] = {}
+    for channel_id, agent_name in await cur.fetchall():
+        grouped.setdefault(channel_id, []).append(agent_name)
+    return grouped
+
+
+async def list_channel_members(channel_id: str) -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT agent_name FROM channel_members WHERE channel_id = ? "
+            "ORDER BY sort_order, agent_name",
+            (channel_id,),
+        )
+        return [row[0] for row in await cur.fetchall()]
+
+
+async def set_channel_members(channel_id: str, names: list[str]) -> list[str]:
+    unique: list[str] = []
+    for name in names:
+        if name and name not in unique:
+            unique.append(name)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM channel_members WHERE channel_id = ?", (channel_id,))
+        for i, name in enumerate(unique):
+            await db.execute(
+                "INSERT INTO channel_members (channel_id, agent_name, sort_order) VALUES (?, ?, ?)",
+                (channel_id, name, i),
+            )
+        await db.commit()
+    return unique
+
+
 async def list_channels() -> list[dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM channels ORDER BY created_at")
         rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        members = await _members_by_channel(db)
+        return [public_channel(dict(r), members.get(r["id"], [])) for r in rows]
 
 
 async def create_channel(
@@ -448,6 +521,7 @@ async def create_channel(
     *,
     kind: str = "room",
     owner_agent: str | None = None,
+    members: list[str] | None = None,
 ) -> dict[str, Any]:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -455,10 +529,19 @@ async def create_channel(
             "VALUES (?, ?, ?, ?, ?, ?)",
             (channel_id, name, topic, time.time(), kind, owner_agent),
         )
+        roster: list[str] = []
+        for i, agent_name in enumerate(members or []):
+            if not agent_name or agent_name in roster:
+                continue
+            await db.execute(
+                "INSERT INTO channel_members (channel_id, agent_name, sort_order) VALUES (?, ?, ?)",
+                (channel_id, agent_name, i),
+            )
+            roster.append(agent_name)
         await db.commit()
     return {
         "id": channel_id, "name": name, "topic": topic,
-        "kind": kind, "owner_agent": owner_agent,
+        "kind": kind, "owner_agent": owner_agent, "members": roster,
     }
 
 
@@ -467,7 +550,15 @@ async def get_channel(channel_id: str) -> dict[str, Any] | None:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM channels WHERE id = ?", (channel_id,))
         row = await cur.fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        cur = await db.execute(
+            "SELECT agent_name FROM channel_members WHERE channel_id = ? "
+            "ORDER BY sort_order, agent_name",
+            (channel_id,),
+        )
+        members = [r[0] for r in await cur.fetchall()]
+        return public_channel(dict(row), members)
 
 
 async def channel_exists(channel_id: str) -> bool:
@@ -614,6 +705,7 @@ async def delete_channel(channel_id: str) -> bool:
         await db.execute("DELETE FROM messages WHERE channel_id = ?", (channel_id,))
         await db.execute("DELETE FROM agent_memory WHERE channel_id = ?", (channel_id,))
         await db.execute("DELETE FROM approvals WHERE channel_id = ?", (channel_id,))
+        await db.execute("DELETE FROM channel_members WHERE channel_id = ?", (channel_id,))
         await db.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
         await db.commit()
         return True
@@ -717,18 +809,20 @@ async def create_agent(
     max_tool_calls: int = 3,
     tools: list[str] | None = None,
     job: str = DEFAULT_JOB,
+    display_name: str | None = None,
 ) -> dict[str, Any]:
     tool_names = tools if tools is not None else list(DEFAULT_TOOLS)
     job_title = (job or DEFAULT_JOB).strip() or DEFAULT_JOB
     model = resolve_groq_model(model)
+    label = (display_name or "").strip() or pretty_name(name)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO agents (name, system_prompt, model, channel_scope, "
-            "created_at, history_window, max_tool_calls, tools, job, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')",
+            "created_at, history_window, max_tool_calls, tools, job, status, display_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?)",
             (
                 name, system_prompt, model, channel_scope, time.time(),
-                history_window, max_tool_calls, json.dumps(tool_names), job_title,
+                history_window, max_tool_calls, json.dumps(tool_names), job_title, label,
             ),
         )
         await db.commit()
@@ -736,6 +830,7 @@ async def create_agent(
         await db.commit()
     return {
         "name": name,
+        "display_name": label,
         "system_prompt": system_prompt,
         "model": model,
         "channel_scope": channel_scope,
@@ -754,6 +849,7 @@ async def update_agent(name: str, fields: dict[str, Any]) -> dict[str, Any] | No
     allowed = {
         "system_prompt", "model", "channel_scope",
         "history_window", "max_tool_calls", "tools", "job", "status",
+        "display_name",
     }
     sets: list[str] = []
     values: list[Any] = []

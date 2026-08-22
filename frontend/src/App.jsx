@@ -5,9 +5,9 @@ import ProviderPanel from "./ai-support/ProviderPanel.jsx";
 import ToolsPanel from "./ai-support/ToolsPanel.jsx";
 import Mascot from "./components/Mascot.jsx";
 import {
-  ALL_TOOLS, CACHE_TTL, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, apiJson, authHeaders, bustCache,
+  ALL_TOOLS, CACHE_TTL, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, apiJson, authHeaders, botLabel, bustCache,
   escapeHtml, extractPaper, fmtTime, formatInline, groupedWith, initials, insertMention,
-  mentionQuery, roleLine, statusLabel, tokenizeBody,
+  mentionQuery, slugFromName, statusLabel, tokenizeBody,
 } from "./lib.js";
 
 function renderMath(tex, display) {
@@ -97,16 +97,16 @@ function Toast({ toast }) {
   return <div id="toast" className={`visible${toast.error ? " error" : ""}`} role="status">{toast.msg}</div>;
 }
 
-function MessageRow({ m, grouped, inThread, reactions, replyCount, onReply, onReact, onOpenThread, onToggleEmoji, onDelete }) {
+function MessageRow({ m, grouped, inThread, reactions, replyCount, onReply, onReact, onOpenThread, onToggleEmoji, onDelete, label }) {
   const counts = {};
   for (const r of reactions || []) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
   return (
     <div className={`row ${m.author_kind || "human"}${grouped ? " grouped" : ""}${m.streaming ? " streaming" : ""}`}>
       <div className="row-main">
-        <div className="avatar">{initials(m.author)}</div>
+        <div className="avatar">{initials(label || m.author)}</div>
         <div className="content">
           <div className="meta">
-            <span className="who">{m.author}</span>
+            <span className="who">{label || m.author}</span>
             {m.author_kind === "agent" && <span className="badge">{m.author === "coder" ? "code" : "agent"}</span>}
             <span className="ts">{fmtTime(m.created_at)}</span>
           </div>
@@ -189,7 +189,9 @@ export default function App() {
   const [computerOpen, setComputerOpen] = useState(() => localStorage.getItem("swarm_computer") !== "0");
   const [showTools, setShowTools] = useState(() => localStorage.getItem("swarm_show_tools") === "1");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [channelModal, setChannelModal] = useState(false);
+  const [channelModal, setChannelModal] = useState(null);
+  const [groupMembers, setGroupMembers] = useState([]);
+  const [handleTouched, setHandleTouched] = useState(false);
   const [agentModal, setAgentModal] = useState(null);
   const [mainView, setMainView] = useState("talk");
   const [mention, setMention] = useState({ open: false, index: 0, items: [] });
@@ -200,7 +202,7 @@ export default function App() {
   const [channelErr, setChannelErr] = useState("");
   const [agentErr, setAgentErr] = useState("");
   const [agentForm, setAgentForm] = useState({
-    name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [],
+    name: "", display_name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [],
   });
 
   const wsRef = useRef(null);
@@ -222,10 +224,16 @@ export default function App() {
 
   const current = channels.find((c) => c.id === channel) || { id: channel, name: channel, topic: "" };
   const bot = allAgents.find((a) => a.dm_channel_id === channel);
-  const rooms = channels.filter((c) => c.kind !== "dm");
+  const rooms = channels.filter((c) => c.kind !== "dm" && c.kind !== "group");
+  const groups = channels.filter((c) => c.kind === "group");
+  const group = current.kind === "group" ? current : null;
   const roots = order.map((id) => messages[id]).filter(Boolean);
   const pendingHere = approvals.filter((a) => a.status === "pending" && a.channel_id === channel);
   const pendingAll = approvals.filter((a) => a.status === "pending");
+  const labelFor = (name) => {
+    const a = allAgents.find((x) => x.name === name);
+    return a ? botLabel(a) : name;
+  };
 
   const flash = useCallback((msg, error = false) => {
     setToast({ msg, error });
@@ -660,6 +668,9 @@ export default function App() {
           step: 1,
           template: pick,
           name: pick?.suggested_name || "",
+          displayName: pick?.suggested_name
+            ? pick.suggested_name.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+            : "",
           err: "",
           busy: false,
         });
@@ -683,10 +694,15 @@ export default function App() {
   async function createOnboardingBot(ev) {
     ev.preventDefault();
     if (!onboarding?.template || !token) return;
-    const name = onboarding.name.trim();
+    const displayName = (onboarding.displayName || onboarding.name || "").trim();
+    const name = onboarding.name.trim() || slugFromName(displayName);
     const tpl = onboarding.template;
+    if (!displayName) {
+      setOnboarding((o) => ({ ...o, err: "give them a name" }));
+      return;
+    }
     if (!name || !/^[A-Za-z0-9_\-]+$/.test(name)) {
-      setOnboarding((o) => ({ ...o, err: "pick a name — letters, numbers, _ or -" }));
+      setOnboarding((o) => ({ ...o, err: "mention handle — letters, numbers, _ or -" }));
       return;
     }
     setOnboarding((o) => ({ ...o, busy: true, err: "" }));
@@ -696,6 +712,7 @@ export default function App() {
         method: "POST",
         body: {
           name,
+          display_name: displayName,
           system_prompt: tpl.prompt,
           job: tpl.job,
           model: DEFAULT_MODEL,
@@ -715,7 +732,7 @@ export default function App() {
       await enterWorkspace(user, token, created.dm_channel_id, {
         suggestedDraft: tpl.suggested_prompt || "",
       });
-      flash(`@${name} is ready — say hi in their 1:1`);
+      flash(`${displayName} is ready — say hi in their 1:1`);
     } catch {
       setOnboarding((o) => ({ ...o, busy: false, err: "couldn't create bot" }));
     }
@@ -748,7 +765,11 @@ export default function App() {
     const pool = q.mode === "at"
       ? (agents.length ? agents : allAgents)
           .filter((a) => a.name.toLowerCase().startsWith(q.query))
-          .map((a) => ({ label: `@${a.name}`, value: a.name, kind: "at" }))
+          .map((a) => ({
+            label: botLabel(a) !== a.name ? `@${a.name} · ${botLabel(a)}` : `@${a.name}`,
+            value: a.name,
+            kind: "at",
+          }))
       : skills
           .filter((s) => s.name.toLowerCase().startsWith(q.query))
           .map((s) => ({ label: `/${s.name}`, value: s.name, kind: "slash" }));
@@ -833,19 +854,30 @@ export default function App() {
     const fd = new FormData(ev.target);
     const name = String(fd.get("name") || "").trim();
     const topic = String(fd.get("topic") || "").trim();
+    const kind = channelModal === "group" ? "group" : "room";
     setChannelErr("");
     if (!name) return;
+    if (kind === "group" && groupMembers.length < 1) {
+      setChannelErr("pick at least one bot");
+      return;
+    }
     try {
-      const res = await api("/api/channels", { token, method: "POST", body: { name, topic } });
+      const res = await api("/api/channels", {
+        token,
+        method: "POST",
+        body: { name, topic, kind, members: kind === "group" ? groupMembers : [] },
+      });
       if (res.ok) {
         const c = await res.json();
-        setChannelModal(false);
+        setChannelModal(null);
+        setGroupMembers([]);
         await loadChannels();
         switchChannel(c.id);
-      } else if (res.status === 409) setChannelErr("that channel already exists");
-      else setChannelErr("couldn't create channel");
+      } else if (res.status === 409) setChannelErr("that name already exists");
+      else if (res.status === 400) setChannelErr("pick at least one bot");
+      else setChannelErr(kind === "group" ? "couldn't create group" : "couldn't create channel");
     } catch {
-      setChannelErr("couldn't create channel");
+      setChannelErr(kind === "group" ? "couldn't create group" : "couldn't create channel");
     }
   }
 
@@ -894,7 +926,8 @@ export default function App() {
 
   function openCreateAgent() {
     setAgentErr("");
-    setAgentForm({ name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [] });
+    setHandleTouched(false);
+    setAgentForm({ name: "", display_name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [] });
     setAgentModal("create");
   }
 
@@ -905,7 +938,7 @@ export default function App() {
       if (!res.ok) throw new Error("agent");
       const a = res.data;
       setAgentForm({
-        name: a.name, job: a.job || "", prompt: a.system_prompt || "", model: a.model || DEFAULT_MODEL,
+        name: a.name, display_name: a.display_name || a.name, job: a.job || "", prompt: a.system_prompt || "", model: a.model || DEFAULT_MODEL,
         scope: a.channel_scope || "", window: a.history_window || 12, tools: a.tools || ALL_TOOLS, memories: a.memories || [],
       });
       setAgentModal("edit");
@@ -917,13 +950,19 @@ export default function App() {
   async function saveAgent(ev) {
     ev.preventDefault();
     setAgentErr("");
-    const name = agentForm.name.trim();
+    const display_name = (agentForm.display_name || "").trim();
+    const name = (agentForm.name || slugFromName(display_name)).trim();
     const system_prompt = agentForm.prompt.trim();
-    if (!name || !system_prompt) {
+    if (!display_name || !system_prompt) {
       setAgentErr("name and prompt are required");
       return;
     }
+    if (!name || !/^[A-Za-z0-9_\-]+$/.test(name)) {
+      setAgentErr("mention handle — letters, numbers, _ or -");
+      return;
+    }
     const payload = {
+      display_name,
       system_prompt,
       model: agentForm.model.trim() || DEFAULT_MODEL,
       channel_scope: agentForm.scope || null,
@@ -941,7 +980,7 @@ export default function App() {
         const created = editing ? null : await res.json();
         setAgentModal(null);
         await Promise.all([loadAllAgents(), loadChannels()]);
-        flash(editing ? `Updated @${name}` : `Created @${name}`);
+        flash(editing ? `Updated ${display_name}` : `Created ${display_name}`);
         if (!editing && created?.dm_channel_id) switchChannel(created.dm_channel_id);
         return;
       }
@@ -994,8 +1033,10 @@ export default function App() {
   }
 
   const placeholder = bot
-    ? (bot.name === "coder" ? `Ask ${bot.name} for a program, proof, or listing` : `Message ${bot.name} — they already hear you`)
-    : `Message #${current.name || current.id} — @coder for code, @swarm to talk`;
+    ? (bot.name === "coder" ? `Ask ${botLabel(bot)} for a program, proof, or listing` : `Message ${botLabel(bot)} — they already hear you`)
+    : group
+      ? `Message ${current.name} — everyone in the group hears you`
+      : `Message #${current.name || current.id} — @coder for code, @swarm to talk`;
 
   const layout = [
     "app",
@@ -1092,20 +1133,37 @@ export default function App() {
             {onboarding.step === 3 && onboarding.template && (
               <form onSubmit={createOnboardingBot}>
                 <p className="kicker">Step 3 of 3</p>
-                <h1>Name @{onboarding.name || "…"}</h1>
+                <h1>Name them</h1>
                 <p>Primary job: <strong>{onboarding.template.job}</strong>. You'll land in their 1:1 with a suggested first message.</p>
-                <label htmlFor="onboard-name">Bot name</label>
+                <label htmlFor="onboard-display">Bot name</label>
+                <input
+                  id="onboard-display"
+                  required
+                  maxLength={40}
+                  placeholder="Maya"
+                  autoFocus
+                  value={onboarding.displayName || ""}
+                  onChange={(e) => {
+                    const displayName = e.target.value;
+                    setOnboarding((o) => ({
+                      ...o,
+                      displayName,
+                      name: slugFromName(displayName),
+                      err: "",
+                    }));
+                  }}
+                />
+                <label htmlFor="onboard-name">Mention handle</label>
                 <input
                   id="onboard-name"
                   required
                   maxLength={32}
                   pattern="[A-Za-z0-9_\-]+"
-                  placeholder="chief"
-                  autoFocus
+                  placeholder="maya"
                   value={onboarding.name}
                   onChange={(e) => setOnboarding((o) => ({ ...o, name: e.target.value, err: "" }))}
                 />
-                <div className="hint">Mention as @{onboarding.name || "name"} in rooms, or talk in dm-{onboarding.name || "name"} without @.</div>
+                <div className="hint">Shown as {onboarding.displayName || "Maya"}. Mention as @{onboarding.name || "maya"} in rooms, or talk in their 1:1 without @.</div>
                 <div className="err" role="alert">{onboarding.err}</div>
                 <div className="modal-actions onboarding-actions">
                   <button type="button" className="btn" onClick={() => setOnboarding((o) => ({ ...o, step: 2, err: "" }))}>Back</button>
@@ -1122,18 +1180,41 @@ export default function App() {
       {user && !onboarding && (
       <>
       {channelModal && (
-        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setChannelModal(false)}>
+        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setChannelModal(null)}>
           <div className="modal-card" role="dialog" aria-modal="true">
-            <h2>New channel</h2>
+            <h2>{channelModal === "group" ? "New group chat" : "New channel"}</h2>
             <form onSubmit={createChannel}>
               <label htmlFor="channel-name">Name</label>
-              <input id="channel-name" name="name" maxLength={64} required placeholder="release-planning" autoFocus />
+              <input id="channel-name" name="name" maxLength={64} required placeholder={channelModal === "group" ? "launch team" : "release-planning"} autoFocus />
               <label htmlFor="channel-topic">Topic <span className="optional">(optional)</span></label>
-              <input id="channel-topic" name="topic" maxLength={200} placeholder="what this channel is for" />
+              <input id="channel-topic" name="topic" maxLength={200} placeholder={channelModal === "group" ? "what this group is working on" : "what this channel is for"} />
+              {channelModal === "group" && (
+                <>
+                  <label>Bots in this group</label>
+                  <div className="member-picks">
+                    {allAgents.map((a) => {
+                      const on = groupMembers.includes(a.name);
+                      return (
+                        <button
+                          key={a.name}
+                          type="button"
+                          className={`member-pick${on ? " active" : ""}`}
+                          onClick={() => setGroupMembers((list) => on ? list.filter((n) => n !== a.name) : [...list, a.name])}
+                        >
+                          <span className={`dot ${a.status || "idle"}`} />
+                          <span className="bot-name">{botLabel(a)}</span>
+                          <span className="bot-job">{a.job || `@${a.name}`}</span>
+                        </button>
+                      );
+                    })}
+                    {!allAgents.length && <p className="empty-state">Create a bot first.</p>}
+                  </div>
+                </>
+              )}
               <div className="err" role="alert">{channelErr}</div>
               <div className="modal-actions">
-                <button type="button" className="btn" onClick={() => setChannelModal(false)}>Cancel</button>
-                <button type="submit" className="btn primary">Create</button>
+                <button type="button" className="btn" onClick={() => setChannelModal(null)}>Cancel</button>
+                <button type="submit" className="btn primary">{channelModal === "group" ? "Create group" : "Create"}</button>
               </div>
             </form>
           </div>
@@ -1143,19 +1224,63 @@ export default function App() {
       {agentModal && (
         <div className="overlay" onClick={(e) => e.target === e.currentTarget && setAgentModal(null)}>
           <div className="modal-card agent-card" role="dialog" aria-modal="true">
-            <h2>{agentModal === "edit" ? `@${agentForm.name}` : "New Bot"}</h2>
+            <h2>{agentModal === "edit" ? (agentForm.display_name || `@${agentForm.name}`) : "New Bot"}</h2>
             <form onSubmit={saveAgent}>
               {agentModal === "create" && (
                 <div className="job-templates">
                   {jobs.map((job) => (
-                    <button key={job.job} type="button" className={agentForm.job === job.job ? "active" : ""} onClick={() => setAgentForm((f) => ({ ...f, job: job.job, prompt: job.prompt }))}>
+                    <button
+                      key={job.job}
+                      type="button"
+                      className={agentForm.job === job.job ? "active" : ""}
+                      onClick={() => setAgentForm((f) => {
+                        const suggested = job.suggested_name || "";
+                        const pretty = suggested.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+                        return {
+                          ...f,
+                          job: job.job,
+                          prompt: job.prompt,
+                          display_name: f.display_name && handleTouched ? f.display_name : pretty,
+                          name: handleTouched && f.name ? f.name : suggested,
+                        };
+                      })}
+                    >
                       {job.job}
                     </button>
                   ))}
                 </div>
               )}
-              <label htmlFor="agent-name">Name</label>
-              <input id="agent-name" required maxLength={32} pattern="[A-Za-z0-9_\-]+" placeholder="piper" disabled={agentModal === "edit"} value={agentForm.name} onChange={(e) => setAgentForm((f) => ({ ...f, name: e.target.value }))} />
+              <label htmlFor="agent-display">Bot name</label>
+              <input
+                id="agent-display"
+                required
+                maxLength={40}
+                placeholder="Maya"
+                value={agentForm.display_name}
+                onChange={(e) => {
+                  const display_name = e.target.value;
+                  setAgentForm((f) => ({
+                    ...f,
+                    display_name,
+                    name: agentModal === "edit" || handleTouched ? f.name : slugFromName(display_name),
+                  }));
+                }}
+              />
+              <label htmlFor="agent-name">Mention handle</label>
+              <input
+                id="agent-name"
+                required
+                maxLength={32}
+                pattern="[A-Za-z0-9_\-]+"
+                placeholder="maya"
+                disabled={agentModal === "edit"}
+                value={agentForm.name}
+                onChange={(e) => {
+                  setHandleTouched(true);
+                  setAgentForm((f) => ({ ...f, name: e.target.value }));
+                }}
+              />
+              <div className="hint">People see {agentForm.display_name || "Maya"}. Rooms mention @{agentForm.name || "maya"}.</div>
               <label htmlFor="agent-job">Primary job</label>
               <input id="agent-job" maxLength={64} placeholder="Product Performance" value={agentForm.job} onChange={(e) => setAgentForm((f) => ({ ...f, job: e.target.value }))} />
               <label htmlFor="agent-prompt">How they should work</label>
@@ -1239,13 +1364,31 @@ export default function App() {
             <button key={a.name} type="button" className={`bot-item${a.dm_channel_id === channel ? " active" : ""}`} onClick={() => switchChannel(a.dm_channel_id)}>
               <span className={`dot ${a.status || "idle"}`} />
               <span className="bot-meta">
-                <span className="bot-name">{a.name}</span>
-                <span className="bot-job">{a.job || roleLine(a.system_prompt)}</span>
+                <span className="bot-name">{botLabel(a)}</span>
+                <span className="bot-job">{a.job || `@${a.name}`}</span>
               </span>
             </button>
           ))}
         </div>
         <button type="button" id="new-agent" onClick={openCreateAgent}>+ New Bot</button>
+        <div className="section-label">Groups</div>
+        <ul id="group-list">
+          {!groups.length && <li className="empty-state">No groups yet</li>}
+          {groups.map((c) => (
+            <li key={c.id} className="channel-item group-item">
+              <button type="button" className={c.id === channel ? "active" : ""} onClick={() => switchChannel(c.id)}>
+                <span className="ch-name">{c.name}</span>
+                <span className="member-chips">
+                  {(c.members || []).slice(0, 4).map((n) => (
+                    <span key={n} className="member-chip">{labelFor(n)}</span>
+                  ))}
+                </span>
+              </button>
+              <button type="button" className="ch-delete" aria-label={`Delete ${c.name}`} onClick={() => deleteChannel(c.id)}>×</button>
+            </li>
+          ))}
+        </ul>
+        <button type="button" id="new-group" onClick={() => { setChannelErr(""); setGroupMembers(allAgents.slice(0, 2).map((a) => a.name)); setChannelModal("group"); }}>+ New group</button>
         <div className="section-label">Channels</div>
         <ul id="channel-list">
           {!rooms.length && <li className="empty-state">No channels yet</li>}
@@ -1259,7 +1402,7 @@ export default function App() {
             </li>
           ))}
         </ul>
-        <button type="button" id="new-channel" onClick={() => { setChannelErr(""); setChannelModal(true); }}>+ New channel</button>
+        <button type="button" id="new-channel" onClick={() => { setChannelErr(""); setChannelModal("room"); }}>+ New channel</button>
         <div id="agents-box">
           <div id="groq-status" className={agentsReady ? "ready" : "missing"}>
             {demoMode ? "Demo mode — mock replies" : agentsReady ? "Bots ready" : "Set GROQ_API_KEY or SWARM_DEMO=1"}
@@ -1279,8 +1422,14 @@ export default function App() {
         <div id="topbar">
           <button type="button" id="menu-btn" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}>☰</button>
           <div className="channel-meta">
-            <div className="name">{bot ? bot.name : `#${current.name || current.id}`}</div>
-            <div className="topic">{bot ? (bot.job || current.topic || "Teammate") : (current.topic || "No topic set")}</div>
+            <div className="name">{bot ? botLabel(bot) : group ? current.name : `#${current.name || current.id}`}</div>
+            <div className="topic">
+              {bot
+                ? (bot.job || current.topic || "Teammate")
+                : group
+                  ? ((current.members || []).map(labelFor).join(", ") || current.topic || "Group chat")
+                  : (current.topic || "No topic set")}
+            </div>
           </div>
           <div className="view-tabs" role="tablist" aria-label="Channel view">
             <button type="button" className={`tab${mainView === "talk" ? " active" : ""}`} onClick={() => setMainView("talk")}>Talk</button>
@@ -1307,8 +1456,10 @@ export default function App() {
               {bot?.name === "coder"
                 ? "Empty page. Ask for a function, a proof, or a listing — code and TeX compile into Paper."
                 : bot
-                  ? `A blank channel. Give ${bot.name} a real task.`
-                  : "A blank channel. Talk here, or @coder when you want a listing."}
+                  ? `A blank channel. Give ${botLabel(bot)} a real task.`
+                  : group
+                    ? "A group chat. Message the room and every member hears you — or @mention one."
+                    : "A blank channel. Talk here, or @coder when you want a listing."}
             </div>
           )}
           {roots.map((m, i) => (
@@ -1326,10 +1477,11 @@ export default function App() {
                 const r = el.getBoundingClientRect();
                 setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) });
               }}
+              label={labelFor(m.author)}
             />
           ))}
           {streamRows.map((m) => (
-            <MessageRow key={`stream-${m.author}`} m={m} grouped={false} reactions={[]} replyCount={0} onReply={() => {}} onReact={() => {}} onOpenThread={() => {}} onToggleEmoji={() => {}} />
+            <MessageRow key={`stream-${m.author}`} m={m} grouped={false} reactions={[]} replyCount={0} onReply={() => {}} onReact={() => {}} onOpenThread={() => {}} onToggleEmoji={() => {}} label={labelFor(m.author)} />
           ))}
         </div>
         </>
@@ -1543,9 +1695,9 @@ export default function App() {
             <button type="button" className="btn ghost" onClick={() => { setThreadId(null); setThreadParent(null); setThreadReplies([]); }}>Close</button>
           </div>
           <div id="thread-log" ref={threadLogRef} role="log">
-            {threadParent && <MessageRow m={threadParent} inThread reactions={reactions[threadParent.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onDelete={deleteMessage} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} />}
+            {threadParent && <MessageRow m={threadParent} inThread reactions={reactions[threadParent.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onDelete={deleteMessage} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} label={labelFor(threadParent.author)} />}
             {threadReplies.map((m, i) => (
-              <MessageRow key={m.id} m={m} inThread grouped={groupedWith(i ? threadReplies[i - 1] : threadParent, m)} reactions={reactions[m.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onDelete={deleteMessage} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} />
+              <MessageRow key={m.id} m={m} inThread grouped={groupedWith(i ? threadReplies[i - 1] : threadParent, m)} reactions={reactions[m.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onDelete={deleteMessage} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} label={labelFor(m.author)} />
             ))}
           </div>
           <div className="thread-composer">
