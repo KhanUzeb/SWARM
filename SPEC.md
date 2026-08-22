@@ -69,16 +69,19 @@ a duplicate row or an error.
 | job             | TEXT    | primary job title; default `Teammate` |
 | status          | TEXT    | `idle` \| `working` \| `needs_approval` |
 
-Allowed tool names: `read_only_shell`, `search_channel_history`,
-`remember`, `recall`, `list_workspace`, `write_workspace`,
-`save_skill`, `request_approval`. API responses parse `tools` as a
-JSON array, not a raw string. List/get also include `dm_channel_id`
-(`dm-<name>`).
+Allowed tool names include **11 builtins** (`read_only_shell`,
+`search_channel_history`, `remember`, `recall`, `list_workspace`,
+`read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
+`save_skill`, `request_approval`), plus **custom tools** (DB) and
+**plugin tools** (`plugin:{slug}:{name}` from `plugins/*/manifest.json`).
+Names are validated against the central registry on agent create/patch.
+API responses parse `tools` as a JSON array. List/get also include
+`dm_channel_id` (`dm-<name>`).
 
-Seeded on first run: `swarm` (job `Generalist`, unscoped, all eight
+Seeded on first run: `swarm` (job `Generalist`, unscoped, all builtin
 tools) and `ledger` (job `Decision log`, unscoped, no shell/workspace
-write — `search_channel_history`, `remember`, `recall`). Creating an
-agent also creates its 1:1 channel `dm-<name>` (`kind=dm`,
+write — `search_channel_history`, `remember`, `recall`, `channel_digest`).
+Creating an agent also creates its 1:1 channel `dm-<name>` (`kind=dm`,
 `owner_agent=<name>`). Existing databases get those DMs from
 `ensure_schema()`. Deleting an agent is not supported (history would
 dangle) — named gap.
@@ -87,7 +90,33 @@ Existing databases that predate these columns are upgraded in
 `ensure_schema()` via `PRAGMA table_info` + `ALTER TABLE`, not Alembic.
 `ledger`'s tools are rewritten to the no-shell default only when the
 `tools` column is first added. Pre-Phase-10 `swarm` rows keep whatever
-`tools` JSON they already had; a fresh DB gets the eight-tool default.
+`tools` JSON they already had; a fresh DB gets the full builtin default.
+
+### `custom_tools`
+
+| column         | type | notes |
+|----------------|------|-------|
+| id             | INTEGER | PK |
+| name           | TEXT | unique, `[a-zA-Z0-9_-]+` |
+| description    | TEXT | |
+| parameters     | TEXT | JSON schema for the LLM |
+| handler_type   | TEXT | `template` \| `http_get` \| `echo` |
+| handler_config | TEXT | JSON |
+| enabled        | INTEGER | 0/1 |
+| created_at     | REAL | |
+
+### `ai_providers`
+
+| column       | type | notes |
+|--------------|------|-------|
+| provider_id  | TEXT | PK — `groq`, `openrouter`, `openai`, `huggingface`, `together`, … |
+| secret       | TEXT | sealed API key (XOR + base64, keyed by `SWARM_SECRET`) |
+| key_hint     | TEXT | last 4 chars for UI |
+| model        | TEXT | optional default model for this connection |
+| connected_at | REAL | |
+
+Catalog and resolver live in `backend/ai_support/` (tau-inspired).
+Env vars (`GROQ_API_KEY`, `HF_TOKEN`, …) remain fallbacks.
 
 ### `agent_memory`
 
@@ -174,11 +203,14 @@ The composite form exists so REST and WS share one parsing path
 separately from the token on every call.
 
 - **REST writes**: `Authorization: Bearer <handle>:<raw>` header,
-  required on every POST/PATCH that creates or modifies data. Read
-  endpoints (`GET /api/channels`, `GET /api/channels/{id}/messages`,
-  `GET /api/messages/{id}/thread`, `GET /api/agents`,
-  `GET /api/agents/{name}`) are unauthenticated by design — there's no
-  private data in this system yet.
+  required on every POST/PATCH/DELETE that creates or modifies data.
+- **REST reads**: same Bearer token required on all `/api/*` data
+  reads except `GET /api/status` and `POST /api/register`. Unauthenticated
+  reads return `401`.
+- **Browser guard**: requests with an `Origin` header must match
+  `SWARM_ALLOWED_ORIGINS` (default localhost) and send
+  `X-Swarm-Client: web`. Other clients (CLI, pytest) omit `Origin`.
+- **CORS**: restricted to the allowlist; not `*`.
 - **WS writes**: the first frame after connecting must be
   `{"token": "<handle>:<raw>", "last_seen_id": null}`. `last_seen_id`
   is optional. Invalid or missing token closes the connection with
@@ -213,8 +245,38 @@ separately from the token on every call.
 {"detail": "handle already registered"}
 ```
 
+### `GET /api/status`
+Public. Returns booleans only — never raw API keys.
+```json
+{
+  "groq": true,
+  "openrouter": false,
+  "demo": false,
+  "llm_ready": true,
+  "providers_ready": {"groq": true, "openrouter": false, "huggingface": false}
+}
+```
+With Bearer auth, also includes `ai_providers` connection metadata
+(hints, models — not secrets).
+
+### `GET /api/tools`
+Auth required. Builtin + custom + plugin catalog.
+```json
+{"tools": [{"name": "fetch_url", "kind": "builtin", "description": "..."}],
+ "plugins": [{"id": "time-helper", "name": "Time Helper", "version": "1.0.0"}]}
+```
+
+### `POST /api/tools/custom` · `PATCH/DELETE /api/tools/custom/{id}`
+Auth required. CRUD for custom tool handlers.
+
+### `POST /api/plugins/reload`
+Auth required. Rescan `plugins/*/manifest.json`.
+
+### `GET /api/ai-support/providers` · `POST/DELETE …/connect/{id}`
+Auth required. List provider catalog; connect/disconnect encrypted keys.
+
 ### `GET /api/channels`
-No auth required.
+Auth required.
 ```json
 [{"id": "general", "name": "general", "topic": "wherever, whatever",
   "created_at": 1786353998.09, "kind": "room", "owner_agent": null}]
@@ -231,7 +293,7 @@ Auth required.
 ```
 
 ### `GET /api/channels/{channel_id}/messages?limit=50&before_id=`
-No auth required. Returns messages oldest-first, each with a
+Auth required. Returns messages oldest-first, each with a
 `reactions` array embedded. `limit` defaults to 50, capped at 100.
 If `before_id` is set, returns the page of messages with `id < before_id`
 (still oldest-first in the JSON array) — used to load earlier history.
@@ -269,7 +331,7 @@ Auth required, `author` must match. Idempotent — same
 404 if message doesn't exist, 403 author mismatch.
 
 ### `GET /api/messages/{message_id}/thread`
-No auth required. One-level thread: the parent message plus every
+Auth required. One-level thread: the parent message plus every
 reply whose `parent_id` equals that id, oldest-first, each with
 `reactions` embedded.
 ```json

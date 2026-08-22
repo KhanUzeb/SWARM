@@ -12,9 +12,10 @@ thesis without Nostr/git/workflows.
 | `SPEC.md` | Technical contract — if code disagrees, file a bug |
 | `PROMPTS.md` | Phase history + gated build prompts |
 
-**Status: V2 + Phase 10 + V3.2/V3.7 shipped.** Phases 1–5, 7–10 built.
-V3.2 onboarding and V3.7 demo mode are live. Remaining V3 items (admin,
-agent teams, human DMs, audit export) gated in `VISION.md`.
+**Status: V2 + Phase 10 + V3.2/V3.7 + tools/providers/security shipped.**
+Onboarding (3 steps), demo mode, tool registry, plugins, tau-style AI
+providers, and authenticated API reads are live. See `docs/CHANGELOG.md`.
+Remaining V3 items (admin, agent teams, human DMs, audit export) gated in `VISION.md`.
 
 ## Stack
 
@@ -23,7 +24,7 @@ agent teams, human DMs, audit export) gated in `VISION.md`.
 | Backend    | FastAPI + Uvicorn                | async-native, WS support built in, matches VOX/AXIOM stack |
 | DB         | SQLite via `aiosqlite`           | zero-ops for a portfolio project; swap to Postgres if this ever needs concurrent writers at scale |
 | Realtime   | Native WebSocket, in-memory hub  | one process, one hub — no Redis pub/sub needed at this scale |
-| LLM        | Groq (primary), OpenRouter fallback | Groq first; one retry then OpenRouter if `OPENROUTER_API_KEY` is set |
+| LLM        | Groq (primary), OpenRouter/OpenAI/HF/Together fallback | Priority chain via `backend/ai_support/resolver.py`; env or UI-stored keys |
 | Frontend   | React 19 + Vite 8, built with bun | small SPA, hashed assets, FastAPI serves `frontend/dist` |
 | Tracing    | Langfuse                         | reuses the eval/observability pattern from VERIS; degrades to no-op if unconfigured |
 | Deployment | Docker + docker-compose          | single VPS, named volume for the SQLite file |
@@ -36,8 +37,13 @@ swarm/
     main.py       FastAPI app: REST + WS routes, auth, rate limiting, agent trigger
     db.py         schema + ensure_schema() + agent_memory
     agent.py      multi-persona LLM responder, harness, memory tools, streaming, Langfuse
+    tools/        registry.py — builtins, custom_tools table, plugins/
+    ai_support/   providers, resolver, encrypted key store (tau-inspired)
+    security.py   CORS allowlist + origin guard + optional auth
     jobs.py      Grok Bot-style job templates for create-Bot
     models.py     pydantic schemas
+  plugins/        optional manifests → plugin:slug:tool names
+  ai-support/     README pointing at backend/ai_support/
   frontend/
     src/          React UI (login, DMs, computer panel, streaming)
     dist/         production build (`bun run build`)

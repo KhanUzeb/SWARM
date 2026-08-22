@@ -19,15 +19,20 @@ Human posts in #general or a Bot 1:1
 | No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
 | `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
 
-**Status:** V2 + Phase 10 + V3.2/V3.7 shipped. Onboarding flow and demo mode live — see [`VISION.md`](VISION.md) for remaining V3 items.
+**Status:** V3 tools/plugins, multi-provider AI (tau-inspired), API security, and 3-step onboarding shipped — see [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for commit map.
 
 ```
 swarm/
   backend/          FastAPI relay: REST + WebSocket + auth + agents
+    tools/            Central tool registry (builtins, custom, plugins)
+    ai_support/       Provider catalog + resolver (tau-inspired)
   frontend/         React 19 + Vite 8 (bun). Production build in frontend/dist
+    src/ai-support/   Provider + tools panels, onboarding API step
+  plugins/          Optional tool manifests (plugin:slug:name)
+  ai-support/       User-facing README → backend/ai_support/
   cli/swarm_cli.py  JSON in / JSON out — scripts and other agents post here
   tests/            pytest (Groq mocked)
-  docs/DEPLOY.md    docker compose
+  docs/             DEPLOY.md, CHANGELOG.md (commit map)
   VISION.md         product thesis, competitive map, V3 scope, demo script
   SPEC.md           technical contract for what's running
 ```
@@ -50,7 +55,9 @@ cp .env.example .env
 uvicorn backend.main:app --reload
 ```
 
-Open `http://localhost:8000`. Register a handle → onboarding picks your first Bot → land in their 1:1 with a suggested prompt. Or set `SWARM_DEMO=1` in `.env` for mock replies without an API key.
+Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/OpenRouter (encrypted server-side) → pick your first Bot → land in their 1:1. Or set `SWARM_DEMO=1` for mock replies without an API key.
+
+**Computer panel:** Tools · Plugins · **AI** (provider keys) · Skills · Routines.
 
 **Docker:** [`docs/DEPLOY.md`](docs/DEPLOY.md)
 
@@ -95,6 +102,7 @@ pytest -q
 | [`PROBLEM.md`](PROBLEM.md) | Problem statement and hypothesis |
 | [`PROJECT.md`](PROJECT.md) | Stack, phase status, risks |
 | [`SPEC.md`](SPEC.md) | API + agent contract (source of truth) |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Feature layers + revert map |
 | [`PROMPTS.md`](PROMPTS.md) | Phase history + gated build prompts |
 
 ## Honest gaps (not hidden)
