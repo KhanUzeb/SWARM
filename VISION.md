@@ -1,6 +1,6 @@
 # VISION.md — swarm
 
-**One line:** A self-hosted team workspace where AI agents are named teammates — same channels, same history, same audit trail — not a sidebar chatbot bolted onto Slack.
+**One line:** A self-hosted team workspace where AI agents are named teammates — same channels, same history, same audit trail. Not a sidebar chatbot bolted onto Slack.
 
 ---
 
@@ -8,9 +8,9 @@
 
 Team chat and AI assistance still live in different products. Slack remembers the conversation; the agent remembers its session. When an agent runs a shell command or drafts an email, that work is invisible unless someone pastes it back into chat. The team cannot `@mention` the agent the way they `@mention` each other, cannot see tool calls in the thread, and cannot hand off between specialists without becoming the router.
 
-Block's [Buzz](https://github.com/block/buzz) names the fix: one event log, one identity model, humans and agents speaking the same protocol. That is the right shape. Buzz's implementation — Nostr relay, cryptographic signing, git hosting, workflow engine, canvases, huddles, desktop app — is a full product company, not a weekend experiment.
+Block's [Buzz](https://github.com/block/buzz) names the fix: one event log, one identity model, humans and agents speaking the same protocol. That is the right shape. But Buzz's implementation (Nostr relay, cryptographic signing, git hosting, workflow engine, canvases, huddles, desktop app) is a full product company, not a weekend experiment.
 
-**swarm tests the same hypothesis with a smaller bet:** does putting agents in the same room as humans, with the same message primitives and a visible audit trail, produce something more useful than a chatbot sidebar — *without* rebuilding Buzz's infrastructure?
+**swarm tests the same hypothesis with a smaller bet:** does putting agents in the same room as humans, with the same message primitives and a visible audit trail, produce something more useful than a chatbot sidebar, *without* rebuilding Buzz's infrastructure?
 
 Phase 10 answered yes for a single-user workspace: named Bots with jobs, 1:1 DMs, skills, routines, approvals, bot-to-bot handoffs, and a shared sandbox "computer" all work today. V3 is about making that legible to a stranger in five minutes and trustworthy enough for a small team.
 
@@ -93,7 +93,7 @@ See `SPEC.md` for the full contract.
 
 ## V3 — product-complete scope
 
-V3 does not mean "clone Buzz." It means a stranger can run the demo, understand the thesis, and trust it with two coworkers — without reading Rust or registering a Slack app.
+V3 does not mean "clone Buzz." It means a stranger can run the demo, understand the thesis, and trust it with two coworkers, without reading Rust or registering a Slack app.
 
 ### In scope (V3)
 
@@ -147,7 +147,7 @@ Use this script when showing the project:
 
 ## Design principles (unchanged)
 
-1. **Agents are messages, not modals.** If it happened, it's in the channel — including tool calls.
+1. **Agents are messages, not modals.** If it happened, it's in the channel, including tool calls.
 2. **Gate speculative work.** Phase 6 semantic search waited until keyword search failed; V3 features keep the same rule.
 3. **Spec is the contract.** Code and `SPEC.md` disagree → bug.
 4. **Portfolio-real.** Every phase ships something runnable, not a design doc.

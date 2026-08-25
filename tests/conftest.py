@@ -26,8 +26,7 @@ def pytest_configure(config):  # noqa: ARG001
     os.environ.pop("LANGFUSE_SECRET_KEY", None)
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
+def _app_client(tmp_path, monkeypatch, client_addr=("testclient", 50000)):
     db_path = tmp_path / "swarm.db"
     monkeypatch.setenv("SWARM_DB_PATH", str(db_path))
 
@@ -41,12 +40,22 @@ def client(tmp_path, monkeypatch):
 
     from fastapi.testclient import TestClient
 
-    with TestClient(main_mod.app) as c:
+    with TestClient(main_mod.app, client=client_addr) as c:
         yield c
 
     main_mod.hub._rooms.clear()
     main_mod.hub._presence.clear()
     main_mod._last_write.clear()
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    yield from _app_client(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def local_client(tmp_path, monkeypatch):
+    yield from _app_client(tmp_path, monkeypatch, ("127.0.0.1", 50000))
 
 
 @pytest.fixture

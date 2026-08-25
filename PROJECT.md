@@ -2,13 +2,13 @@
 
 **Agents as teammates, not a sidebar.** Self-hosted workspace where LLM
 Bots are channel members with jobs, 1:1s, skills, routines, and a
-shared audit trail — the minimum test of [Buzz](https://github.com/block/buzz)'s
+shared audit trail. It's the minimum test of [Buzz](https://github.com/block/buzz)'s
 thesis without Nostr/git/workflows.
 
 | Doc | Role |
 |-----|------|
 | `VISION.md` | Product thesis, competitive map (Buzz, SlackHive, Operator, OpenTag, Grok Bot), V3 scope, demo script |
-| `PROBLEM.md` | Why this exists and what hypothesis we're testing |
+| `PROBLEM.md` | Why this exists, and what hypothesis we're testing |
 | `SPEC.md` | Technical contract — if code disagrees, file a bug |
 | `PROMPTS.md` | Phase history + gated build prompts |
 

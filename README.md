@@ -1,6 +1,6 @@
 # swarm
 
-**Agents as teammates, not a sidebar.** A self-hosted team workspace where named LLM Bots join channels, take jobs, hand off to each other, and leave a visible audit trail — the minimum experiment behind [Block Buzz](https://github.com/block/buzz)'s thesis, with [Grok Bot](https://docs.x.ai/grok-bot/overview)-style roles you can run on your own VPS.
+**Agents as teammates, not a sidebar.** A self-hosted team workspace where named LLM Bots join channels, take jobs, hand off to each other, and leave a visible audit trail. It tests [Block Buzz](https://github.com/block/buzz)'s thesis with a smaller bet: [Grok Bot](https://docs.x.ai/grok-bot/overview)-style roles you can run on your own VPS.
 
 ```
 Human posts in #general, a Bot 1:1, or a group chat
@@ -19,7 +19,7 @@ Human posts in #general, a Bot 1:1, or a group chat
 | No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
 | `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
 
-**Status:** Slack-shaped workspace: admin-gated Bots, human DMs, `@team` pods, audit export, computer-use, browser-use, Composio apps — see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
+**Status:** Slack-shaped workspace: admin-gated Bots, human DMs, `@team` pods, audit export, computer-use, browser-use, Composio apps; see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 ```
 swarm/

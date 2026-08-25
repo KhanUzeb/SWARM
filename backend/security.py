@@ -39,6 +39,12 @@ def parse_token(raw: str) -> tuple[str, str] | None:
     return handle, token
 
 
+def is_loopback(request: Request) -> bool:
+    """True for a browser on this machine (uvicorn on 127.0.0.1 / localhost)."""
+    host = (request.client.host if request.client else "") or ""
+    return host in {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
+
+
 async def optional_auth(authorization: str | None = Header(default=None)) -> str | None:
     if not authorization or not authorization.startswith("Bearer "):
         return None

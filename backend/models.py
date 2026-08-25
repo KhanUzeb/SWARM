@@ -151,6 +151,15 @@ class AiProviderConnect(BaseModel):
 
 class RegisterRequest(BaseModel):
     handle: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
+    password: str | None = Field(default=None, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def password_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class ReactionCreate(BaseModel):

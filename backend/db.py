@@ -8,6 +8,7 @@ goes through ensure_schema() (PRAGMA + ALTER TABLE).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -24,6 +25,7 @@ from .models import (
     DEFAULT_TOOLS,
     GROQ_MODEL_ALIASES,
     LEDGER_TOOLS,
+    USER_ROLES,
     pretty_name,
     resolve_groq_model,
 )
@@ -60,7 +62,13 @@ CREATE TABLE IF NOT EXISTS users (
     handle      TEXT PRIMARY KEY,
     token_hash  TEXT NOT NULL,
     created_at  REAL NOT NULL,
-    role        TEXT NOT NULL DEFAULT 'member'
+    role        TEXT NOT NULL DEFAULT 'member',
+    password_hash TEXT
+);
+
+CREATE TABLE IF NOT EXISTS workspace_meta (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -264,6 +272,28 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+_PBKDF2_ROUNDS = 100_000
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), _PBKDF2_ROUNDS)
+    return f"{salt}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    if not password or not stored or "$" not in stored:
+        return False
+    salt, _, digest = stored.partition("$")
+    if not salt or not digest:
+        return False
+    try:
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), _PBKDF2_ROUNDS)
+    except ValueError:
+        return False
+    return hmac.compare_digest(dk.hex(), digest)
+
+
 def parse_tools(raw: Any) -> list[str]:
     if isinstance(raw, list):
         names = raw
@@ -400,12 +430,18 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'"
         )
+    if "password_hash" not in user_cols:
+        await db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
     cur = await db.execute("SELECT handle FROM users WHERE role = 'admin' LIMIT 1")
     if await cur.fetchone() is None:
         cur = await db.execute("SELECT handle FROM users ORDER BY created_at ASC LIMIT 1")
         first = await cur.fetchone()
         if first is not None:
             await db.execute("UPDATE users SET role = 'admin' WHERE handle = ?", (first[0],))
+    await db.execute(
+        "CREATE TABLE IF NOT EXISTS workspace_meta ("
+        "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
 
     await db.execute(
         "CREATE TABLE IF NOT EXISTS channel_people ("
@@ -896,17 +932,85 @@ async def get_reactions(message_id: int) -> list[dict[str, Any]]:
 
 # ------------------------------------------------------------------ users -
 
-async def create_user(handle: str, token: str) -> dict[str, Any]:
+async def create_user(
+    handle: str, token: str, role: str | None = None, password: str | None = None,
+) -> dict[str, Any]:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT COUNT(*) FROM users")
         (count,) = await cur.fetchone()
-        role = "admin" if int(count) == 0 else "member"
+        if role not in USER_ROLES:
+            role = "admin" if int(count) == 0 else "member"
+        pw_hash = hash_password(password) if password else None
         await db.execute(
-            "INSERT INTO users (handle, token_hash, created_at, role) VALUES (?, ?, ?, ?)",
-            (handle, hash_token(token), time.time(), role),
+            "INSERT INTO users (handle, token_hash, created_at, role, password_hash) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (handle, hash_token(token), time.time(), role, pw_hash),
         )
         await db.commit()
     return {"handle": handle, "role": role}
+
+
+async def user_count() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM users")
+        (count,) = await cur.fetchone()
+        return int(count)
+
+
+async def user_has_password(handle: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT password_hash FROM users WHERE handle = ?", (handle,),
+        )
+        row = await cur.fetchone()
+        return bool(row and row[0])
+
+
+async def admin_password_ok(handle: str, password: str | None) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT password_hash FROM users WHERE handle = ? AND role = 'admin'",
+            (handle,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return False
+        return verify_password(password or "", row[0])
+
+
+async def list_admin_handles() -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT handle FROM users WHERE role = 'admin' ORDER BY created_at"
+        )
+        return [row[0] for row in await cur.fetchall()]
+
+
+async def get_workspace_meta(key: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT value FROM workspace_meta WHERE key = ?", (key,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+async def set_workspace_meta(key: str, value: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO workspace_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        await db.commit()
+
+
+async def workspace_onboarded() -> bool:
+    return (await get_workspace_meta("onboarded")) == "1"
+
+
+async def mark_workspace_onboarded() -> None:
+    await set_workspace_meta("onboarded", "1")
 
 
 async def user_exists(handle: str) -> bool:
@@ -926,6 +1030,31 @@ async def verify_token(handle: str, token: str) -> bool:
 
 def generate_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+async def rotate_user_token(
+    handle: str, token: str, *, role: str | None = None,
+) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if role in USER_ROLES:
+            cur = await db.execute(
+                "UPDATE users SET token_hash = ?, role = ? WHERE handle = ?",
+                (hash_token(token), role, handle),
+            )
+        else:
+            cur = await db.execute(
+                "UPDATE users SET token_hash = ? WHERE handle = ?",
+                (hash_token(token), handle),
+            )
+        if cur.rowcount == 0:
+            return None
+        await db.commit()
+        cur = await db.execute(
+            "SELECT handle, role, created_at FROM users WHERE handle = ?", (handle,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
 
 # ----------------------------------------------------------------- agents -

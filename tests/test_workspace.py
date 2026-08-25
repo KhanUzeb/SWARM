@@ -65,6 +65,56 @@ def test_member_cannot_create_or_archive_bots(client, auth):
     assert client.get("/api/agents/scribe", headers=auth).status_code == 404
 
 
+def test_loopback_member_cannot_create_bot(local_client):
+    first = _register(local_client, "uzeb")
+    assert first["role"] == "admin"
+    second = _register(local_client, "maya")
+    assert second["role"] == "member"
+    res = local_client.post(
+        "/api/agents",
+        json={"name": "chief", "system_prompt": "run the room", "job": "Code"},
+        headers=_auth(second["token"]),
+    )
+    assert res.status_code == 403
+
+
+def test_admin_password_required_to_reclaim_handle(local_client):
+    first = local_client.post(
+        "/api/register", json={"handle": "uzeb", "password": "secret12"},
+    )
+    assert first.status_code == 200
+    body = first.json()
+    assert body["role"] == "admin"
+    assert body["onboarded"] is False
+
+    denied = local_client.post("/api/register", json={"handle": "uzeb"})
+    assert denied.status_code == 403
+
+    wrong = local_client.post(
+        "/api/register", json={"handle": "uzeb", "password": "nope"},
+    )
+    assert wrong.status_code == 403
+
+    again = local_client.post(
+        "/api/register", json={"handle": "uzeb", "password": "secret12"},
+    )
+    assert again.status_code == 200
+    session = again.json()
+    assert session["created"] is False
+    assert session["role"] == "admin"
+    assert session["token"] != body["token"]
+    assert local_client.get("/api/me", headers=_auth(session["token"])).status_code == 200
+
+
+def test_workspace_onboarded_survives_and_skips_flag(client, auth):
+    gate = client.get("/api/status").json()
+    assert gate["onboarded"] is False
+    assert gate["admins"] == ["uzeb"]
+    marked = client.post("/api/workspace/onboarded", headers=auth)
+    assert marked.status_code == 200
+    assert client.get("/api/status").json()["onboarded"] is True
+
+
 def test_people_dm_is_private(client, auth):
     member = _register(client, "maya")
     outsider = _register(client, "rio")

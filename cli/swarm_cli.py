@@ -53,7 +53,10 @@ def _request(method: str, path: str, payload: dict | None = None, auth: bool = F
 
 
 def cmd_register(args) -> None:
-    result = _request("POST", "/api/register", {"handle": args.handle})
+    payload = {"handle": args.handle}
+    if args.password:
+        payload["password"] = args.password
+    result = _request("POST", "/api/register", payload)
     print(json.dumps(result, indent=2))
     print(f"\nexport SWARM_TOKEN='{result['token']}'", file=sys.stderr)
 
@@ -159,6 +162,7 @@ def main() -> None:
 
     p_reg = sub.add_parser("register")
     p_reg.add_argument("handle")
+    p_reg.add_argument("--password", default=None)
     p_reg.set_defaults(func=cmd_register)
 
     sub.add_parser("channels").set_defaults(func=cmd_channels)

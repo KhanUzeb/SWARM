@@ -229,6 +229,10 @@ export default function App() {
   const [searchQ, setSearchQ] = useState("");
   const [searchHits, setSearchHits] = useState(null);
   const [searchBusy, setSearchBusy] = useState(false);
+  const [loginKind, setLoginKind] = useState("setup");
+  const [passwordDraft, setPasswordDraft] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [admins, setAdmins] = useState([]);
   const isAdmin = meRole === "admin";
 
   const wsRef = useRef(null);
@@ -661,8 +665,12 @@ export default function App() {
   }, []);
 
   async function enterWorkspace(handle, tok, preferred, { suggestedDraft } = {}) {
+    const me = await apiJson("/api/me", { token: tok });
+    if (!me.ok) throw new Error("auth");
     setToken(tok);
+    tokenRef.current = tok;
     setUser(handle);
+    setMeRole(me.data.role || "member");
     localStorage.setItem(`swarm_token_${handle}`, tok);
     localStorage.setItem("swarm_last_handle", handle);
     const [chs] = await Promise.all([
@@ -676,11 +684,29 @@ export default function App() {
     if (suggestedDraft) setDraft(suggestedDraft);
   }
 
+  async function loadLoginGate() {
+    try {
+      const res = await apiJson("/api/status", { cacheTtl: 0 });
+      const list = res.ok ? (res.data.admins || []) : [];
+      setAdmins(list);
+      setLoginKind(list.length ? "choose" : "setup");
+      if (list.length === 1) setHandleDraft(list[0]);
+    } catch {
+      setAdmins([]);
+      setLoginKind("setup");
+    }
+  }
+
   useEffect(() => {
     const saved = localStorage.getItem("swarm_last_handle");
     const tok = saved && localStorage.getItem(`swarm_token_${saved}`);
     if (saved && tok) {
-      enterWorkspace(saved, tok).catch(() => {});
+      enterWorkspace(saved, tok).catch(() => {
+        localStorage.removeItem(`swarm_token_${saved}`);
+        loadLoginGate();
+      });
+    } else {
+      loadLoginGate();
     }
   }, []);
 
@@ -701,20 +727,42 @@ export default function App() {
     wsRef.current = null;
     setToken(null);
     setUser(null);
+    setOnboarding(null);
+    setMeRole("member");
     setWsStatus("offline");
+    setPasswordDraft("");
+    setPasswordConfirm("");
+    loadLoginGate();
   }
 
   async function onLogin(ev) {
     ev.preventDefault();
+    if (loginKind === "choose") return;
     const handle = handleDraft.trim();
     if (!handle) return;
+    if (loginKind === "setup") {
+      if (passwordDraft.length < 4) {
+        setLoginErr("admin password must be at least 4 characters");
+        return;
+      }
+      if (passwordDraft !== passwordConfirm) {
+        setLoginErr("passwords don't match");
+        return;
+      }
+    }
+    if (loginKind === "admin" && !passwordDraft) {
+      setLoginErr("admin password required");
+      return;
+    }
     setLoginErr("");
     setLoginBusy(true);
     try {
+      const payload = { handle };
+      if (loginKind === "setup" || loginKind === "admin") payload.password = passwordDraft;
       const res = await fetch("/api/register", {
         method: "POST",
         headers: authHeaders(null),
-        body: JSON.stringify({ handle }),
+        body: JSON.stringify(payload),
       });
       let tok = null;
       if (res.ok) {
@@ -726,9 +774,9 @@ export default function App() {
         setMeRole(body.role || "member");
         localStorage.setItem(`swarm_token_${handle}`, tok);
         localStorage.setItem("swarm_last_handle", handle);
-        if (body.role !== "admin") {
-          await enterWorkspace(handle, tok);
-        } else {
+        setPasswordDraft("");
+        setPasswordConfirm("");
+        if (body.created && body.role === "admin" && !body.onboarded) {
           await Promise.all([loadChannels(), loadAllAgents(), loadGroqStatus()]);
           const templatesRes = await apiJson("/api/jobs", { token: tok, cacheTtl: CACHE_TTL.catalog });
           const templates = templatesRes.ok ? templatesRes.data : [];
@@ -744,11 +792,17 @@ export default function App() {
             err: "",
             busy: false,
           });
+        } else {
+          await enterWorkspace(handle, tok);
         }
+      } else if (res.status === 403) {
+        setLoginErr("wrong admin password");
       } else if (res.status === 409) {
         tok = localStorage.getItem(`swarm_token_${handle}`);
-        if (!tok) setLoginErr("handle taken and no saved session — pick another");
+        if (!tok) setLoginErr("handle taken — pick another, or sign in as admin with the password");
         else await enterWorkspace(handle, tok);
+      } else if (res.status === 400) {
+        setLoginErr("admin password must be at least 4 characters");
       } else setLoginErr("registration failed");
     } catch {
       setLoginErr("couldn't reach the relay");
@@ -758,6 +812,7 @@ export default function App() {
 
   async function skipOnboarding() {
     if (!user || !token) return;
+    await api("/api/workspace/onboarded", { token, method: "POST", body: {} }).catch(() => {});
     setOnboarding(null);
     await enterWorkspace(user, token);
   }
@@ -794,7 +849,11 @@ export default function App() {
         },
       });
       if (!res.ok) {
-        const msg = res.status === 409 ? "that name is taken — try another" : "couldn't create bot";
+        const msg = res.status === 409
+          ? "that name is taken — try another"
+          : res.status === 403
+            ? "only the workspace admin can create bots"
+            : "couldn't create bot";
         setOnboarding((o) => ({ ...o, busy: false, err: msg }));
         return;
       }
@@ -1238,11 +1297,84 @@ export default function App() {
           <form className="card" onSubmit={onLogin}>
             <p className="kicker">Agents as teammates</p>
             <h1>Same room. Same audit trail.</h1>
-            <p>Named LLM Bots join your channels — not a sidebar chatbot. Pick a handle to register or reconnect.</p>
-            <label className="sr-only" htmlFor="login-input">Handle</label>
-            <input id="login-input" maxLength={24} autoComplete="username" placeholder="your handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
-            <button type="submit" className="btn primary" disabled={loginBusy}>Get started</button>
-            <div className="hint">New handle registers you. A handle you've used here reconnects.</div>
+            {loginKind === "choose" && (
+              <>
+                <p>This workspace already has an admin. Sign in with the password, or join as a member with just a handle.</p>
+                <div className="login-choices">
+                  <button
+                    type="button"
+                    className="login-choice"
+                    onClick={() => {
+                      setLoginKind("admin");
+                      setLoginErr("");
+                      if (admins[0] && !handleDraft) setHandleDraft(admins[0]);
+                    }}
+                  >
+                    <strong>Continue as admin</strong>
+                    <span>Password required{admins.length ? ` · ${admins.join(", ")}` : ""}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="login-choice"
+                    onClick={() => {
+                      setLoginKind("member");
+                      setLoginErr("");
+                      setPasswordDraft("");
+                      setHandleDraft("");
+                    }}
+                  >
+                    <strong>Join as member</strong>
+                    <span>No password — cannot create bots</span>
+                  </button>
+                </div>
+              </>
+            )}
+            {loginKind === "setup" && (
+              <>
+                <p>First handle becomes admin. Set a password so reload doesn't lock you out or re-run setup.</p>
+                <label htmlFor="login-input">Handle</label>
+                <input id="login-input" maxLength={24} autoComplete="username" placeholder="your handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
+                <label htmlFor="login-password">Admin password</label>
+                <input id="login-password" type="password" autoComplete="new-password" placeholder="at least 4 characters" value={passwordDraft} onChange={(e) => setPasswordDraft(e.target.value)} />
+                <label htmlFor="login-password-confirm">Confirm password</label>
+                <input id="login-password-confirm" type="password" autoComplete="new-password" placeholder="repeat password" value={passwordConfirm} onChange={(e) => setPasswordConfirm(e.target.value)} />
+                <button type="submit" className="btn primary" disabled={loginBusy}>Create workspace</button>
+              </>
+            )}
+            {loginKind === "admin" && (
+              <>
+                <p>Enter the admin handle and password. Setup wizard only runs once.</p>
+                {admins.length > 1 && (
+                  <div className="login-admins">
+                    {admins.map((h) => (
+                      <button
+                        key={h}
+                        type="button"
+                        className={handleDraft === h ? "active" : ""}
+                        onClick={() => setHandleDraft(h)}
+                      >
+                        {h}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <label htmlFor="login-input">Admin handle</label>
+                <input id="login-input" maxLength={24} autoComplete="username" placeholder="admin handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
+                <label htmlFor="login-password">Password</label>
+                <input id="login-password" type="password" autoComplete="current-password" placeholder="admin password" value={passwordDraft} onChange={(e) => setPasswordDraft(e.target.value)} />
+                <button type="submit" className="btn primary" disabled={loginBusy}>Sign in as admin</button>
+                <button type="button" className="btn ghost" onClick={() => { setLoginKind("choose"); setLoginErr(""); setPasswordDraft(""); }}>Back</button>
+              </>
+            )}
+            {loginKind === "member" && (
+              <>
+                <p>Members don't use a password. Pick a new handle, or reconnect one you've used here.</p>
+                <label htmlFor="login-input">Handle</label>
+                <input id="login-input" maxLength={24} autoComplete="username" placeholder="your handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
+                <button type="submit" className="btn primary" disabled={loginBusy}>Join as member</button>
+                <button type="button" className="btn ghost" onClick={() => { setLoginKind("choose"); setLoginErr(""); }}>Back</button>
+              </>
+            )}
             <div className="err" role="alert">{loginErr}</div>
           </form>
         </div>

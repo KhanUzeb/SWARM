@@ -582,6 +582,23 @@ body.hide-tools .row.system, .app.hide-tools .row.system { display: none; }
 }
 #login input:focus { border-color: var(--pin); }
 #login .hint { color: var(--dim); font-size: 12px; }
+#login label { font-size: 13px; color: var(--dim); }
+#login .login-choices { display: flex; flex-direction: column; gap: 8px; }
+#login .login-choice {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  text-align: left; padding: 14px 16px; border-radius: 16px;
+  border: 1px solid var(--border); background: var(--input); color: var(--text);
+  cursor: pointer; font-family: var(--sans);
+}
+#login .login-choice:hover { border-color: var(--pin); }
+#login .login-choice strong { font-size: 15px; }
+#login .login-choice span { font-size: 12px; color: var(--dim); }
+#login .login-admins { display: flex; flex-wrap: wrap; gap: 6px; }
+#login .login-admins button {
+  border: 1px solid var(--border); background: var(--input); color: var(--text);
+  border-radius: 999px; padding: 6px 12px; cursor: pointer; font-size: 13px;
+}
+#login .login-admins button.active { border-color: var(--pin); color: var(--pin); }
 
 #onboarding {
   position: fixed; inset: 0;

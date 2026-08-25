@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -36,8 +36,8 @@ from .models import (
     SkillCreate, SkillPatch, TeamCreate, TeamPatch,
 )
 from .security import (
-    allowed_origins, install_api_guard, optional_auth, parse_token, require_admin,
-    require_auth,
+    allowed_origins, install_api_guard, is_loopback, optional_auth, parse_token,
+    require_admin, require_auth,
 )
 from .tools.registry import get_registry, reload_registry
 
@@ -171,6 +171,8 @@ async def api_status(handle: str | None = Depends(optional_auth)):
     }
     for row in await connectors.catalog_status():
         body[row["id"]] = bool(row.get("connected"))
+    body["onboarded"] = await db.workspace_onboarded()
+    body["admins"] = await db.list_admin_handles()
     if handle:
         body["ai_providers"] = connections
         user = await db.get_user(handle)
@@ -181,18 +183,64 @@ async def api_status(handle: str | None = Depends(optional_auth)):
 
 # ---------------------------------------------------------------- auth ----
 
-@app.post("/api/register")
-async def api_register(payload: RegisterRequest):
-    if await db.user_exists(payload.handle):
-        raise HTTPException(409, "handle already registered")
-    raw = db.generate_token()
-    created = await db.create_user(payload.handle, raw)
+MIN_ADMIN_PASSWORD = 4
+
+
+def _session_body(handle: str, raw: str, role: str, *, created: bool, onboarded: bool) -> dict[str, Any]:
     return {
-        "handle": payload.handle,
-        "token": f"{payload.handle}:{raw}",
-        "created": True,
-        "role": created["role"],
+        "handle": handle,
+        "token": f"{handle}:{raw}",
+        "created": created,
+        "role": role,
+        "onboarded": onboarded,
     }
+
+
+@app.post("/api/register")
+async def api_register(payload: RegisterRequest, request: Request):
+    local = is_loopback(request)
+    password = payload.password
+    existing = await db.get_user(payload.handle)
+    onboarded = await db.workspace_onboarded()
+
+    if existing is not None:
+        if existing["role"] == "admin":
+            has_pw = await db.user_has_password(payload.handle)
+            if has_pw:
+                if not await db.admin_password_ok(payload.handle, password):
+                    raise HTTPException(403, "wrong or missing admin password")
+            elif not local:
+                raise HTTPException(409, "handle already registered")
+        elif not local:
+            raise HTTPException(409, "handle already registered")
+        raw = db.generate_token()
+        user = await db.rotate_user_token(payload.handle, raw)
+        if user is None:
+            raise HTTPException(409, "handle already registered")
+        return _session_body(
+            payload.handle, raw, user["role"], created=False, onboarded=onboarded,
+        )
+
+    if await db.user_count() == 0:
+        if password is not None and len(password) < MIN_ADMIN_PASSWORD:
+            raise HTTPException(400, f"admin password must be at least {MIN_ADMIN_PASSWORD} characters")
+        raw = db.generate_token()
+        created = await db.create_user(payload.handle, raw, role="admin", password=password)
+        return _session_body(
+            payload.handle, raw, created["role"], created=True, onboarded=False,
+        )
+
+    raw = db.generate_token()
+    created = await db.create_user(payload.handle, raw, role="member")
+    return _session_body(
+        payload.handle, raw, created["role"], created=True, onboarded=onboarded,
+    )
+
+
+@app.post("/api/workspace/onboarded")
+async def api_mark_onboarded(handle: str = Depends(require_admin)):
+    await db.mark_workspace_onboarded()
+    return {"onboarded": True}
 
 
 # ---------------------------------------------------------------- REST ----
@@ -435,7 +483,7 @@ async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_a
     if payload.channel_scope and not await db.channel_exists(payload.channel_scope):
         raise HTTPException(404, "no such channel")
     await _validate_tool_names(payload.tools)
-    return await db.create_agent(
+    created = await db.create_agent(
         payload.name,
         payload.system_prompt,
         payload.model,
@@ -446,6 +494,8 @@ async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_a
         payload.job,
         payload.display_name,
     )
+    await db.mark_workspace_onboarded()
+    return created
 
 
 @app.patch("/api/agents/{name}")

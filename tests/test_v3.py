@@ -22,6 +22,7 @@ def test_register_includes_created(client):
     assert res.status_code == 200
     body = res.json()
     assert body["created"] is True
+    assert body["onboarded"] is False
     assert body["token"].startswith("newbie:")
 
 
