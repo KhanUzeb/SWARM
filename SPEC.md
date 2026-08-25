@@ -17,8 +17,8 @@ to leave broken.
 | name       | TEXT  | unique, display name |
 | topic      | TEXT  | default `''` |
 | created_at | REAL  | unix timestamp |
-| kind       | TEXT  | `room` (shared channel), `dm` (a Bot's 1:1), or `group` (selected Bots). default `room` |
-| owner_agent | TEXT | for `dm`: the Bot that always hears this channel. NULL for rooms/groups |
+| kind       | TEXT  | `room` (shared channel), `dm` (a Bot's 1:1), `group` (selected Bots), or `people` (human 1:1). default `room` |
+| owner_agent | TEXT | for `dm`: the Bot that always hears this channel. NULL for rooms/groups/people |
 
 ### `messages`
 
@@ -41,6 +41,7 @@ Indexed on `(channel_id, created_at)` and `(parent_id)`.
 | handle     | TEXT | PK |
 | token_hash | TEXT | SHA-256 of the raw token half, never the raw token itself |
 | created_at | REAL | |
+| role       | TEXT | `admin` \| `member`. First registered user is admin; later users are members |
 
 ### `reactions`
 
@@ -69,23 +70,60 @@ a duplicate row or an error.
 | job             | TEXT    | primary job title; default `Teammate` |
 | status          | TEXT    | `idle` \| `working` \| `needs_approval` |
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
+| archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
-Allowed tool names include **11 builtins** (`read_only_shell`,
+Allowed tool names include **30 builtins** (`read_only_shell`,
 `search_channel_history`, `remember`, `recall`, `list_workspace`,
 `read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
-`save_skill`, `request_approval`), plus **custom tools** (DB) and
-**plugin tools** (`plugin:{slug}:{name}` from `plugins/*/manifest.json`).
-Names are validated against the central registry on agent create/patch.
+`save_skill`, `request_approval`, computer-use `computer_run` /
+`computer_open` / `computer_screenshot`, browser-use
+`browser_navigate` / `browser_snapshot` / `browser_click` /
+`browser_type` / `browser_press` / `browser_wait` /
+`browser_screenshot`, plus `exa_search`, `tavily_search`,
+`firecrawl_scrape`, `browser_use`, `cua_desktop`, and host-system
+`system_run` / `system_ls` / `system_read` / `system_write`), plus **custom tools**
+(DB) and **plugin tools** (`plugin:{slug}:{name}` from
+`plugins/*/manifest.json`).
+Each Bot also has a **profile.md**: seeded Bots load
+`profiles/<name>.md`; job templates load `profiles/jobs/<id>.md`. The
+file is injected at reply time and returned on agent list/get as
+`profile` / `profile_path`.
+The bundled Composio plugin adds `plugin:composio:status`,
+`list_toolkits`, `search_tools`, `connect`, and `execute` so Bots can
+reach Gmail/Slack/GitHub/Notion and 1000+ other apps with one workspace
+key. Names are validated against the central registry on agent create/patch.
 API responses parse `tools` as a JSON array. List/get also include
 `dm_channel_id` (`dm-<name>`).
 
 Seeded on first run: `swarm` (job `Generalist`, unscoped, all builtin
-tools) and `ledger` (job `Decision log`, unscoped, no shell/workspace
+tools plus Composio plugin tools) and `ledger` (job `Decision log`, unscoped, no shell/workspace
 write — `search_channel_history`, `remember`, `recall`, `channel_digest`).
 Creating an agent also creates its 1:1 channel `dm-<name>` (`kind=dm`,
 `owner_agent=<name>`). Existing databases get those DMs from
-`ensure_schema()`. Deleting an agent is not supported (history would
-dangle) — named gap.
+`ensure_schema()`. Archiving an agent (`DELETE`) sets `archived_at`;
+history keeps the author name, mentions stop firing, and the handle
+cannot be reused.
+
+### `channel_people`
+
+| column     | type | notes |
+|------------|------|-------|
+| channel_id | TEXT | FK → channels.id |
+| handle     | TEXT | registered user |
+
+Used by `kind=people` 1:1s. Channel list/history/search hide these from
+anyone not in the pair.
+
+### `agent_teams` / `agent_team_members`
+
+| column     | type | notes |
+|------------|------|-------|
+| id         | TEXT | PK, mention key (`@core`) |
+| name       | TEXT | display name |
+| members    | —    | ordered bot handles via `agent_team_members` |
+
+Seeded: `@core` → swarm, ledger, coder. `@team-id` in a room expands
+to those Bots in roster order.
 
 Existing databases that predate these columns are upgraded in
 `ensure_schema()` via `PRAGMA table_info` + `ALTER TABLE`, not Alembic.
@@ -155,7 +193,10 @@ Indexed on `(agent_name, created_at)`. Notes are written by the
 | created_at | REAL    | |
 | updated_at | REAL    | |
 
-Skills are account-wide, not per-Bot.
+Skills are account-wide, not per-Bot. Ten bundled `/commands` seed on
+first boot from `skills/*.md` (`standup`, `digest`, `decide`,
+`research`, `page`, `repro`, `draft`, `review`, `plan`, `brief`).
+`INSERT OR IGNORE` — editing a skill in the UI is not overwritten.
 
 ### `routines`
 
@@ -198,10 +239,11 @@ message into that channel ("Approved: … Continue from here." /
 No `threads` table separate from `messages.parent_id` — flat storage
 with a nullable self-reference is sufficient; `GET /api/messages/{id}/thread`
 returns one level (the parent plus rows whose `parent_id` equals that
-id). Admin role for `POST /api/agents` is still a named gap — see
-`PROJECT.md`. No agent delete. No vector search (Phase 6). No cloud VM,
-browser computer-use, or teach-by-demonstration recording — the
-"computer" is the shared sandbox workspace.
+id). Semantic search (Phase 6) is still gated. No cloud VM or
+teach-by-demonstration recording. Computer-use is the shared sandbox
+plus host-system tools bound to `SWARM_SYSTEM_ROOT` (usually the repo),
+optional Playwright Chromium (`browser_*`), and Composio app
+connectors — still this machine, not a remote desktop.
 
 ---
 
@@ -234,24 +276,48 @@ separately from the token on every call.
   path (which never lets the client set `author` at all) but REST
   still accepts an explicit `author` field, so the check is load-
   bearing there.
+- **Admin role.** First registered handle is `admin`. `POST`/`PATCH`/`DELETE`
+  on `/api/agents`, `/api/teams`, `/api/tools/custom`, plugin reload, and
+  AI provider connect/disconnect require `role = admin`. Chat, people DMs,
+  rooms, groups, and export stay open to any valid token.
 - **Rate limit**: 500ms minimum between writes, tracked per handle in
   an in-memory dict (`_last_write` in `main.py`). Violating it returns
   `429` (REST) or a `{"type": "error", "detail": "slow down"}` frame
   (WS) — the WS connection stays open, the message is just dropped.
-- **No admin role.** `POST /api/agents` and `PATCH /api/agents/{name}`
-  require only a valid token, not any elevated permission. Named gap,
-  not a bug — see `PROJECT.md`.
 
 ---
 
 ## 3. REST API (current)
+
+### `GET /api/me` · `GET /api/people`
+Auth required. `me` is `{handle, role, created_at}`. `people` adds `online`
+from the in-memory WebSocket presence table.
+
+### `POST /api/dms`
+Auth required. `{ "handle": "maya" }` opens or returns a private
+`kind=people` channel (`people-{a}-{b}` sorted). 400 if self, 404 if
+the other handle is not registered.
+
+### `GET /api/teams` · `POST /api/teams` · `PATCH/DELETE /api/teams/{id}`
+List is any token. Writes are admin-only. `@id` in a room expands to
+`members` in order.
+
+### `GET /api/search?q=`
+Auth required. Keyword search over messages the caller can see
+(people DMs excluded unless they are in the pair).
+
+### `GET /api/channels/{id}/export?format=json|csv`
+Auth required. Full channel history including system tool-audit lines.
+
+### `DELETE /api/agents/{name}`
+Admin only. Soft-delete (`archived_at`). 404 if already archived.
 
 ### `POST /api/register`
 ```json
 // request
 {"handle": "uzeb"}
 // response 200
-{"handle": "uzeb", "token": "uzeb:2y0-_JDXp9NN...", "created": true}
+{"handle": "uzeb", "token": "uzeb:2y0-_JDXp9NN...", "created": true, "role": "admin"}
 // response 409 if handle taken
 {"detail": "handle already registered"}
 ```
@@ -264,7 +330,10 @@ Public. Returns booleans only — never raw API keys.
   "openrouter": false,
   "demo": false,
   "llm_ready": true,
-  "providers_ready": {"groq": true, "openrouter": false, "huggingface": false}
+  "providers_ready": {"groq": true, "openrouter": false, "huggingface": false},
+  "composio": false,
+  "browser": true,
+  "system": true
 }
 ```
 With Bearer auth, also includes `ai_providers` connection metadata
@@ -281,10 +350,38 @@ Auth required. Builtin + custom + plugin catalog.
 Auth required. CRUD for custom tool handlers.
 
 ### `POST /api/plugins/reload`
-Auth required. Rescan `plugins/*/manifest.json`.
+Auth required (admin). Rescan `plugins/*/manifest.json`. Plugin tools
+may use `template`, `http_get`, `shell`, or `python` handlers
+(`plugins/<id>/handler.py`).
 
 ### `GET /api/ai-support/providers` · `POST/DELETE …/connect/{id}`
 Auth required. List provider catalog; connect/disconnect encrypted keys.
+Composio is **not** an LLM provider — use `/api/composio/*`.
+
+### `GET /api/browser/status` · `POST /api/browser/close`
+Auth required (close is admin). Playwright Chromium session for `browser_*` tools.
+
+### `GET /api/composio/status` · `POST/DELETE /api/composio/connect`
+Auth required (connect is admin). Workspace-level Composio API key
+(encrypted in SQLite; `COMPOSIO_API_KEY` still works as fallback).
+
+### `GET /api/composio/toolkits?q=` · `POST /api/composio/connect-toolkit`
+Auth required (connect-toolkit is admin). List Composio app toolkits
+or start an OAuth/connect URL for a slug such as `gmail`.
+
+### `GET /api/connectors` · `GET /api/connectors/{id}`
+Auth required. Workspace connectors: Composio, Exa, Tavily, Firecrawl,
+Browser Use CLI, CUA driver. CLI kinds report whether the binary/SDK
+is installed; they do not take an API key.
+
+### `POST/DELETE /api/connectors/{id}/connect`
+Admin. Store or remove an encrypted key for a non-CLI connector
+(`exa`, `tavily`, `firecrawl`, `composio`). Env fallbacks:
+`EXA_API_KEY`, `TAVILY_API_KEY`, `FIRECRAWL_API_KEY`, `COMPOSIO_API_KEY`.
+
+### `GET /api/profiles`
+Auth required. Lists `profiles/*.md` (seeded Bots) and
+`profiles/jobs/*.md` (job templates).
 
 ### `GET /api/channels`
 Auth required.
@@ -405,7 +502,7 @@ last).
 404 if the name is not registered.
 
 ### `POST /api/agents`
-Auth required (any valid token — no admin check, see section 2).
+Auth required (`admin` only).
 Harness fields are optional; omitted values use the defaults above.
 `tools` defaults to all eight names. `job` defaults to `Teammate`.
 `display_name` is the friendly name (spaces allowed, max 40). If
@@ -440,8 +537,9 @@ row includes `id`, `job`, `prompt`, `suggested_name`, and
 `suggested_prompt` (first message hint for the Bot's 1:1).
 
 ### `GET /api/skills` / `POST /api/skills`
-List is unauthenticated. Create/upsert requires auth. Body:
+Auth required to list (Bearer). Create/upsert requires auth. Body:
 `{"name": "weekly-health", "body": "..."}`. Same name upserts.
+Seeded `/commands` are listed here.
 
 ### `PATCH /api/skills/{id}` / `DELETE /api/skills/{id}`
 Auth required. 404 if missing.
@@ -470,12 +568,23 @@ Auth required. `{"status": "approved"}` or `{"status": "denied"}`.
 channel and re-triggers agents there.
 
 ### `GET /api/computer`
-No auth. Shared workspace listing: `{workspace, shared, files, activity, note}`.
-The workspace is the sandbox directory, not a cloud VM.
+Auth required. Shared workspace listing: `{workspace, shared, files, activity, computer, system, note}`.
+The computer is this machine: an isolated sandbox, host-system tools
+bound to `SWARM_SYSTEM_ROOT`, optional browser session, and Composio
+connectors — not a cloud VM.
 
 ### `GET /api/computer/file?path=`
-No auth. Text preview, capped at 64KB. 404 if missing or the path
-escapes the workspace. 413 if too large.
+Auth required. Text preview, capped at 64KB. 404 if missing or the path
+escapes the sandbox. 413 if too large.
+
+### `GET /api/computer/system?path=`
+Auth required. Directory listing under the host system root
+(`SWARM_SYSTEM_ROOT`). `{enabled, root, path, parent, entries}`.
+
+### `GET /api/computer/system/file?path=`
+Auth required. Text preview of a host file under the system root.
+403 if `SWARM_SYSTEM=0`. 404 if missing or the path escapes the root.
+413 if too large. 415 if binary.
 
 ---
 
@@ -585,8 +694,8 @@ Live `message` events from a human/agent/system write may omit
 - **Tools available**: the agent's `tools` list, exposed via function
   calling. In a 1:1 (`kind=dm`), a group (`kind=group`), and on `[routine:…]` ticks, tools are
   always offered. In a room they are offered **only when the latest
-  human message looks like a file/history/memory/skill/workspace
-  request**. Greetings in a room (`@swarm hi`) still get a text-only
+  human message looks like a file/history/memory/skill/workspace/
+  computer/system/browser/app request**. Greetings in a room (`@swarm hi`) still get a text-only
   completion.
   - `read_only_shell` runs in a sandboxed working directory
     (`SWARM_SANDBOX_DIR`; default `/tmp/swarm-sandbox`, or `%TEMP%\swarm-sandbox`
@@ -608,6 +717,31 @@ Live `message` events from a human/agent/system write may omit
   - `save_skill(name, body)` upserts an account-wide skill.
   - `request_approval(action, detail)` inserts a pending approval,
     sets Bot status to `needs_approval`, and tells the model to stop.
+  - `computer_run(command)` is the write-capable shared-computer shell
+    in the isolated sandbox (30s timeout, destructive-command denylist).
+    `computer_open` reads a workspace path; http(s) URLs should use
+    `browser_navigate`.
+  - `system_run(command, cwd?)` / `system_ls` / `system_read` /
+    `system_write` work on this host, bound to `SWARM_SYSTEM_ROOT`
+    (default: the swarm repo). Full `PATH` is inherited. Destructive
+    commands, path escapes, `.env`, and `swarm.db` are blocked.
+    `SWARM_SYSTEM=0` disables the tools. Filesystem root `/` is refused
+    unless `SWARM_SYSTEM_UNRESTRICTED=1`. Still cwd+timeout, not a
+    container or cloud VM.
+  - `browser_navigate` / `snapshot` / `click` / `type` / `press` /
+    `wait` / `screenshot` drive an optional Playwright Chromium session
+    (`SWARM_BROWSER=0` disables; missing playwright degrades with a
+    clear error).
+  - `plugin:composio:*` lists, connects, and executes Composio app
+    tools (Gmail, Slack, GitHub, Notion, …) with one workspace `user_id`.
+    External sends still go through `request_approval`.
+  - `exa_search` / `tavily_search` / `firecrawl_scrape` call those APIs
+    when a workspace key is set (`EXA_API_KEY`, `TAVILY_API_KEY`,
+    `FIRECRAWL_API_KEY` or Computer → Apps).
+  - `browser_use` wraps the Browser Use CLI (`browser-use`) with an
+    allowlisted action list. `cua_desktop` wraps the CUA driver
+    (`cua-driver` / `cua_driver` SDK) for host-desktop computer-use.
+  - Each reply injects `profiles/<name>.md` or `profiles/jobs/<id>.md`.
   - Capped at the agent's `max_tool_calls` per single trigger (not
     per message — if two agents are mentioned, each gets its own cap).
   - Every tool call is persisted as a `system`-kind message
@@ -686,8 +820,20 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR11.1 | Onboarding: register → job template → create Bot → 1:1 + suggested prompt | ✅ (UI) |
 | FR11.2 | `SWARM_DEMO=1` mock replies + optional `#general` seed thread | ✅ |
 | FR11.3 | `/api/status.demo`, `/api/jobs` suggested fields, register `created` | ✅ |
+| FR12.1 | Computer-use builtins (`computer_run` / `open` / `screenshot`) | ✅ |
+| FR12.2 | Browser-use builtins (Playwright Chromium, optional) | ✅ |
+| FR12.3 | Composio plugin + workspace Apps panel (1000+ app toolkits) | ✅ |
+| FR12.4 | Bot `profile.md` per seeded Bot and job template | ✅ |
+| FR12.5 | Exa / Tavily / Firecrawl workspace connectors | ✅ |
+| FR12.6 | Browser Use CLI + CUA driver tools | ✅ |
+| FR12.7 | Host-system tools (`system_run` / `ls` / `read` / `write`) | ✅ |
 | FR12.1 | Custom Bot `display_name`; mention handle stays `@name` | ✅ |
 | FR12.2 | Group chats: members hear without `@`; `@` still targets one | ✅ |
+| FR13.1 | First user is admin; Bot/team/tool/provider writes are admin-only | ✅ |
+| FR13.2 | Human 1:1s (`kind=people`) visible only to the pair | ✅ |
+| FR13.3 | `@team-id` expands to an ordered Bot roster | ✅ |
+| FR13.4 | Channel audit export JSON/CSV | ✅ |
+| FR13.5 | Soft-delete Bots (`archived_at`); history kept | ✅ |
 
 ---
 
@@ -707,8 +853,9 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 
 Unchanged from V1: no Nostr/event-signing, no git hosting, no
 canvas/media comments, no huddle/voice, no multi-tenant hosting, no
-vector search (Phase 6, intentionally unbuilt), no admin role (named
-gap, still gated), no agent delete. Phase 10 does **not** include a
-cloud VM, remote desktop, browser computer-use, connectors to
-Salesforce/Slack, or teach-by-demonstration recording. The shared
-"computer" is the local sandbox workspace.
+vector search (Phase 6, intentionally unbuilt). Admin role, people DMs,
+teams, audit export, and bot archive shipped. Phase 10 does **not** include a
+cloud VM, remote desktop, teach-by-demonstration recording, or
+container-per-agent isolation. Computer-use is local sandbox + host
+system tools (`SWARM_SYSTEM_ROOT`) + optional Playwright + Composio
+connectors.

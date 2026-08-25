@@ -16,6 +16,10 @@ def test_list_tools_includes_builtins_and_plugin(client, auth):
     assert "read_workspace" in names
     assert "fetch_url" in names
     assert "channel_digest" in names
+    assert "computer_run" in names
+    assert "browser_navigate" in names
+    assert "plugin:composio:execute" in names
+    assert "plugin:time-helper:utc_now" in names
 
 
 def test_ai_provider_catalog_includes_hf(client, auth):

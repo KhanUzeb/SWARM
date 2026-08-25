@@ -59,7 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);
 CREATE TABLE IF NOT EXISTS users (
     handle      TEXT PRIMARY KEY,
     token_hash  TEXT NOT NULL,
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    role        TEXT NOT NULL DEFAULT 'member'
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -81,7 +82,8 @@ CREATE TABLE IF NOT EXISTS agents (
     tools           TEXT NOT NULL DEFAULT '{_DEFAULT_TOOLS_JSON}',
     job             TEXT NOT NULL DEFAULT '{DEFAULT_JOB}',
     status          TEXT NOT NULL DEFAULT 'idle',
-    display_name    TEXT NOT NULL DEFAULT ''
+    display_name    TEXT NOT NULL DEFAULT '',
+    archived_at     REAL
 );
 
 CREATE TABLE IF NOT EXISTS channel_members (
@@ -166,6 +168,26 @@ CREATE TABLE IF NOT EXISTS ai_providers (
     model           TEXT,
     connected_at    REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS channel_people (
+    channel_id  TEXT NOT NULL,
+    handle      TEXT NOT NULL,
+    PRIMARY KEY (channel_id, handle)
+);
+
+CREATE TABLE IF NOT EXISTS agent_teams (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    created_at   REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_team_members (
+    team_id      TEXT NOT NULL,
+    agent_name   TEXT NOT NULL,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (team_id, agent_name)
+);
 """
 
 _DEFAULT_CHANNELS = [
@@ -185,10 +207,10 @@ _CODER_PROMPT = (
     "   \\subsection*{Code}\n"
     "   \\subsection*{Notes}\n"
     "4. Prefer small, complete, runnable examples over pseudocode.\n"
-    "5. For multi-file work, write files with write_workspace so they show "
-    "on the shared computer.\n"
-    "6. Use read_only_shell only to inspect the sandbox. Never invent "
-    "command output.\n"
+    "5. For repo and host work, use system_ls / system_read / system_write / "
+    "system_run on this machine. Use write_workspace / computer_run only for "
+    "the isolated sandbox.\n"
+    "6. Inspect with shell tools; never invent command output.\n"
     "7. Do not send outreach or change production; call request_approval "
     "first for anything external.\n"
     "8. Keep chatter out. Tradeoffs live in Approach; the program lives in Code."
@@ -266,6 +288,10 @@ def public_agent(row: dict[str, Any]) -> dict[str, Any]:
     display = (out.get("display_name") or "").strip()
     out["display_name"] = display or pretty_name(handle)
     out["dm_channel_id"] = dm_channel_id(handle)
+    out["archived"] = bool(out.get("archived_at"))
+    from .profiles import load_agent_profile, profile_path
+    out["profile"] = load_agent_profile(handle, out.get("job"))
+    out["profile_path"] = profile_path(handle, out.get("job"))
     return out
 
 
@@ -316,6 +342,8 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
                 "UPDATE agents SET display_name = ? WHERE name = ?",
                 (pretty_name(handle), handle),
             )
+    if "archived_at" not in cols:
+        await db.execute("ALTER TABLE agents ADD COLUMN archived_at REAL")
     await db.execute(
         "CREATE TABLE IF NOT EXISTS channel_members ("
         "channel_id TEXT NOT NULL, agent_name TEXT NOT NULL, "
@@ -364,6 +392,93 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
                 "INSERT INTO channels (id, name, topic, created_at, kind, owner_agent) "
                 "VALUES (?, ?, ?, ?, 'dm', ?)",
                 (dm_id, dm_id, topic, time.time(), name),
+            )
+
+    cur = await db.execute("PRAGMA table_info(users)")
+    user_cols = {row[1] for row in await cur.fetchall()}
+    if "role" not in user_cols:
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'"
+        )
+    cur = await db.execute("SELECT handle FROM users WHERE role = 'admin' LIMIT 1")
+    if await cur.fetchone() is None:
+        cur = await db.execute("SELECT handle FROM users ORDER BY created_at ASC LIMIT 1")
+        first = await cur.fetchone()
+        if first is not None:
+            await db.execute("UPDATE users SET role = 'admin' WHERE handle = ?", (first[0],))
+
+    await db.execute(
+        "CREATE TABLE IF NOT EXISTS channel_people ("
+        "channel_id TEXT NOT NULL, handle TEXT NOT NULL, "
+        "PRIMARY KEY (channel_id, handle))"
+    )
+    await db.execute(
+        "CREATE TABLE IF NOT EXISTS agent_teams ("
+        "id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+        "description TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL)"
+    )
+    await db.execute(
+        "CREATE TABLE IF NOT EXISTS agent_team_members ("
+        "team_id TEXT NOT NULL, agent_name TEXT NOT NULL, "
+        "sort_order INTEGER NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (team_id, agent_name))"
+    )
+    cur = await db.execute("SELECT 1 FROM agent_teams WHERE id = 'core'")
+    if await cur.fetchone() is None:
+        await db.execute(
+            "INSERT INTO agent_teams (id, name, description, created_at) VALUES (?, ?, ?, ?)",
+            ("core", "Core", "Default pod: generalist, decision log, and code.", time.time()),
+        )
+        for i, agent_name in enumerate(("swarm", "ledger", "coder")):
+            await db.execute(
+                "INSERT OR IGNORE INTO agent_team_members (team_id, agent_name, sort_order) "
+                "VALUES ('core', ?, ?)",
+                (agent_name, i),
+            )
+    await _grant_computer_use_tools(db)
+    await _seed_bundled_skills(db)
+
+
+async def _seed_bundled_skills(db: aiosqlite.Connection) -> None:
+    """Insert bundled /commands if missing. Do not overwrite a human-edited body."""
+    from .bundled_skills import load_bundled_skills
+
+    now = time.time()
+    for name, body in load_bundled_skills():
+        await db.execute(
+            "INSERT OR IGNORE INTO skills (name, body, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (name, body, now, now),
+        )
+
+
+async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:
+    """Give existing full-tool Bots computer/browser/Composio without wiping custom lists."""
+    from .tools.registry import COMPOSIO_PLUGIN_TOOLS, COMPUTER_USE_TOOLS, RESEARCH_TOOLS, SYSTEM_TOOLS
+
+    extras = (
+        list(COMPUTER_USE_TOOLS)
+        + list(SYSTEM_TOOLS)
+        + list(COMPOSIO_PLUGIN_TOOLS)
+        + list(RESEARCH_TOOLS)
+    )
+    cur = await db.execute("SELECT name, tools FROM agents")
+    rows = await cur.fetchall()
+    for name, tools_raw in rows:
+        if name == "ledger":
+            continue
+        names = parse_tools(tools_raw)
+        if "write_workspace" not in names and "read_only_shell" not in names:
+            continue
+        added = False
+        for tool in extras:
+            if tool not in names:
+                names.append(tool)
+                added = True
+        if added:
+            await db.execute(
+                "UPDATE agents SET tools = ? WHERE name = ?",
+                (json.dumps(names), name),
             )
 
 
@@ -463,9 +578,14 @@ async def _count_messages(channel_id: str) -> int:
 
 # ------------------------------------------------------------- channels ---
 
-def public_channel(row: dict[str, Any], members: list[str] | None = None) -> dict[str, Any]:
+def public_channel(
+    row: dict[str, Any],
+    members: list[str] | None = None,
+    people: list[str] | None = None,
+) -> dict[str, Any]:
     out = dict(row)
     out["members"] = list(members or [])
+    out["people"] = list(people or [])
     return out
 
 
@@ -477,6 +597,29 @@ async def _members_by_channel(db: aiosqlite.Connection) -> dict[str, list[str]]:
     for channel_id, agent_name in await cur.fetchall():
         grouped.setdefault(channel_id, []).append(agent_name)
     return grouped
+
+
+async def _people_by_channel(db: aiosqlite.Connection) -> dict[str, list[str]]:
+    cur = await db.execute(
+        "SELECT channel_id, handle FROM channel_people ORDER BY handle"
+    )
+    grouped: dict[str, list[str]] = {}
+    for channel_id, handle in await cur.fetchall():
+        grouped.setdefault(channel_id, []).append(handle)
+    return grouped
+
+
+def can_view_channel(channel: dict[str, Any] | None, handle: str) -> bool:
+    if channel is None:
+        return False
+    if channel.get("kind") == "people":
+        return handle in (channel.get("people") or [])
+    return True
+
+
+def people_dm_id(a: str, b: str) -> str:
+    x, y = sorted([(a or "").strip().lower(), (b or "").strip().lower()])
+    return f"people-{x}-{y}"
 
 
 async def list_channel_members(channel_id: str) -> list[str]:
@@ -505,13 +648,20 @@ async def set_channel_members(channel_id: str, names: list[str]) -> list[str]:
     return unique
 
 
-async def list_channels() -> list[dict[str, Any]]:
+async def list_channels(viewer: str | None = None) -> list[dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM channels ORDER BY created_at")
         rows = await cur.fetchall()
         members = await _members_by_channel(db)
-        return [public_channel(dict(r), members.get(r["id"], [])) for r in rows]
+        people = await _people_by_channel(db)
+        channels = [
+            public_channel(dict(r), members.get(r["id"], []), people.get(r["id"], []))
+            for r in rows
+        ]
+    if viewer:
+        return [c for c in channels if can_view_channel(c, viewer)]
+    return channels
 
 
 async def create_channel(
@@ -541,7 +691,7 @@ async def create_channel(
         await db.commit()
     return {
         "id": channel_id, "name": name, "topic": topic,
-        "kind": kind, "owner_agent": owner_agent, "members": roster,
+        "kind": kind, "owner_agent": owner_agent, "members": roster, "people": [],
     }
 
 
@@ -558,7 +708,12 @@ async def get_channel(channel_id: str) -> dict[str, Any] | None:
             (channel_id,),
         )
         members = [r[0] for r in await cur.fetchall()]
-        return public_channel(dict(row), members)
+        cur = await db.execute(
+            "SELECT handle FROM channel_people WHERE channel_id = ? ORDER BY handle",
+            (channel_id,),
+        )
+        people = [r[0] for r in await cur.fetchall()]
+        return public_channel(dict(row), members, people)
 
 
 async def channel_exists(channel_id: str) -> bool:
@@ -741,13 +896,17 @@ async def get_reactions(message_id: int) -> list[dict[str, Any]]:
 
 # ------------------------------------------------------------------ users -
 
-async def create_user(handle: str, token: str) -> None:
+async def create_user(handle: str, token: str) -> dict[str, Any]:
     async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM users")
+        (count,) = await cur.fetchone()
+        role = "admin" if int(count) == 0 else "member"
         await db.execute(
-            "INSERT INTO users (handle, token_hash, created_at) VALUES (?, ?, ?)",
-            (handle, hash_token(token), time.time()),
+            "INSERT INTO users (handle, token_hash, created_at, role) VALUES (?, ?, ?, ?)",
+            (handle, hash_token(token), time.time(), role),
         )
         await db.commit()
+    return {"handle": handle, "role": role}
 
 
 async def user_exists(handle: str) -> bool:
@@ -771,12 +930,16 @@ def generate_token() -> str:
 
 # ----------------------------------------------------------------- agents -
 
-async def list_agents(channel_id: str | None = None) -> list[dict[str, Any]]:
+async def list_agents(
+    channel_id: str | None = None, *, include_archived: bool = False,
+) -> list[dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM agents ORDER BY created_at")
         rows = await cur.fetchall()
         agents = [public_agent(dict(r)) for r in rows]
+    if not include_archived:
+        agents = [a for a in agents if not a.get("archived")]
     if channel_id is None:
         return agents
     return [a for a in agents if a["channel_scope"] in (None, channel_id)]
@@ -840,6 +1003,7 @@ async def create_agent(
         "job": job_title,
         "status": "idle",
         "dm_channel_id": dm_channel_id(name),
+        "archived": False,
     }
 
 
@@ -1434,3 +1598,238 @@ async def delete_ai_provider(provider_id: str) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+# ------------------------------------------------------------------ people -
+
+async def get_user(handle: str) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT handle, role, created_at FROM users WHERE handle = ?", (handle,)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def get_user_role(handle: str) -> str:
+    user = await get_user(handle)
+    return (user or {}).get("role") or "member"
+
+
+async def list_people() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT handle, role, created_at FROM users ORDER BY created_at"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def ensure_people_dm(me: str, other: str) -> dict[str, Any]:
+    left = (me or "").strip()
+    right = (other or "").strip()
+    if not left or not right:
+        raise ValueError("both handles are required")
+    if left.lower() == right.lower():
+        raise ValueError("cannot DM yourself")
+    channel_id = people_dm_id(left, right)
+    existing = await get_channel(channel_id)
+    if existing is not None:
+        return existing
+    handles = sorted([left, right], key=str.lower)
+    topic = f"1:1 · {handles[0]} and {handles[1]}"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO channels (id, name, topic, created_at, kind, owner_agent) "
+            "VALUES (?, ?, ?, ?, 'people', NULL)",
+            (channel_id, f"{handles[0]} / {handles[1]}", topic, time.time()),
+        )
+        for handle in handles:
+            await db.execute(
+                "INSERT INTO channel_people (channel_id, handle) VALUES (?, ?)",
+                (channel_id, handle),
+            )
+        await db.commit()
+    channel = await get_channel(channel_id)
+    assert channel is not None
+    return channel
+
+
+async def archive_agent(name: str) -> dict[str, Any] | None:
+    row = await fetch_agent(name)
+    if row is None:
+        return None
+    if row.get("archived"):
+        return row
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE agents SET archived_at = ?, status = 'idle' WHERE name = ?",
+            (time.time(), name),
+        )
+        await db.commit()
+    return await fetch_agent(name)
+
+
+# ----------------------------------------------------------------- teams ---
+
+def _public_team(row: dict[str, Any], members: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row.get("name") or row["id"],
+        "description": row.get("description") or "",
+        "created_at": row.get("created_at"),
+        "members": list(members or []),
+    }
+
+
+async def list_teams() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM agent_teams ORDER BY created_at")
+        rows = [dict(r) for r in await cur.fetchall()]
+        cur = await db.execute(
+            "SELECT team_id, agent_name FROM agent_team_members "
+            "ORDER BY sort_order, agent_name"
+        )
+        grouped: dict[str, list[str]] = {}
+        for team_id, agent_name in await cur.fetchall():
+            grouped.setdefault(team_id, []).append(agent_name)
+    return [_public_team(r, grouped.get(r["id"], [])) for r in rows]
+
+
+async def get_team(team_id: str) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM agent_teams WHERE id = ?", (team_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        cur = await db.execute(
+            "SELECT agent_name FROM agent_team_members WHERE team_id = ? "
+            "ORDER BY sort_order, agent_name",
+            (team_id,),
+        )
+        members = [r[0] for r in await cur.fetchall()]
+        return _public_team(dict(row), members)
+
+
+async def create_team(
+    team_id: str, name: str, members: list[str], description: str = "",
+) -> dict[str, Any]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO agent_teams (id, name, description, created_at) VALUES (?, ?, ?, ?)",
+            (team_id, name, description or "", time.time()),
+        )
+        roster: list[str] = []
+        for i, agent_name in enumerate(members):
+            if not agent_name or agent_name in roster:
+                continue
+            await db.execute(
+                "INSERT INTO agent_team_members (team_id, agent_name, sort_order) "
+                "VALUES (?, ?, ?)",
+                (team_id, agent_name, i),
+            )
+            roster.append(agent_name)
+        await db.commit()
+    return _public_team(
+        {"id": team_id, "name": name, "description": description or ""}, roster,
+    )
+
+
+async def update_team(team_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+    current = await get_team(team_id)
+    if current is None:
+        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        sets: list[str] = []
+        args: list[Any] = []
+        if "name" in fields and fields["name"] is not None:
+            sets.append("name = ?")
+            args.append(fields["name"])
+        if "description" in fields and fields["description"] is not None:
+            sets.append("description = ?")
+            args.append(fields["description"])
+        if sets:
+            args.append(team_id)
+            await db.execute(
+                f"UPDATE agent_teams SET {', '.join(sets)} WHERE id = ?",
+                args,
+            )
+        if "members" in fields and fields["members"] is not None:
+            await db.execute("DELETE FROM agent_team_members WHERE team_id = ?", (team_id,))
+            roster: list[str] = []
+            for i, agent_name in enumerate(fields["members"]):
+                if not agent_name or agent_name in roster:
+                    continue
+                await db.execute(
+                    "INSERT INTO agent_team_members (team_id, agent_name, sort_order) "
+                    "VALUES (?, ?, ?)",
+                    (team_id, agent_name, i),
+                )
+                roster.append(agent_name)
+        await db.commit()
+    return await get_team(team_id)
+
+
+async def delete_team(team_id: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM agent_team_members WHERE team_id = ?", (team_id,))
+        cur = await db.execute("DELETE FROM agent_teams WHERE id = ?", (team_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------- search/export -
+
+async def export_messages(channel_id: str) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at, id",
+            (channel_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def search_workspace(
+    query: str, *, viewer: str, limit: int = 30,
+) -> list[dict[str, Any]]:
+    needle = (query or "").strip()
+    if len(needle) < 2:
+        return []
+    like = f"%{needle}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT m.id, m.channel_id, m.author, m.author_kind, m.body, m.created_at, "
+            "m.parent_id, c.name AS channel_name, c.kind AS channel_kind "
+            "FROM messages m JOIN channels c ON c.id = m.channel_id "
+            "WHERE m.body LIKE ? COLLATE NOCASE "
+            "ORDER BY m.created_at DESC, m.id DESC LIMIT ?",
+            (like, max(1, min(int(limit), 50))),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+        people = await _people_by_channel(db)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        channel = {
+            "id": row["channel_id"],
+            "kind": row.get("channel_kind") or "room",
+            "people": people.get(row["channel_id"], []),
+        }
+        if not can_view_channel(channel, viewer):
+            continue
+        out.append({
+            "id": row["id"],
+            "channel_id": row["channel_id"],
+            "channel_name": row.get("channel_name") or row["channel_id"],
+            "channel_kind": row.get("channel_kind") or "room",
+            "author": row["author"],
+            "author_kind": row["author_kind"],
+            "body": row["body"],
+            "parent_id": row.get("parent_id"),
+            "created_at": row["created_at"],
+        })
+    return out

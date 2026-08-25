@@ -23,7 +23,9 @@ def test_seeded_harness(client, auth):
     agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
     assert "read_only_shell" in agents["swarm"]["tools"]
     assert "remember" in agents["swarm"]["tools"]
+    assert "computer_run" in agents["swarm"]["tools"]
     assert "read_only_shell" not in agents["ledger"]["tools"]
+    assert "computer_run" not in agents["ledger"]["tools"]
     assert agents["swarm"]["history_window"] == 12
     assert agents["ledger"]["max_tool_calls"] == 3
     assert agents["swarm"]["model"] == DEFAULT_GROQ_MODEL

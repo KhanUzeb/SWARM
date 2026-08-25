@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request
 from starlette.responses import JSONResponse
 
 from . import db
@@ -55,6 +55,13 @@ async def require_auth(authorization: str | None = Header(default=None)) -> str:
     handle = await optional_auth(authorization)
     if handle is None:
         raise HTTPException(401, "missing or invalid bearer token")
+    return handle
+
+
+async def require_admin(handle: str = Depends(require_auth)) -> str:
+    role = await db.get_user_role(handle)
+    if role != "admin":
+        raise HTTPException(403, "admin only")
     return handle
 
 

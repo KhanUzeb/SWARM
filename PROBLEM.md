@@ -46,8 +46,12 @@ See `VISION.md` for the full competitive map and V3 scope.
 
 - Not a Slack replacement or Buzz clone.
 - Not production-hardened multi-tenant SaaS (auth is portfolio-grade; admin role is gated to V3).
-- Not a cloud VM or browser automation platform (shared sandbox only).
-- Not Salesforce/Slack/Notion connectors (job templates describe roles; they do not call APIs).
+- Not a cloud VM or remote-desktop platform. Computer-use is the shared
+  local sandbox plus host-system tools bound to `SWARM_SYSTEM_ROOT`;
+  browser-use is optional Playwright on this machine.
+- Not a full iPaaS. Composio can connect Gmail/Slack/GitHub/Notion/etc.
+  when a workspace key is set; job templates still describe roles even
+  without that key.
 
 ## Definition of done
 
@@ -68,8 +72,9 @@ See `VISION.md` for the full competitive map and V3 scope.
 ### V3 (partial — see `VISION.md`)
 
 - [x] Five-minute onboarding + demo mode (V3.2, V3.7)
-- [ ] Admin role for Bot creation
-- [ ] Agent teams (`@team-name` bundles)
-- [ ] Human DMs, semantic history, audit export — each gated on actual need
+- [x] Admin role for Bot creation
+- [x] Agent teams (`@team-name` bundles)
+- [x] Human DMs and audit export
+- [ ] Semantic history — gated on actual need
 
 Success for the documentation: someone reads `VISION.md` + `SPEC.md` cold and knows what swarm is, what it isn't, and how it compares to Buzz and SlackHive — without asking the author.

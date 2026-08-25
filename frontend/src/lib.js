@@ -18,6 +18,25 @@ export const ALL_TOOLS = [
   "channel_digest",
   "save_skill",
   "request_approval",
+  "computer_run",
+  "computer_open",
+  "computer_screenshot",
+  "browser_navigate",
+  "browser_snapshot",
+  "browser_click",
+  "browser_type",
+  "browser_press",
+  "browser_wait",
+  "browser_screenshot",
+  "exa_search",
+  "tavily_search",
+  "firecrawl_scrape",
+  "browser_use",
+  "cua_desktop",
+  "system_run",
+  "system_ls",
+  "system_read",
+  "system_write",
 ];
 export const EMOJI = ["🔥", "✅", "👀", "❤️", "🎉", "👍"];
 
@@ -40,6 +59,13 @@ export function botLabel(agent) {
 export function fmtTime(ts) {
   if (!ts) return "";
   return new Date(ts * 1000).toTimeString().slice(0, 5);
+}
+
+export function fmtBytes(n) {
+  const size = Number(n) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 102.4) / 10} KB`;
+  return `${Math.round(size / 104857.6) / 10} MB`;
 }
 
 import { cacheGet, cacheInvalidate, cacheKey, cacheSet } from "./lib/cache.js";

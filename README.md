@@ -19,7 +19,7 @@ Human posts in #general, a Bot 1:1, or a group chat
 | No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
 | `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
 
-**Status:** V3 tools/plugins, multi-provider AI (tau-inspired), API security, and 3-step onboarding shipped — see [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for commit map.
+**Status:** Slack-shaped workspace: admin-gated Bots, human DMs, `@team` pods, audit export, computer-use, browser-use, Composio apps — see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 ```
 swarm/
@@ -29,6 +29,8 @@ swarm/
   frontend/         React 19 + Vite 8 (bun). Production build in frontend/dist
     src/ai-support/   Provider + tools panels, onboarding API step
   plugins/          Optional tool manifests (plugin:slug:name)
+  skills/           Bundled /commands (standup, digest, research, …)
+  profiles/         Bot profile.md (seeded Bots + job templates)
   ai-support/       User-facing README → backend/ai_support/
   cli/swarm_cli.py  JSON in / JSON out — scripts and other agents post here
   tests/            pytest (Groq mocked)
@@ -57,7 +59,7 @@ uvicorn backend.main:app --reload
 
 Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/OpenRouter (encrypted server-side) → pick your first Bot → land in their 1:1. Or set `SWARM_DEMO=1` for mock replies without an API key.
 
-**Computer panel:** Tools · Plugins · **AI** (provider keys) · Skills · Routines.
+**Computer panel:** **Sandbox** (isolated temp files) · **System** (this machine / repo) · Browser · **Apps** (Exa, Tavily, Firecrawl, Composio, Browser Use CLI, CUA) · Tools · Plugins · **AI** · Skills · Routines.
 
 **Docker:** [`docs/DEPLOY.md`](docs/DEPLOY.md)
 
@@ -68,9 +70,12 @@ Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/Ope
 1. **Room:** `@swarm what's blocking release?` — streaming reply + optional tool audit line.
 2. **1:1:** Talk to `dm-swarm` or a custom-named Bot without mentions.
 3. **Group:** Create a group, pick Bots — they all hear you without `@`. `@mention` still targets one.
-4. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
-5. **Governance:** Bot requests approval → Allow once / Deny in UI.
-6. **Computer:** Shared sandbox files Bots wrote; routines tick in the background. Pip (sidebar mascot) tracks connection and Bot status.
+4. **Team:** `@core` in a room runs Swarm, Ledger, and Coder in order.
+5. **People:** Message a person from Direct messages — private 1:1.
+6. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
+7. **Governance:** Bot requests approval → Allow once / Deny in UI.
+8. **Slash skills:** `/standup` `/digest` `/research` `/plan` `/brief` — type `/` in the composer.
+9. **Computer / export:** Sandbox + this machine (System tab) + JSON/CSV audit export from More.
 
 Full script: [`VISION.md` § Demo narrative](VISION.md).
 
@@ -108,4 +113,7 @@ pytest -q
 
 ## Honest gaps (not hidden)
 
-No cloud VM, browser automation, Slack/Salesforce connectors, human DMs, admin role, semantic search, or agent delete. Sandbox is cwd+timeout, not container isolation. See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.
+No cloud VM or remote desktop. Browser-use is optional local Playwright
+or the Browser Use CLI / CUA driver if installed. Composio, Exa, Tavily,
+and Firecrawl need their own keys. Semantic search is still gated.
+See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.

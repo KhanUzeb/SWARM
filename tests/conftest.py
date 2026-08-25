@@ -17,6 +17,10 @@ def pytest_configure(config):  # noqa: ARG001
     os.environ["PYTHON_DOTENV_DISABLED"] = "1"
     os.environ.pop("GROQ_API_KEY", None)
     os.environ.pop("OPENROUTER_API_KEY", None)
+    os.environ.pop("COMPOSIO_API_KEY", None)
+    os.environ.pop("EXA_API_KEY", None)
+    os.environ.pop("TAVILY_API_KEY", None)
+    os.environ.pop("FIRECRAWL_API_KEY", None)
     os.environ.pop("SWARM_AGENT_MODEL", None)
     os.environ.pop("LANGFUSE_PUBLIC_KEY", None)
     os.environ.pop("LANGFUSE_SECRET_KEY", None)
@@ -33,6 +37,7 @@ def client(tmp_path, monkeypatch):
     db_mod.DB_PATH = db_path
     main_mod._last_write.clear()
     main_mod.hub._rooms.clear()
+    main_mod.hub._presence.clear()
 
     from fastapi.testclient import TestClient
 
@@ -40,6 +45,7 @@ def client(tmp_path, monkeypatch):
         yield c
 
     main_mod.hub._rooms.clear()
+    main_mod.hub._presence.clear()
     main_mod._last_write.clear()
 
 

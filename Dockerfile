@@ -13,6 +13,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./backend/
+COPY plugins/ ./plugins/
+COPY profiles/ ./profiles/
+COPY skills/ ./skills/
 COPY --from=web /web/dist ./frontend/dist
 
 RUN useradd --create-home --shell /bin/false swarm \
@@ -22,6 +25,8 @@ RUN useradd --create-home --shell /bin/false swarm \
 USER swarm
 
 ENV SWARM_SANDBOX_DIR=/tmp/swarm-sandbox
+ENV SWARM_SYSTEM=1
+ENV SWARM_SYSTEM_ROOT=/app
 ENV SWARM_DB_PATH=/app/data/swarm.db
 
 EXPOSE 8000

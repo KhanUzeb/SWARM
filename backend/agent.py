@@ -68,7 +68,11 @@ _TOOL_HINT = re.compile(
     r"what\s+did\s+we|last\s+time|"
     r"remember|recall|forget|notes?|memor(?:y|ies)|"
     r"workspace|write|read|fetch|url|digest|save|skill|routine|schedule|approv|"
-    r"computer|handoff|draft|research"
+    r"computer|screenshot|browser|navigate|click|type|press|"
+    r"composio|gmail|github|slack|notion|toolkit|"
+    r"exa|tavily|firecrawl|crawl|scrape|research|"
+    r"host|system|machine|repo|pytest|git|"
+    r"handoff|draft"
     r")\b",
     re.I,
 )
@@ -76,11 +80,19 @@ _SLASH_SKILL = re.compile(r"/([a-zA-Z0-9_\-]+)")
 _TOOL_POLICY = (
     "You are a persistent named teammate. Finish the job and only stop when "
     "the deliverable is ready or something needs approval. "
-    "Tools: use them when the work needs files, history, memory, a saved skill, "
+    "Tools: use them when the work needs files, this machine, the shared sandbox, "
+    "a browser, web search (Exa/Tavily), a Firecrawl scrape, Browser Use CLI, "
+    "CUA desktop, a connected app (Composio), history, memory, a saved skill, "
     "or an approval gate. Greetings in a shared room get a short text reply. "
+    "system_run / system_ls / system_read / system_write work on this host "
+    "(bound to the system root, usually the repo). computer_run is the isolated "
+    "sandbox. browser_* is Playwright; browser_use is the Browser Use CLI; "
+    "cua_desktop is the CUA host driver; plugin:composio:* lists, connects, "
+    "and executes Gmail/Slack/GitHub/Notion/etc. "
     "For sending, publishing, deleting, purchasing, or production changes, call "
-    "request_approval and wait. Write durable files to the shared workspace. "
-    "You may @mention another bot to hand off work."
+    "request_approval and wait. Put durable sandbox files in the shared workspace; "
+    "put repo/code work on the system root. "
+    "You may @mention another bot to hand off work. Follow your profile.md."
 )
 
 OnToolsReady = Callable[[list[dict[str, Any]]], Awaitable[None]]
@@ -131,6 +143,21 @@ def find_mentioned_agents(body: str, agents: list[dict[str, Any]]) -> list[dict[
             hits.append((match.start(), a))
     hits.sort(key=lambda h: h[0])
     return [a for _, a in hits]
+
+
+def find_mentioned_teams(body: str, teams: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Teams mentioned as @team-id, ordered by first mention position."""
+    hits: list[tuple[int, dict[str, Any]]] = []
+    lowered = body.lower()
+    for team in teams:
+        slug = (team.get("id") or "").lower()
+        if not slug:
+            continue
+        match = re.search(rf"@{re.escape(slug)}\b", lowered)
+        if match:
+            hits.append((match.start(), team))
+    hits.sort(key=lambda h: h[0])
+    return [t for _, t in hits]
 
 
 def _env_key(name: str) -> str:
@@ -377,6 +404,7 @@ def _build_messages(
     invoked_skills: list[dict[str, Any]] | None = None,
     group_mates: list[str] | None = None,
     display_name: str | None = None,
+    profile: str | None = None,
 ) -> list[dict[str, Any]]:
     tools = allowed_tools if allowed_tools is not None else list(DEFAULT_TOOLS)
     policy = _TOOL_POLICY
@@ -389,6 +417,8 @@ def _build_messages(
     else:
         policy += " You have no tools for this turn."
     blocks = [system_prompt, policy]
+    if profile:
+        blocks.append("Bot profile (profile.md):\n" + profile)
     if group_mates:
         others = [n for n in group_mates if n]
         if others:
@@ -811,11 +841,14 @@ async def generate_reply(
                     invoked.append(by_name[slug])
             break
     group_mates = (channel or {}).get("members") if channel_kind == "group" else None
+    from .profiles import load_agent_profile
+    profile = load_agent_profile(name, agent_row.get("job"))
     messages = _build_messages(
         agent_row["system_prompt"], history,
         window=window, allowed_tools=allowed, notes=notes, summary=summary,
         job=agent_row.get("job"), skills=skills, invoked_skills=invoked,
         group_mates=group_mates, display_name=agent_row.get("display_name"),
+        profile=profile,
     )
     use_tools = should_offer_tools(history, channel_kind=channel_kind) and bool(allowed)
 

@@ -36,3 +36,5 @@ def test_tools_offered_for_file_or_history_asks():
     assert should_offer_tools([{"author_kind": "human", "body": "@swarm ls the sandbox"}])
     assert should_offer_tools([{"author_kind": "human", "body": "@swarm search history for shipping"}])
     assert should_offer_tools([{"author_kind": "human", "body": "@swarm remember the ship date"}])
+    assert should_offer_tools([{"author_kind": "human", "body": "@swarm open gmail and screenshot the inbox"}])
+    assert should_offer_tools([{"author_kind": "human", "body": "@swarm navigate to the docs"}])
