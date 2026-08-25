@@ -59,7 +59,7 @@ uvicorn backend.main:app --reload
 
 Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/OpenRouter (encrypted server-side) → pick your first Bot → land in their 1:1. Or set `SWARM_DEMO=1` for mock replies without an API key.
 
-**Computer panel:** Files · Browser · **Apps** (Exa, Tavily, Firecrawl, Composio, Browser Use CLI, CUA) · Tools · Plugins · **AI** · Skills · Routines.
+**Computer panel:** **Sandbox** (isolated temp files) · **System** (this machine / repo) · Browser · **Apps** (Exa, Tavily, Firecrawl, Composio, Browser Use CLI, CUA) · Tools · Plugins · **AI** · Skills · Routines.
 
 **Docker:** [`docs/DEPLOY.md`](docs/DEPLOY.md)
 
@@ -75,7 +75,7 @@ Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/Ope
 6. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
 7. **Governance:** Bot requests approval → Allow once / Deny in UI.
 8. **Slash skills:** `/standup` `/digest` `/research` `/plan` `/brief` — type `/` in the composer.
-9. **Computer / export:** Shared sandbox + JSON/CSV audit export from the channel header.
+9. **Computer / export:** Sandbox + this machine (System tab) + JSON/CSV audit export from More.
 
 Full script: [`VISION.md` § Demo narrative](VISION.md).
 

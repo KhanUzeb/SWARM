@@ -72,7 +72,7 @@ a duplicate row or an error.
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
 | archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
-Allowed tool names include **26 builtins** (`read_only_shell`,
+Allowed tool names include **30 builtins** (`read_only_shell`,
 `search_channel_history`, `remember`, `recall`, `list_workspace`,
 `read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
 `save_skill`, `request_approval`, computer-use `computer_run` /
@@ -80,7 +80,8 @@ Allowed tool names include **26 builtins** (`read_only_shell`,
 `browser_navigate` / `browser_snapshot` / `browser_click` /
 `browser_type` / `browser_press` / `browser_wait` /
 `browser_screenshot`, plus `exa_search`, `tavily_search`,
-`firecrawl_scrape`, `browser_use`, `cua_desktop`), plus **custom tools**
+`firecrawl_scrape`, `browser_use`, `cua_desktop`, and host-system
+`system_run` / `system_ls` / `system_read` / `system_write`), plus **custom tools**
 (DB) and **plugin tools** (`plugin:{slug}:{name}` from
 `plugins/*/manifest.json`).
 Each Bot also has a **profile.md**: seeded Bots load
@@ -240,7 +241,8 @@ with a nullable self-reference is sufficient; `GET /api/messages/{id}/thread`
 returns one level (the parent plus rows whose `parent_id` equals that
 id). Semantic search (Phase 6) is still gated. No cloud VM or
 teach-by-demonstration recording. Computer-use is the shared sandbox
-plus optional Playwright Chromium (`browser_*`) and Composio app
+plus host-system tools bound to `SWARM_SYSTEM_ROOT` (usually the repo),
+optional Playwright Chromium (`browser_*`), and Composio app
 connectors — still this machine, not a remote desktop.
 
 ---
@@ -330,7 +332,8 @@ Public. Returns booleans only — never raw API keys.
   "llm_ready": true,
   "providers_ready": {"groq": true, "openrouter": false, "huggingface": false},
   "composio": false,
-  "browser": true
+  "browser": true,
+  "system": true
 }
 ```
 With Bearer auth, also includes `ai_providers` connection metadata
@@ -565,13 +568,23 @@ Auth required. `{"status": "approved"}` or `{"status": "denied"}`.
 channel and re-triggers agents there.
 
 ### `GET /api/computer`
-Auth required. Shared workspace listing: `{workspace, shared, files, activity, computer, note}`.
-The computer is this machine's sandbox, optional browser session, and
-Composio connectors — not a cloud VM.
+Auth required. Shared workspace listing: `{workspace, shared, files, activity, computer, system, note}`.
+The computer is this machine: an isolated sandbox, host-system tools
+bound to `SWARM_SYSTEM_ROOT`, optional browser session, and Composio
+connectors — not a cloud VM.
 
 ### `GET /api/computer/file?path=`
 Auth required. Text preview, capped at 64KB. 404 if missing or the path
-escapes the workspace. 413 if too large.
+escapes the sandbox. 413 if too large.
+
+### `GET /api/computer/system?path=`
+Auth required. Directory listing under the host system root
+(`SWARM_SYSTEM_ROOT`). `{enabled, root, path, parent, entries}`.
+
+### `GET /api/computer/system/file?path=`
+Auth required. Text preview of a host file under the system root.
+403 if `SWARM_SYSTEM=0`. 404 if missing or the path escapes the root.
+413 if too large. 415 if binary.
 
 ---
 
@@ -682,7 +695,7 @@ Live `message` events from a human/agent/system write may omit
   calling. In a 1:1 (`kind=dm`), a group (`kind=group`), and on `[routine:…]` ticks, tools are
   always offered. In a room they are offered **only when the latest
   human message looks like a file/history/memory/skill/workspace/
-  computer/browser/app request**. Greetings in a room (`@swarm hi`) still get a text-only
+  computer/system/browser/app request**. Greetings in a room (`@swarm hi`) still get a text-only
   completion.
   - `read_only_shell` runs in a sandboxed working directory
     (`SWARM_SANDBOX_DIR`; default `/tmp/swarm-sandbox`, or `%TEMP%\swarm-sandbox`
@@ -705,8 +718,16 @@ Live `message` events from a human/agent/system write may omit
   - `request_approval(action, detail)` inserts a pending approval,
     sets Bot status to `needs_approval`, and tells the model to stop.
   - `computer_run(command)` is the write-capable shared-computer shell
-    (30s timeout, destructive-command denylist). `computer_open` reads a
-    workspace path; http(s) URLs should use `browser_navigate`.
+    in the isolated sandbox (30s timeout, destructive-command denylist).
+    `computer_open` reads a workspace path; http(s) URLs should use
+    `browser_navigate`.
+  - `system_run(command, cwd?)` / `system_ls` / `system_read` /
+    `system_write` work on this host, bound to `SWARM_SYSTEM_ROOT`
+    (default: the swarm repo). Full `PATH` is inherited. Destructive
+    commands, path escapes, `.env`, and `swarm.db` are blocked.
+    `SWARM_SYSTEM=0` disables the tools. Filesystem root `/` is refused
+    unless `SWARM_SYSTEM_UNRESTRICTED=1`. Still cwd+timeout, not a
+    container or cloud VM.
   - `browser_navigate` / `snapshot` / `click` / `type` / `press` /
     `wait` / `screenshot` drive an optional Playwright Chromium session
     (`SWARM_BROWSER=0` disables; missing playwright degrades with a
@@ -805,6 +826,7 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR12.4 | Bot `profile.md` per seeded Bot and job template | ✅ |
 | FR12.5 | Exa / Tavily / Firecrawl workspace connectors | ✅ |
 | FR12.6 | Browser Use CLI + CUA driver tools | ✅ |
+| FR12.7 | Host-system tools (`system_run` / `ls` / `read` / `write`) | ✅ |
 | FR12.1 | Custom Bot `display_name`; mention handle stays `@name` | ✅ |
 | FR12.2 | Group chats: members hear without `@`; `@` still targets one | ✅ |
 | FR13.1 | First user is admin; Bot/team/tool/provider writes are admin-only | ✅ |
@@ -834,5 +856,6 @@ canvas/media comments, no huddle/voice, no multi-tenant hosting, no
 vector search (Phase 6, intentionally unbuilt). Admin role, people DMs,
 teams, audit export, and bot archive shipped. Phase 10 does **not** include a
 cloud VM, remote desktop, teach-by-demonstration recording, or
-container-per-agent isolation. Computer-use is local sandbox + optional
-Playwright + Composio connectors.
+container-per-agent isolation. Computer-use is local sandbox + host
+system tools (`SWARM_SYSTEM_ROOT`) + optional Playwright + Composio
+connectors.

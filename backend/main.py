@@ -159,6 +159,7 @@ async def api_status(handle: str | None = Depends(optional_auth)):
     llm_ready = demo or any(providers_ready.values())
     from .tools import browser as browser_mod
     from .tools import connectors
+    from .tools import system as system_mod
     body: dict[str, Any] = {
         "groq": providers_ready.get("groq", False),
         "openrouter": providers_ready.get("openrouter", False),
@@ -166,6 +167,7 @@ async def api_status(handle: str | None = Depends(optional_auth)):
         "llm_ready": llm_ready,
         "providers_ready": providers_ready,
         "browser": browser_mod.enabled(),
+        "system": system_mod.enabled(),
     }
     for row in await connectors.catalog_status():
         body[row["id"]] = bool(row.get("connected"))
@@ -777,16 +779,20 @@ async def api_resolve_approval(
 @app.get("/api/computer")
 async def api_computer(handle: str = Depends(require_auth)):
     from .tools import computer as computer_mod
+    from .tools import system as system_mod
+    system_info = system_mod.listing("")
     return {
         "workspace": agent.SANDBOX_DIR,
         "shared": True,
         "files": agent.list_workspace_files(),
         "activity": await db.get_recent_system_messages(20),
         "computer": computer_mod.status(),
+        "system": system_info,
         "note": (
-            "All Bots share this computer: sandbox files + shell, optional Playwright, "
-            "Browser Use CLI, CUA drivers, Exa/Tavily/Firecrawl, and Composio apps. "
-            "It is still this machine — not a remote cloud desktop."
+            "Bots share two places on this host: the sandbox (Sandbox tab) and "
+            f"the machine root {system_info.get('root')} (System tab, system_run). "
+            "Optional Playwright, Browser Use CLI, CUA, Exa/Tavily/Firecrawl, and "
+            "Composio apps live in the other tabs. Not a remote cloud desktop."
         ),
     }
 
@@ -801,6 +807,34 @@ async def api_computer_file(path: str, handle: str = Depends(require_auth)):
     return {
         "path": path,
         "content": target.read_text(encoding="utf-8", errors="replace"),
+    }
+
+
+@app.get("/api/computer/system")
+async def api_computer_system(path: str = "", handle: str = Depends(require_auth)):
+    from .tools import system as system_mod
+    return system_mod.listing(path)
+
+
+@app.get("/api/computer/system/file")
+async def api_computer_system_file(path: str, handle: str = Depends(require_auth)):
+    from .tools import system as system_mod
+    if not system_mod.enabled():
+        raise HTTPException(403, "system tools disabled")
+    target = system_mod.safe_path(path)
+    if target is None or not target.is_file():
+        raise HTTPException(404, "no such file")
+    if target.stat().st_size > system_mod.API_PREVIEW_BYTES:
+        raise HTTPException(413, "file too large to preview")
+    try:
+        raw = target.read_bytes()
+    except OSError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if b"\x00" in raw[:1024]:
+        raise HTTPException(415, "binary file")
+    return {
+        "path": system_mod.rel_to_root(target) or path,
+        "content": raw.decode("utf-8", errors="replace"),
     }
 
 

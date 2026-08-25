@@ -159,8 +159,8 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "computer_run",
             "description": (
-                "Run a shell command on the shared computer (sandbox cwd, 30s timeout). "
-                "Use for writes, installs, scripts, and anything read_only_shell is too tight for."
+                "Run a shell command in the shared sandbox (isolated cwd, 30s timeout). "
+                "For this machine's repo and host files, use system_run."
             ),
             "parameters": {
                 "type": "object",
@@ -348,6 +348,67 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "system_run": {
+        "type": "function",
+        "function": {
+            "name": "system_run",
+            "description": (
+                "Run a shell command on this machine (full PATH, cwd = SWARM_SYSTEM_ROOT, "
+                "usually the swarm repo). 60s timeout. Destructive commands are blocked. "
+                "Use for git, pytest, installs, and editing the live project. "
+                "computer_run is the isolated sandbox."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "cwd": {"type": "string"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    "system_ls": {
+        "type": "function",
+        "function": {
+            "name": "system_ls",
+            "description": "List a directory on this machine under the system root.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+            },
+        },
+    },
+    "system_read": {
+        "type": "function",
+        "function": {
+            "name": "system_read",
+            "description": "Read a text file on this machine under the system root (cap 200k chars).",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    "system_write": {
+        "type": "function",
+        "function": {
+            "name": "system_write",
+            "description": (
+                "Write a text file on this machine under the system root. "
+                ".env and swarm.db are protected. Request approval before production changes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
 }
 
 BUILTIN_TOOL_NAMES = tuple(BUILTIN_SCHEMAS.keys())
@@ -359,6 +420,9 @@ COMPUTER_USE_TOOLS = [
     "computer_run", "computer_open", "computer_screenshot",
     "browser_navigate", "browser_snapshot", "browser_click",
     "browser_type", "browser_press", "browser_wait", "browser_screenshot",
+]
+SYSTEM_TOOLS = [
+    "system_run", "system_ls", "system_read", "system_write",
 ]
 COMPOSIO_PLUGIN_TOOLS = [
     "plugin:composio:status",
@@ -637,6 +701,18 @@ class ToolRegistry:
                 x=args.get("x"),
                 y=args.get("y"),
             )
+        if name == "system_run":
+            from . import system as system_mod
+            return system_mod.system_run(args.get("command", ""), cwd=args.get("cwd") or "")
+        if name == "system_ls":
+            from . import system as system_mod
+            return system_mod.system_ls(args.get("path") or "")
+        if name == "system_read":
+            from . import system as system_mod
+            return system_mod.system_read(args.get("path", ""))
+        if name == "system_write":
+            from . import system as system_mod
+            return system_mod.system_write(args.get("path", ""), args.get("content", ""))
         return f"(unimplemented builtin {name})"
 
     async def _exec_custom(self, row: dict[str, Any], args: dict[str, Any]) -> str:

@@ -207,10 +207,10 @@ _CODER_PROMPT = (
     "   \\subsection*{Code}\n"
     "   \\subsection*{Notes}\n"
     "4. Prefer small, complete, runnable examples over pseudocode.\n"
-    "5. For multi-file work, write files with write_workspace so they show "
-    "on the shared computer.\n"
-    "6. Use read_only_shell only to inspect the sandbox. Never invent "
-    "command output.\n"
+    "5. For repo and host work, use system_ls / system_read / system_write / "
+    "system_run on this machine. Use write_workspace / computer_run only for "
+    "the isolated sandbox.\n"
+    "6. Inspect with shell tools; never invent command output.\n"
     "7. Do not send outreach or change production; call request_approval "
     "first for anything external.\n"
     "8. Keep chatter out. Tradeoffs live in Approach; the program lives in Code."
@@ -454,9 +454,14 @@ async def _seed_bundled_skills(db: aiosqlite.Connection) -> None:
 
 async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:
     """Give existing full-tool Bots computer/browser/Composio without wiping custom lists."""
-    from .tools.registry import COMPOSIO_PLUGIN_TOOLS, COMPUTER_USE_TOOLS, RESEARCH_TOOLS
+    from .tools.registry import COMPOSIO_PLUGIN_TOOLS, COMPUTER_USE_TOOLS, RESEARCH_TOOLS, SYSTEM_TOOLS
 
-    extras = list(COMPUTER_USE_TOOLS) + list(COMPOSIO_PLUGIN_TOOLS) + list(RESEARCH_TOOLS)
+    extras = (
+        list(COMPUTER_USE_TOOLS)
+        + list(SYSTEM_TOOLS)
+        + list(COMPOSIO_PLUGIN_TOOLS)
+        + list(RESEARCH_TOOLS)
+    )
     cur = await db.execute("SELECT name, tools FROM agents")
     rows = await cur.fetchall()
     for name, tools_raw in rows:

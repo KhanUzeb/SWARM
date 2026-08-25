@@ -5,11 +5,25 @@ import ProviderPanel from "./ai-support/ProviderPanel.jsx";
 import ToolsPanel from "./ai-support/ToolsPanel.jsx";
 import BrowserPanel from "./ai-support/BrowserPanel.jsx";
 import AppsPanel from "./ai-support/AppsPanel.jsx";
+import SystemPanel from "./ai-support/SystemPanel.jsx";
 import {
   ALL_TOOLS, CACHE_TTL, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, apiJson, authHeaders, botLabel, bustCache,
-  escapeHtml, extractPaper, fmtTime, formatInline, groupedWith, initials, insertMention,
+  escapeHtml, extractPaper, fmtBytes, fmtTime, formatInline, groupedWith, initials, insertMention,
   mentionQuery, slugFromName, statusLabel, tokenizeBody,
 } from "./lib.js";
+
+const PANEL_TABS = [
+  { id: "files", label: "Sandbox" },
+  { id: "system", label: "System" },
+  { id: "browser", label: "Browser" },
+  { id: "apps", label: "Apps" },
+  { id: "tools", label: "Tools" },
+  { id: "plugins", label: "Plugins" },
+  { id: "ai", label: "AI" },
+  { id: "skills", label: "Skills" },
+  { id: "routines", label: "Routines" },
+  { id: "approvals", label: "Approvals" },
+];
 
 function renderMath(tex, display) {
   try {
@@ -1737,11 +1751,25 @@ export default function App() {
           </div>
           {bot && <span className={`status-chip ${bot.status || "idle"}`}>{statusLabel(bot.status)}</span>}
           <span className="who">you're <span>{user || "anon"}</span></span>
-          {bot && isAdmin && <button type="button" className="btn ghost" onClick={() => openAgentPanel(bot.name)}>Configure</button>}
-          <button type="button" className="btn ghost" onClick={() => exportChannel("json")}>Export JSON</button>
-          <button type="button" className="btn ghost" onClick={() => exportChannel("csv")}>Export CSV</button>
-          <button type="button" className="btn ghost" onClick={() => setShowTools((v) => !v)}>{showTools ? "Hide tool log" : "Show tool log"}</button>
-          <button type="button" className="btn ghost" onClick={() => setComputerOpen((v) => !v)}>Computer</button>
+          <div className="topbar-actions">
+            {bot && isAdmin && <button type="button" className="btn ghost" onClick={() => openAgentPanel(bot.name)}>Configure</button>}
+            <button type="button" className="btn ghost" onClick={() => setShowTools((v) => !v)}>{showTools ? "Hide tools" : "Tool log"}</button>
+            <button
+              type="button"
+              className={`btn ${computerOpen ? "ghost on" : "ghost"}`}
+              aria-pressed={computerOpen}
+              onClick={() => setComputerOpen((v) => !v)}
+            >
+              Computer
+            </button>
+            <details className="topbar-more">
+              <summary>More</summary>
+              <div className="topbar-menu" role="menu">
+                <button type="button" role="menuitem" onClick={(e) => { exportChannel("json"); e.currentTarget.closest("details").open = false; }}>Export JSON</button>
+                <button type="button" role="menuitem" onClick={(e) => { exportChannel("csv"); e.currentTarget.closest("details").open = false; }}>Export CSV</button>
+              </div>
+            </details>
+          </div>
         </div>
         {mainView === "paper" ? (
           <div id="log" ref={logRef} className="paper-log" role="document">
@@ -1819,7 +1847,7 @@ export default function App() {
             />
             <button type="button" className="btn primary send" onClick={() => { sendFrom(draft, null); setDraft(""); }}>Send</button>
           </div>
-          <div className="composer-hint">@bot · @core · /standup /digest /research /plan · people DMs stay private</div>
+          <div className="composer-hint">@bot · @core · /standup /digest /research /plan · Computer: sandbox + this machine</div>
         </div>
       </main>
 
@@ -1827,18 +1855,34 @@ export default function App() {
         <aside id="computer-panel">
           <div className="computer-head">
             <div>
-              <div className="thread-title">Shared computer</div>
+              <div className="thread-title">Computer</div>
               <div className="thread-sub">
-                {computer ? `Shared workspace · ${computer.files.length} file${computer.files.length === 1 ? "" : "s"}` : "Shared workspace"}
+                {panelTab === "system"
+                  ? (computer?.system?.root ? `This machine · ${computer.system.root}` : "This machine")
+                  : computer
+                    ? `Sandbox · ${computer.files.length} file${computer.files.length === 1 ? "" : "s"}`
+                    : "Sandbox"}
               </div>
             </div>
             <button type="button" className="btn ghost" onClick={() => setComputerOpen(false)}>Close</button>
           </div>
           <div className="panel-tabs" role="tablist">
-            {["files", "browser", "apps", "tools", "plugins", "ai", "skills", "routines", "approvals"].map((tab) => (
-              <button key={tab} type="button" className={`tab${panelTab === tab ? " active" : ""}`} onClick={() => setPanelTab(tab)}>{tab === "ai" ? "AI" : tab[0].toUpperCase() + tab.slice(1)}</button>
+            {PANEL_TABS.map((tab, i) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={panelTab === tab.id}
+                className={`tab${panelTab === tab.id ? " active" : ""}${i === 3 ? " tab-split" : ""}`}
+                onClick={() => setPanelTab(tab.id)}
+              >
+                {tab.label}
+              </button>
             ))}
           </div>
+          {panelTab === "system" && (
+            <SystemPanel token={token} flash={flash} />
+          )}
           {panelTab === "browser" && (
             <BrowserPanel token={token} flash={flash} />
           )}
@@ -1887,16 +1931,34 @@ export default function App() {
           )}
           {panelTab === "files" && (
             <div className="panel-body">
-              <p className="panel-note">{computer?.note || ""}</p>
-              <ul className="panel-list">
-                {!computer?.files?.length && <li className="empty-state">Workspace is empty. Ask a bot to write a file here.</li>}
+              <p className="panel-note">
+                Isolated sandbox for throwaway files and <code>computer_run</code>.
+                Live repo work belongs on the <strong>System</strong> tab.
+              </p>
+              <div className="place-chips">
+                <span className="place-chip">Sandbox</span>
+                <span className="place-chip path" title={computer?.workspace || ""}>
+                  {computer?.workspace || "…"}
+                </span>
+              </div>
+              <ul className="file-list">
+                {!computer?.files?.length && (
+                  <li className="empty-state">Empty sandbox. Ask a Bot to <code>write_workspace</code> a file.</li>
+                )}
                 {computer?.files?.map((f) => (
-                  <li key={f.path}><button type="button" className="linkish" onClick={() => previewFile(f.path)}>{f.path} ({f.size} B)</button></li>
+                  <li key={f.path}>
+                    <button type="button" className="file-row" onClick={() => previewFile(f.path)}>
+                      <span className="file-kind">file</span>
+                      <span className="file-name">{f.path}</span>
+                      <span className="file-size">{fmtBytes(f.size)}</span>
+                    </button>
+                  </li>
                 ))}
               </ul>
               {filePreview && <pre id="file-preview">{filePreview}</pre>}
               <div className="mem-title">Recent actions</div>
               <ul className="panel-list dim">
+                {!(computer?.activity || []).length && <li className="empty-state">No tool calls yet.</li>}
                 {(computer?.activity || []).slice(0, 12).map((m) => <li key={m.id}>{m.body}</li>)}
               </ul>
             </div>

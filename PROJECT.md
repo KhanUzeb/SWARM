@@ -130,11 +130,13 @@ swarm/
   agents in one message can still produce up to 6 tool calls total.
   Acceptable at current scale; revisit if the sandbox shell ever does
   anything expensive enough to matter.
-- **The shared computer is a sandbox directory, not a VM.** Browser
-  sessions, 24/7 cloud work with the laptop closed, and teach-by-
-  demonstration are out of scope. Files and logins placed there are
-  visible to every Bot on the account — same boundary as Grok Bot's
-  docs, without the cloud isolation story.
+- **The shared computer is this host, not a VM.** Sandbox tools stay
+  under `SWARM_SANDBOX_DIR`. Host-system tools stay under
+  `SWARM_SYSTEM_ROOT` (the repo by default). Browser sessions, 24/7
+  cloud work with the laptop closed, and teach-by-demonstration are
+  out of scope. Files placed in either tree are visible to every Bot
+  on the account — same boundary as Grok Bot's docs, without the
+  cloud isolation story.
 
 ## V3 roadmap (product-complete, not Buzz-complete)
 
@@ -153,7 +155,8 @@ Full detail in `VISION.md`. Summary:
 Permanently out of V3: Nostr signing, git hosting, multi-tenant SaaS,
 cloud VM / remote desktop, container-per-agent isolation.
 
-Shipped on the computer: local sandbox shell, optional Playwright
+Shipped on the computer: local sandbox shell, host-system tools bound to
+the repo (`system_run` / `read` / `write`), optional Playwright
 browser-use, and a Composio plugin so Bots can connect Gmail, Slack,
 GitHub, Notion, and other app toolkits with one workspace key.
 

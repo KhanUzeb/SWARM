@@ -85,8 +85,9 @@ trigger without `@mention`, job templates, skills (`/` invoke +
 `save_skill`), interval routines into the 1:1, `request_approval` with
 Allow once / Deny, shared sandbox listed as the computer, bot-to-bot
 handoff after an agent reply. UI: bot roster, computer panel, darker
-theme. Explicitly not a cloud VM. Browser computer-use and Composio
-app connectors shipped later as optional local tools.
+theme. Explicitly not a cloud VM. Host-system tools (`system_run`),
+browser computer-use, and Composio app connectors shipped later as
+optional local tools.
 
 ---
 

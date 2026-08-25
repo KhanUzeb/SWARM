@@ -210,6 +210,7 @@ def test_computer_workspace(client, auth, tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "SANDBOX_DIR", str(sandbox))
     data = client.get("/api/computer", headers=auth).json()
     assert data["shared"] is True
+    assert "system" in data
     assert any(f["path"] == "notes.md" for f in data["files"])
     preview = client.get("/api/computer/file", params={"path": "notes.md"}, headers=auth).json()
     assert preview["content"] == "hello"

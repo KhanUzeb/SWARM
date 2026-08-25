@@ -71,6 +71,7 @@ _TOOL_HINT = re.compile(
     r"computer|screenshot|browser|navigate|click|type|press|"
     r"composio|gmail|github|slack|notion|toolkit|"
     r"exa|tavily|firecrawl|crawl|scrape|research|"
+    r"host|system|machine|repo|pytest|git|"
     r"handoff|draft"
     r")\b",
     re.I,
@@ -79,15 +80,18 @@ _SLASH_SKILL = re.compile(r"/([a-zA-Z0-9_\-]+)")
 _TOOL_POLICY = (
     "You are a persistent named teammate. Finish the job and only stop when "
     "the deliverable is ready or something needs approval. "
-    "Tools: use them when the work needs files, the shared computer, a browser, "
-    "web search (Exa/Tavily), a Firecrawl scrape, Browser Use CLI, CUA desktop, "
-    "a connected app (Composio), history, memory, a saved skill, or an approval "
-    "gate. Greetings in a shared room get a short text reply. "
-    "computer_run is the write-capable shell; browser_* is Playwright; "
-    "browser_use is the Browser Use CLI; cua_desktop is the CUA host driver; "
-    "plugin:composio:* lists, connects, and executes Gmail/Slack/GitHub/Notion/etc. "
+    "Tools: use them when the work needs files, this machine, the shared sandbox, "
+    "a browser, web search (Exa/Tavily), a Firecrawl scrape, Browser Use CLI, "
+    "CUA desktop, a connected app (Composio), history, memory, a saved skill, "
+    "or an approval gate. Greetings in a shared room get a short text reply. "
+    "system_run / system_ls / system_read / system_write work on this host "
+    "(bound to the system root, usually the repo). computer_run is the isolated "
+    "sandbox. browser_* is Playwright; browser_use is the Browser Use CLI; "
+    "cua_desktop is the CUA host driver; plugin:composio:* lists, connects, "
+    "and executes Gmail/Slack/GitHub/Notion/etc. "
     "For sending, publishing, deleting, purchasing, or production changes, call "
-    "request_approval and wait. Write durable files to the shared workspace. "
+    "request_approval and wait. Put durable sandbox files in the shared workspace; "
+    "put repo/code work on the system root. "
     "You may @mention another bot to hand off work. Follow your profile.md."
 )
 

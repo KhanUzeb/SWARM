@@ -83,7 +83,7 @@ You ──► room, group, or Bot 1:1 ──► @mention, group, or DM message
 - **Skills** — account-wide `/skill-name` invoke + `save_skill` tool.
 - **Routines** — cron-like intervals posting into a Bot's 1:1.
 - **Approvals** — `request_approval` stops the Bot until a human resolves in-channel.
-- **Computer** — shared sandbox directory (list/write/shell); not a cloud VM.
+- **Computer** — shared sandbox plus host-system tools on this machine (`SWARM_SYSTEM_ROOT`); not a cloud VM.
 - **Observability** — Langfuse traces; every tool call is a visible `system` message.
 - **Deploy** — Docker + SQLite volume; React UI with streaming, reconnect, mobile layout.
 
@@ -110,7 +110,7 @@ V3 does not mean "clone Buzz." It means a stranger can run the demo, understand 
 ### Explicitly out (even at V3)
 
 - Nostr signing, git hosting, branch-as-channel (Buzz's hard problems).
-- Cloud VM / remote desktop and teach-by-demonstration (Grok Bot cloud tier). Local computer-use, Playwright browser-use, and Composio app connectors **shipped**.
+- Cloud VM / remote desktop and teach-by-demonstration (Grok Bot cloud tier). Local sandbox, host-system tools, Playwright browser-use, and Composio app connectors **shipped**.
 - Multi-tenant SaaS, mobile native app, voice huddles, canvases.
 - Container-per-agent isolation (Clawix-level); sandbox stays cwd+timeout unless threat model changes.
 

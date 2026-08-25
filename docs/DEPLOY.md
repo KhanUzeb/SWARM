@@ -48,6 +48,8 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 | `OPENROUTER_MODEL` | no | OpenRouter model slug; mapped from the agent model if unset |
 | `SWARM_AGENT_MODEL` | no | overrides every agent; use `openai/gpt-oss-120b` or `openai/gpt-oss-20b` |
 | `SWARM_SANDBOX_DIR` | no | set by the Dockerfile, don't override unless you know why |
+| `SWARM_SYSTEM` | no | `1` by default; set `0` to disable host-system tools |
+| `SWARM_SYSTEM_ROOT` | no | host path Bots may read/write (Dockerfile sets `/app`) |
 | `SWARM_DB_PATH` | no | set by the Dockerfile to `/app/data/swarm.db` |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | no | tracing degrades silently if unset |
 

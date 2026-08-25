@@ -5,6 +5,7 @@ import asyncio
 
 import backend.main as main
 from backend.tools import browser, composio_client, computer
+from backend.tools import system as system_mod
 from backend.tools.registry import get_registry
 
 
@@ -24,6 +25,10 @@ def test_catalog_includes_computer_browser_composio(client, auth):
     assert "firecrawl_scrape" in names
     assert "browser_use" in names
     assert "cua_desktop" in names
+    assert "system_run" in names
+    assert "system_ls" in names
+    assert "system_read" in names
+    assert "system_write" in names
     plugins = {p["id"] for p in res.json()["plugins"]}
     assert "composio" in plugins
 
@@ -38,7 +43,10 @@ def test_seeded_agents_get_computer_use(client, auth):
     assert "firecrawl_scrape" in agents["swarm"]["tools"]
     assert "browser_use" in agents["swarm"]["tools"]
     assert "cua_desktop" in agents["swarm"]["tools"]
+    assert "system_run" in agents["swarm"]["tools"]
+    assert "system_read" in agents["swarm"]["tools"]
     assert "computer_run" not in agents["ledger"]["tools"]
+    assert "system_run" not in agents["ledger"]["tools"]
     assert "plugin:composio:execute" not in agents["ledger"]["tools"]
 
 
@@ -63,6 +71,63 @@ def test_status_includes_composio_and_browser(client):
     assert body["tavily"] is False
     assert body["firecrawl"] is False
     assert body["browser"] is True
+    assert body["system"] is True
+
+
+def test_system_run_echo(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
+    (tmp_path / "hello.txt").write_text("hi-from-host", encoding="utf-8")
+    out = system_mod.system_run("echo swarm-system")
+    assert "swarm-system" in out
+    listed = system_mod.system_ls("")
+    assert "hello.txt" in listed
+    read = system_mod.system_read("hello.txt")
+    assert "hi-from-host" in read
+    wrote = system_mod.system_write("note.md", "ok")
+    assert "wrote note.md" in wrote
+    assert (tmp_path / "note.md").read_text(encoding="utf-8") == "ok"
+    blocked = system_mod.system_run("rm -rf /")
+    assert "blocked" in blocked
+    escaped = system_mod.system_read("../secret")
+    assert "invalid path" in escaped
+    env_block = system_mod.system_write(".env", "SECRET=1")
+    assert "protected" in env_block
+
+
+def test_system_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARM_SYSTEM", "0")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
+    out = system_mod.system_run("echo nope")
+    assert "disabled" in out.lower()
+
+
+def test_computer_api_includes_system(client, auth, tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
+    (tmp_path / "host.md").write_text("from-host", encoding="utf-8")
+    data = client.get("/api/computer", headers=auth).json()
+    assert data["system"]["enabled"] is True
+    assert any(e["name"] == "host.md" for e in data["system"]["entries"])
+    listing = client.get("/api/computer/system", headers=auth).json()
+    assert listing["enabled"] is True
+    preview = client.get(
+        "/api/computer/system/file", params={"path": "host.md"}, headers=auth
+    ).json()
+    assert preview["content"] == "from-host"
+    assert client.get(
+        "/api/computer/system/file", params={"path": "../secret"}, headers=auth
+    ).status_code == 404
+
+
+def test_system_api_disabled(client, auth, tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARM_SYSTEM", "0")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
+    listing = client.get("/api/computer/system", headers=auth).json()
+    assert listing["enabled"] is False
+    assert client.get(
+        "/api/computer/system/file", params={"path": "x"}, headers=auth
+    ).status_code == 403
 
 
 def test_browser_status_and_disabled(client, auth, monkeypatch):

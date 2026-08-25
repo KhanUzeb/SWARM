@@ -38,8 +38,8 @@ html, body {
   grid-template-rows: 100%;
 }
 .app.thread-open { grid-template-columns: 272px 1fr 360px; }
-.app.computer-open { grid-template-columns: 272px 1fr 340px; }
-.app.computer-open.thread-open { grid-template-columns: 272px 1fr 340px; }
+.app.computer-open { grid-template-columns: 272px 1fr 400px; }
+.app.computer-open.thread-open { grid-template-columns: 272px 1fr 400px; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -193,6 +193,7 @@ html, body {
 }
 .panel-tabs {
   display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 .panel-tabs .tab {
   background: transparent; border: none; color: var(--dim); font-family: var(--sans);
@@ -200,6 +201,7 @@ html, body {
 }
 .panel-tabs .tab:hover { color: var(--text); background: var(--hover); }
 .panel-tabs .tab.active { color: #fff; background: var(--ink); }
+.panel-tabs .tab.tab-split { margin-right: 6px; }
 .panel-body { flex: 1; overflow-y: auto; padding: 12px; min-height: 0; }
 .panel-note { color: var(--dim); font-size: 12px; line-height: 1.4; margin: 0 0 10px; }
 .panel-list { list-style: none; margin: 0; padding: 0; }
@@ -280,6 +282,7 @@ html, body {
 #topbar {
   padding: 14px 22px; border-bottom: 1px solid var(--border);
   background: var(--bg); display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  flex-wrap: wrap;
 }
 #menu-btn {
   display: none; background: transparent; border: none; color: var(--text);
@@ -290,6 +293,31 @@ html, body {
 #topbar .topic { color: var(--dim); font-size: 13px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #topbar .who { color: var(--dim); font-size: 13px; flex-shrink: 0; }
 #topbar .who span { color: var(--pin); font-weight: 700; }
+.topbar-actions {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0; flex-wrap: wrap;
+}
+.btn.ghost.on {
+  color: var(--text); background: var(--hover); font-weight: 700;
+}
+.topbar-more { position: relative; }
+.topbar-more > summary {
+  list-style: none; cursor: pointer; font-family: var(--sans); font-size: 12px; font-weight: 600;
+  color: var(--dim); padding: 4px 10px; border-radius: 999px;
+}
+.topbar-more > summary::-webkit-details-marker { display: none; }
+.topbar-more > summary:hover { color: var(--text); background: var(--hover); }
+.topbar-more[open] > summary { color: var(--text); background: var(--hover); }
+.topbar-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 8;
+  min-width: 160px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 14px; padding: 6px; box-shadow: 0 12px 32px rgba(33,25,34,0.14);
+  display: flex; flex-direction: column;
+}
+.topbar-menu button {
+  text-align: left; background: transparent; border: none; color: var(--text);
+  font-family: var(--sans); font-size: 13px; padding: 8px 10px; border-radius: 10px; cursor: pointer;
+}
+.topbar-menu button:hover { background: var(--hover); }
 
 #load-earlier {
   margin: 8px auto 0; display: block;
@@ -471,7 +499,7 @@ body.hide-tools .row.system, .app.hide-tools .row.system { display: none; }
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
 }
 .thread-title { color: var(--ink); font-family: var(--serif); font-weight: 700; font-size: 18px; }
-.thread-sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+.thread-sub { color: var(--dim); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .thread-composer { padding: 0 12px 16px; }
 
 #toast {
@@ -651,11 +679,48 @@ body.hide-tools .row.system, .app.hide-tools .row.system { display: none; }
 .panel-section { margin-bottom: 14px; }
 .tool-toggles .tool-kind { font-size: 10px; color: var(--dim); margin-left: 4px; }
 .panel-tabs { flex-wrap: wrap; }
+.place-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.place-chip {
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--dim);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.place-chip.on { color: var(--green); border-color: var(--green); }
+.place-chip.path { max-width: 100%; }
+.path-crumb {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  font-family: var(--mono); font-size: 11px; margin: 0 0 10px;
+}
+.path-crumb .crumb {
+  background: transparent; border: none; color: var(--pin); cursor: pointer;
+  font-family: inherit; font-size: inherit; padding: 2px 4px; border-radius: 6px;
+}
+.path-crumb .crumb:hover { background: var(--hover); }
+.path-crumb .crumb.current { color: var(--text); font-weight: 700; cursor: default; }
+.path-crumb .crumb-sep { color: var(--dim); }
+.file-list { list-style: none; margin: 0 0 12px; padding: 0; }
+.file-list li { border-bottom: 1px solid var(--border); }
+.file-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; color: var(--text); cursor: pointer;
+  font-family: var(--sans); font-size: 13px; text-align: left; padding: 8px 0;
+}
+.file-row:hover { color: var(--pin); }
+.file-kind {
+  flex-shrink: 0; width: 36px; font-family: var(--mono); font-size: 10px;
+  font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim);
+}
+.file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-size { flex-shrink: 0; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.preview-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  margin: 8px 0 6px; font-size: 12px;
+}
 
 @media (max-width: 1100px) {
   .app.computer-open, .app.computer-open.thread-open { grid-template-columns: 272px 1fr; }
   #computer-panel {
-    position: fixed; top: 0; right: 0; bottom: 0; width: min(340px, 100vw);
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(400px, 100vw);
     z-index: 6; box-shadow: -8px 0 24px rgba(33,25,34,0.18);
   }
   .paper-doc { padding: 32px 24px 48px; }
