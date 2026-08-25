@@ -30,9 +30,9 @@ from .ai_support.providers import get_provider, list_providers, providers_by_pri
 from .jobs import JOB_TEMPLATES
 from .models import (
     AgentCreate, AgentPatch, AiProviderConnect, ApprovalResolve, ChannelCreate,
-    CustomToolCreate, CustomToolPatch, DirectMessageCreate, MessageCreate,
-    ReactionCreate, RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate,
-    SkillPatch, TeamCreate, TeamPatch,
+    ComposioToolkitConnect, CustomToolCreate, CustomToolPatch, DirectMessageCreate,
+    MessageCreate, ReactionCreate, RegisterRequest, RoutineCreate, RoutinePatch,
+    SkillCreate, SkillPatch, TeamCreate, TeamPatch,
 )
 from .security import (
     allowed_origins, install_api_guard, optional_auth, parse_token, require_admin,
@@ -156,12 +156,16 @@ async def api_status(handle: str | None = Depends(optional_auth)):
         env_ok = _key_set(env_name) if env_name else False
         providers_ready[pid] = env_ok or pid in connected_ids
     llm_ready = demo or any(providers_ready.values())
+    from .tools import browser as browser_mod
+    from .tools import composio_client
     body: dict[str, Any] = {
         "groq": providers_ready.get("groq", False),
         "openrouter": providers_ready.get("openrouter", False),
         "demo": demo,
         "llm_ready": llm_ready,
         "providers_ready": providers_ready,
+        "composio": await composio_client.configured(),
+        "browser": browser_mod.enabled(),
     }
     if handle:
         body["ai_providers"] = connections
@@ -765,14 +769,17 @@ async def api_resolve_approval(
 
 @app.get("/api/computer")
 async def api_computer(handle: str = Depends(require_auth)):
+    from .tools import computer as computer_mod
     return {
         "workspace": agent.SANDBOX_DIR,
         "shared": True,
         "files": agent.list_workspace_files(),
         "activity": await db.get_recent_system_messages(20),
+        "computer": computer_mod.status(),
         "note": (
-            "All Bots share this workspace. It is a local sandbox, not a cloud VM — "
-            "files and shell live here; there is no remote desktop or browser session."
+            "All Bots share this computer: sandbox files + shell, optional Playwright "
+            "browser, and Composio app connectors. It is still this machine — not a "
+            "remote cloud desktop."
         ),
     }
 
@@ -788,6 +795,63 @@ async def api_computer_file(path: str, handle: str = Depends(require_auth)):
         "path": path,
         "content": target.read_text(encoding="utf-8", errors="replace"),
     }
+
+
+@app.get("/api/browser/status")
+async def api_browser_status(handle: str = Depends(require_auth)):
+    from .tools import browser as browser_mod
+    return browser_mod.status()
+
+
+@app.post("/api/browser/close")
+async def api_browser_close(handle: str = Depends(require_admin)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import browser as browser_mod
+    message = await browser_mod.close()
+    return {"ok": True, "message": message}
+
+
+@app.get("/api/composio/status")
+async def api_composio_status(handle: str = Depends(require_auth)):
+    from .tools import composio_client
+    return await composio_client.status()
+
+
+@app.post("/api/composio/connect")
+async def api_composio_connect(
+    payload: AiProviderConnect, handle: str = Depends(require_admin)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    return await ai_store.connect("composio", payload.api_key)
+
+
+@app.delete("/api/composio/connect")
+async def api_composio_disconnect(handle: str = Depends(require_admin)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await ai_store.disconnect("composio"):
+        raise HTTPException(404, "not connected")
+    return {"ok": True}
+
+
+@app.get("/api/composio/toolkits")
+async def api_composio_toolkits(
+    q: str = "", handle: str = Depends(require_auth)
+):
+    from .tools import composio_client
+    return {"text": await composio_client.list_toolkits(q)}
+
+
+@app.post("/api/composio/connect-toolkit")
+async def api_composio_connect_toolkit(
+    payload: ComposioToolkitConnect, handle: str = Depends(require_admin)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import composio_client
+    return {"text": await composio_client.connect_toolkit(payload.toolkit)}
 
 
 # ---------------------------------------------------------------- WS ------

@@ -7,12 +7,13 @@ from typing import Any
 
 from .tools.registry import (
     BUILTIN_TOOL_NAMES,
+    COMPOSIO_PLUGIN_TOOLS,
     DEFAULT_BUILTIN_TOOLS,
     LEDGER_BUILTIN_TOOLS,
 )
 
 ALLOWED_TOOLS = BUILTIN_TOOL_NAMES
-DEFAULT_TOOLS = DEFAULT_BUILTIN_TOOLS
+DEFAULT_TOOLS = list(DEFAULT_BUILTIN_TOOLS) + list(COMPOSIO_PLUGIN_TOOLS)
 LEDGER_TOOLS = LEDGER_BUILTIN_TOOLS
 DEFAULT_JOB = "Teammate"
 AGENT_STATUSES = ("idle", "working", "needs_approval")
@@ -243,3 +244,7 @@ class RoutinePatch(BaseModel):
 
 class ApprovalResolve(BaseModel):
     status: str = Field(pattern=r"^(approved|denied)$")
+
+
+class ComposioToolkitConnect(BaseModel):
+    toolkit: str = Field(min_length=1, max_length=64)

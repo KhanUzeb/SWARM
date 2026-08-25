@@ -85,7 +85,8 @@ trigger without `@mention`, job templates, skills (`/` invoke +
 `save_skill`), interval routines into the 1:1, `request_approval` with
 Allow once / Deny, shared sandbox listed as the computer, bot-to-bot
 handoff after an agent reply. UI: bot roster, computer panel, darker
-theme. Explicitly not a cloud VM or browser computer-use.
+theme. Explicitly not a cloud VM. Browser computer-use and Composio
+app connectors shipped later as optional local tools.
 
 ---
 
@@ -140,11 +141,15 @@ not, report that back and don't implement it.
    If justified: soft-delete or rename-in-place so old messages still
    resolve; do not hard-delete rows that messages still point at.
 
-4. Cloud computer / browser computer-use
-   Condition: the shared sandbox has actually been shown insufficient
-   for the jobs people run here.
+4. Cloud computer / isolated VMs
+   Condition: the local sandbox + Playwright session has actually been
+   shown insufficient for the jobs people run here.
    If justified: a real isolated workspace, not a second chat UI over
    the same directory.
+
+Computer-use, browser-use, and Composio plugin support shipped
+(user-requested): `computer_*` / `browser_*` builtins +
+`plugins/composio` with python handlers, shared across the workspace.
 ```
 
 ---

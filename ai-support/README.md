@@ -15,3 +15,5 @@ Implementation: `backend/ai_support/` — modeled after [Hugging Face tau `src/t
 Connect a provider from the UI to store an encrypted API key in SQLite; env vars still work as fallbacks.
 
 **Providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together AI, Anthropic (catalog; use OpenRouter for Claude chat today).
+
+**Apps (not an LLM provider):** Composio lives in Computer → Apps (`/api/composio/*`, `COMPOSIO_API_KEY`). A Composio key must not be treated as LLM-ready.

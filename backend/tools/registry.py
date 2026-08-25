@@ -1,15 +1,16 @@
 """Central tool registry: builtins, DB custom tools, and plugins/."""
 from __future__ import annotations
 
+import importlib.util
+import inspect
 import json
 import re
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-
-from .. import db
 
 ToolHandler = Callable[..., Awaitable[str] | str]
 
@@ -153,6 +154,118 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "computer_run": {
+        "type": "function",
+        "function": {
+            "name": "computer_run",
+            "description": (
+                "Run a shell command on the shared computer (sandbox cwd, 30s timeout). "
+                "Use for writes, installs, scripts, and anything read_only_shell is too tight for."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
+        },
+    },
+    "computer_open": {
+        "type": "function",
+        "function": {
+            "name": "computer_open",
+            "description": "Open a workspace file or directory. For http(s) URLs, prefer browser_navigate.",
+            "parameters": {
+                "type": "object",
+                "properties": {"target": {"type": "string"}},
+                "required": ["target"],
+            },
+        },
+    },
+    "computer_screenshot": {
+        "type": "function",
+        "function": {
+            "name": "computer_screenshot",
+            "description": "Capture the live browser page if open, otherwise a text snapshot of the sandbox.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "browser_navigate": {
+        "type": "function",
+        "function": {
+            "name": "browser_navigate",
+            "description": "Open a URL in the shared headless Chromium session (Playwright).",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            },
+        },
+    },
+    "browser_snapshot": {
+        "type": "function",
+        "function": {
+            "name": "browser_snapshot",
+            "description": "Read the current page title, visible text, and links.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "browser_click": {
+        "type": "function",
+        "function": {
+            "name": "browser_click",
+            "description": "Click a CSS selector on the current page.",
+            "parameters": {
+                "type": "object",
+                "properties": {"selector": {"type": "string"}},
+                "required": ["selector"],
+            },
+        },
+    },
+    "browser_type": {
+        "type": "function",
+        "function": {
+            "name": "browser_type",
+            "description": "Fill a CSS selector with text on the current page.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["selector"],
+            },
+        },
+    },
+    "browser_press": {
+        "type": "function",
+        "function": {
+            "name": "browser_press",
+            "description": "Press a keyboard key on the current page (e.g. Enter, Tab, Escape).",
+            "parameters": {
+                "type": "object",
+                "properties": {"key": {"type": "string"}},
+            },
+        },
+    },
+    "browser_wait": {
+        "type": "function",
+        "function": {
+            "name": "browser_wait",
+            "description": "Wait up to 10 seconds for a page to settle.",
+            "parameters": {
+                "type": "object",
+                "properties": {"ms": {"type": "integer"}},
+            },
+        },
+    },
+    "browser_screenshot": {
+        "type": "function",
+        "function": {
+            "name": "browser_screenshot",
+            "description": "Save a PNG of the current page under screenshots/ in the sandbox.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 }
 
 BUILTIN_TOOL_NAMES = tuple(BUILTIN_SCHEMAS.keys())
@@ -160,6 +273,20 @@ DEFAULT_BUILTIN_TOOLS = list(BUILTIN_TOOL_NAMES)
 LEDGER_BUILTIN_TOOLS = [
     "search_channel_history", "remember", "recall", "channel_digest",
 ]
+COMPUTER_USE_TOOLS = [
+    "computer_run", "computer_open", "computer_screenshot",
+    "browser_navigate", "browser_snapshot", "browser_click",
+    "browser_type", "browser_press", "browser_wait", "browser_screenshot",
+]
+COMPOSIO_PLUGIN_TOOLS = [
+    "plugin:composio:status",
+    "plugin:composio:list_toolkits",
+    "plugin:composio:search_tools",
+    "plugin:composio:connect",
+    "plugin:composio:execute",
+]
+
+from .. import db  # noqa: E402  — after constants so models can import them
 
 PLUGINS_DIR = Path(__file__).resolve().parent.parent.parent / "plugins"
 
@@ -169,11 +296,13 @@ class ToolRegistry:
         self._custom: dict[str, dict[str, Any]] = {}
         self._plugin_tools: dict[str, dict[str, Any]] = {}
         self._plugin_meta: list[dict[str, Any]] = []
+        self._plugin_modules: dict[str, Any] = {}
 
     async def refresh(self) -> None:
         self._custom.clear()
         self._plugin_tools.clear()
         self._plugin_meta.clear()
+        self._plugin_modules.clear()
         for row in await db.list_custom_tools(enabled_only=True):
             self._custom[row["name"]] = row
         self._load_plugins()
@@ -205,6 +334,7 @@ class ToolRegistry:
                     "description": tool.get("description", ""),
                     "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
                     "handler": tool.get("handler") or {},
+                    "plugin_dir": str(manifest_path.parent),
                 }
 
     def all_names(self) -> set[str]:
@@ -292,7 +422,12 @@ class ToolRegistry:
         if name in self._custom:
             return await self._exec_custom(self._custom[name], args)
         if name in self._plugin_tools:
-            return await self._exec_plugin(self._plugin_tools[name], args)
+            return await self._exec_plugin(
+                self._plugin_tools[name],
+                args,
+                agent_name=agent_name,
+                channel_id=channel_id,
+            )
         return f"(unknown tool {name})"
 
     async def _exec_builtin(
@@ -355,6 +490,36 @@ class ToolRegistry:
             return await workspace_helpers["approval"](
                 agent_name, channel_id, args.get("action", ""), args.get("detail", ""),
             )
+        if name == "computer_run":
+            from . import computer
+            return computer.computer_run(args.get("command", ""))
+        if name == "computer_open":
+            from . import computer
+            return computer.computer_open(args.get("target", ""))
+        if name == "computer_screenshot":
+            from . import computer
+            return computer.computer_screenshot()
+        if name == "browser_navigate":
+            from . import browser
+            return await browser.navigate(args.get("url", ""))
+        if name == "browser_snapshot":
+            from . import browser
+            return await browser.snapshot()
+        if name == "browser_click":
+            from . import browser
+            return await browser.click(args.get("selector", ""))
+        if name == "browser_type":
+            from . import browser
+            return await browser.type_text(args.get("selector", ""), args.get("text", ""))
+        if name == "browser_press":
+            from . import browser
+            return await browser.press(args.get("key", ""))
+        if name == "browser_wait":
+            from . import browser
+            return await browser.wait(args.get("ms") or 1000)
+        if name == "browser_screenshot":
+            from . import browser
+            return await browser.screenshot()
         return f"(unimplemented builtin {name})"
 
     async def _exec_custom(self, row: dict[str, Any], args: dict[str, Any]) -> str:
@@ -378,7 +543,14 @@ class ToolRegistry:
             return json.dumps(args, ensure_ascii=False)[:4000]
         return f"(unknown custom handler {handler})"
 
-    async def _exec_plugin(self, row: dict[str, Any], args: dict[str, Any]) -> str:
+    async def _exec_plugin(
+        self,
+        row: dict[str, Any],
+        args: dict[str, Any],
+        *,
+        agent_name: str,
+        channel_id: str,
+    ) -> str:
         handler = row.get("handler") or {}
         htype = handler.get("type") or "template"
         if htype == "template":
@@ -401,7 +573,74 @@ class ToolRegistry:
                 return out[:4000] or "(no output)"
             except Exception as exc:  # noqa: BLE001
                 return f"(plugin shell error: {exc})"
+        if htype == "python":
+            return await self._exec_python_plugin(
+                row, args, agent_name=agent_name, channel_id=channel_id,
+            )
         return "(unsupported plugin handler)"
+
+    async def _exec_python_plugin(
+        self,
+        row: dict[str, Any],
+        args: dict[str, Any],
+        *,
+        agent_name: str,
+        channel_id: str,
+    ) -> str:
+        handler = row.get("handler") or {}
+        plugin_dir = Path(row.get("plugin_dir") or "")
+        module_name = handler.get("module") or "handler"
+        func_name = handler.get("function") or row.get("tool_name") or "run"
+        path = plugin_dir / f"{module_name}.py"
+        if not path.is_file():
+            return f"(plugin handler missing: {path})"
+        cache_key = f"{row.get('plugin_id')}:{module_name}:{path}"
+        try:
+            mod = self._plugin_modules.get(cache_key)
+            if mod is None:
+                ident = f"swarm_plugin_{row.get('plugin_id')}_{module_name}"
+                spec = importlib.util.spec_from_file_location(ident, path)
+                if spec is None or spec.loader is None:
+                    return f"(could not load plugin module {path})"
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules[ident] = mod
+                spec.loader.exec_module(mod)
+                self._plugin_modules[cache_key] = mod
+            fn = getattr(mod, func_name, None)
+            if fn is None or not callable(fn):
+                return f"(plugin function {func_name} not found)"
+            call_kwargs = _plugin_call_kwargs(
+                fn, args, agent_name=agent_name, channel_id=channel_id,
+            )
+            result = fn(**call_kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:  # noqa: BLE001
+            return f"(plugin python error: {exc})"
+        if result is None:
+            return "(empty plugin result)"
+        if isinstance(result, str):
+            return result[:8000]
+        try:
+            return json.dumps(result, default=str, ensure_ascii=False)[:8000]
+        except TypeError:
+            return str(result)[:8000]
+
+
+def _plugin_call_kwargs(
+    fn: Callable[..., Any],
+    args: dict[str, Any],
+    *,
+    agent_name: str,
+    channel_id: str,
+) -> dict[str, Any]:
+    params = inspect.signature(fn).parameters
+    accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    extra = {"agent_name": agent_name, "channel_id": channel_id}
+    merged = {**args, **extra}
+    if accepts_var_kw:
+        return merged
+    return {k: v for k, v in merged.items() if k in params}
 
 
 def _fetch_url_text(url: str) -> str:

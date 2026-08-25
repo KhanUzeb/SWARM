@@ -432,6 +432,32 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
                 "VALUES ('core', ?, ?)",
                 (agent_name, i),
             )
+    await _grant_computer_use_tools(db)
+
+
+async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:
+    """Give existing full-tool Bots computer/browser/Composio without wiping custom lists."""
+    from .tools.registry import COMPOSIO_PLUGIN_TOOLS, COMPUTER_USE_TOOLS
+
+    extras = list(COMPUTER_USE_TOOLS) + list(COMPOSIO_PLUGIN_TOOLS)
+    cur = await db.execute("SELECT name, tools FROM agents")
+    rows = await cur.fetchall()
+    for name, tools_raw in rows:
+        if name == "ledger":
+            continue
+        names = parse_tools(tools_raw)
+        if "write_workspace" not in names and "read_only_shell" not in names:
+            continue
+        added = False
+        for tool in extras:
+            if tool not in names:
+                names.append(tool)
+                added = True
+        if added:
+            await db.execute(
+                "UPDATE agents SET tools = ? WHERE name = ?",
+                (json.dumps(names), name),
+            )
 
 
 async def init_db() -> None:

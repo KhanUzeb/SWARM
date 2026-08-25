@@ -68,7 +68,9 @@ _TOOL_HINT = re.compile(
     r"what\s+did\s+we|last\s+time|"
     r"remember|recall|forget|notes?|memor(?:y|ies)|"
     r"workspace|write|read|fetch|url|digest|save|skill|routine|schedule|approv|"
-    r"computer|handoff|draft|research"
+    r"computer|screenshot|browser|navigate|click|type|press|"
+    r"composio|gmail|github|slack|notion|toolkit|"
+    r"handoff|draft|research"
     r")\b",
     re.I,
 )
@@ -76,8 +78,11 @@ _SLASH_SKILL = re.compile(r"/([a-zA-Z0-9_\-]+)")
 _TOOL_POLICY = (
     "You are a persistent named teammate. Finish the job and only stop when "
     "the deliverable is ready or something needs approval. "
-    "Tools: use them when the work needs files, history, memory, a saved skill, "
-    "or an approval gate. Greetings in a shared room get a short text reply. "
+    "Tools: use them when the work needs files, the shared computer, a browser, "
+    "a connected app (Composio), history, memory, a saved skill, or an approval "
+    "gate. Greetings in a shared room get a short text reply. "
+    "computer_run is the write-capable shell; browser_* drives headless Chromium; "
+    "plugin:composio:* lists, connects, and executes Gmail/Slack/GitHub/Notion/etc. "
     "For sending, publishing, deleting, purchasing, or production changes, call "
     "request_approval and wait. Write durable files to the shared workspace. "
     "You may @mention another bot to hand off work."

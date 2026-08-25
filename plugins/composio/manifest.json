@@ -1,0 +1,56 @@
+{
+  "id": "composio",
+  "name": "Composio",
+  "version": "1.0.0",
+  "description": "Connect Gmail, Slack, GitHub, Notion, and 1000+ other apps via Composio. One workspace user_id is shared by every Bot.",
+  "tools": [
+    {
+      "name": "status",
+      "description": "Show whether Composio is connected and which workspace user_id this swarm uses.",
+      "parameters": { "type": "object", "properties": {} },
+      "handler": { "type": "python", "function": "status" }
+    },
+    {
+      "name": "list_toolkits",
+      "description": "List available Composio app toolkits (gmail, github, slack, notion, ...).",
+      "parameters": {
+        "type": "object",
+        "properties": { "query": { "type": "string" } }
+      },
+      "handler": { "type": "python", "function": "list_toolkits" }
+    },
+    {
+      "name": "search_tools",
+      "description": "Search Composio tools by what you want to do, e.g. 'gmail send' or 'github issues'.",
+      "parameters": {
+        "type": "object",
+        "properties": { "query": { "type": "string" } },
+        "required": ["query"]
+      },
+      "handler": { "type": "python", "function": "search_tools" }
+    },
+    {
+      "name": "connect",
+      "description": "Start an OAuth/connect flow for a toolkit (gmail, github, slack, notion, ...). Returns a URL the human must open.",
+      "parameters": {
+        "type": "object",
+        "properties": { "toolkit": { "type": "string" } },
+        "required": ["toolkit"]
+      },
+      "handler": { "type": "python", "function": "connect" }
+    },
+    {
+      "name": "execute",
+      "description": "Run a Composio tool by slug (from search_tools), e.g. GMAIL_SEND_EMAIL. Use request_approval first for sends, deletes, or purchases.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tool_slug": { "type": "string" },
+          "arguments": { "type": "object" }
+        },
+        "required": ["tool_slug"]
+      },
+      "handler": { "type": "python", "function": "execute" }
+    }
+  ]
+}

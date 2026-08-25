@@ -19,7 +19,7 @@ Human posts in #general, a Bot 1:1, or a group chat
 | No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
 | `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
 
-**Status:** Slack-shaped workspace: admin-gated Bots, human DMs, `@team` pods, audit export, 3-step onboarding — see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
+**Status:** Slack-shaped workspace: admin-gated Bots, human DMs, `@team` pods, audit export, computer-use, browser-use, Composio apps — see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 ```
 swarm/
@@ -110,4 +110,7 @@ pytest -q
 
 ## Honest gaps (not hidden)
 
-No cloud VM, browser automation, Slack/Salesforce connectors, or semantic search. Sandbox is cwd+timeout, not container isolation. See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.
+No cloud VM or remote desktop. Browser-use is optional local Playwright
+(install separately). Composio connectors need a `COMPOSIO_API_KEY`.
+Semantic search is still gated. Sandbox is cwd+timeout, not container isolation.
+See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.

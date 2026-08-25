@@ -18,6 +18,16 @@ export const ALL_TOOLS = [
   "channel_digest",
   "save_skill",
   "request_approval",
+  "computer_run",
+  "computer_open",
+  "computer_screenshot",
+  "browser_navigate",
+  "browser_snapshot",
+  "browser_click",
+  "browser_type",
+  "browser_press",
+  "browser_wait",
+  "browser_screenshot",
 ];
 export const EMOJI = ["🔥", "✅", "👀", "❤️", "🎉", "👍"];
 

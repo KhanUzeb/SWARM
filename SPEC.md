@@ -72,17 +72,24 @@ a duplicate row or an error.
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
 | archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
-Allowed tool names include **11 builtins** (`read_only_shell`,
+Allowed tool names include **21 builtins** (`read_only_shell`,
 `search_channel_history`, `remember`, `recall`, `list_workspace`,
 `read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
-`save_skill`, `request_approval`), plus **custom tools** (DB) and
+`save_skill`, `request_approval`, plus computer-use `computer_run` /
+`computer_open` / `computer_screenshot` and browser-use
+`browser_navigate` / `browser_snapshot` / `browser_click` /
+`browser_type` / `browser_press` / `browser_wait` /
+`browser_screenshot`), plus **custom tools** (DB) and
 **plugin tools** (`plugin:{slug}:{name}` from `plugins/*/manifest.json`).
-Names are validated against the central registry on agent create/patch.
+The bundled Composio plugin adds `plugin:composio:status`,
+`list_toolkits`, `search_tools`, `connect`, and `execute` so Bots can
+reach Gmail/Slack/GitHub/Notion and 1000+ other apps with one workspace
+key. Names are validated against the central registry on agent create/patch.
 API responses parse `tools` as a JSON array. List/get also include
 `dm_channel_id` (`dm-<name>`).
 
 Seeded on first run: `swarm` (job `Generalist`, unscoped, all builtin
-tools) and `ledger` (job `Decision log`, unscoped, no shell/workspace
+tools plus Composio plugin tools) and `ledger` (job `Decision log`, unscoped, no shell/workspace
 write — `search_channel_history`, `remember`, `recall`, `channel_digest`).
 Creating an agent also creates its 1:1 channel `dm-<name>` (`kind=dm`,
 `owner_agent=<name>`). Existing databases get those DMs from
@@ -222,9 +229,10 @@ message into that channel ("Approved: … Continue from here." /
 No `threads` table separate from `messages.parent_id` — flat storage
 with a nullable self-reference is sufficient; `GET /api/messages/{id}/thread`
 returns one level (the parent plus rows whose `parent_id` equals that
-id). Semantic search (Phase 6) is still gated. No cloud VM,
-browser computer-use, or teach-by-demonstration recording — the
-"computer" is the shared sandbox workspace.
+id). Semantic search (Phase 6) is still gated. No cloud VM or
+teach-by-demonstration recording. Computer-use is the shared sandbox
+plus optional Playwright Chromium (`browser_*`) and Composio app
+connectors — still this machine, not a remote desktop.
 
 ---
 
@@ -311,7 +319,9 @@ Public. Returns booleans only — never raw API keys.
   "openrouter": false,
   "demo": false,
   "llm_ready": true,
-  "providers_ready": {"groq": true, "openrouter": false, "huggingface": false}
+  "providers_ready": {"groq": true, "openrouter": false, "huggingface": false},
+  "composio": false,
+  "browser": true
 }
 ```
 With Bearer auth, also includes `ai_providers` connection metadata
@@ -328,10 +338,24 @@ Auth required. Builtin + custom + plugin catalog.
 Auth required. CRUD for custom tool handlers.
 
 ### `POST /api/plugins/reload`
-Auth required. Rescan `plugins/*/manifest.json`.
+Auth required (admin). Rescan `plugins/*/manifest.json`. Plugin tools
+may use `template`, `http_get`, `shell`, or `python` handlers
+(`plugins/<id>/handler.py`).
 
 ### `GET /api/ai-support/providers` · `POST/DELETE …/connect/{id}`
 Auth required. List provider catalog; connect/disconnect encrypted keys.
+Composio is **not** an LLM provider — use `/api/composio/*`.
+
+### `GET /api/browser/status` · `POST /api/browser/close`
+Auth required (close is admin). Playwright Chromium session for `browser_*` tools.
+
+### `GET /api/composio/status` · `POST/DELETE /api/composio/connect`
+Auth required (connect is admin). Workspace-level Composio API key
+(encrypted in SQLite; `COMPOSIO_API_KEY` still works as fallback).
+
+### `GET /api/composio/toolkits?q=` · `POST /api/composio/connect-toolkit`
+Auth required (connect-toolkit is admin). List Composio app toolkits
+or start an OAuth/connect URL for a slug such as `gmail`.
 
 ### `GET /api/channels`
 Auth required.
@@ -517,11 +541,12 @@ Auth required. `{"status": "approved"}` or `{"status": "denied"}`.
 channel and re-triggers agents there.
 
 ### `GET /api/computer`
-No auth. Shared workspace listing: `{workspace, shared, files, activity, note}`.
-The workspace is the sandbox directory, not a cloud VM.
+Auth required. Shared workspace listing: `{workspace, shared, files, activity, computer, note}`.
+The computer is this machine's sandbox, optional browser session, and
+Composio connectors — not a cloud VM.
 
 ### `GET /api/computer/file?path=`
-No auth. Text preview, capped at 64KB. 404 if missing or the path
+Auth required. Text preview, capped at 64KB. 404 if missing or the path
 escapes the workspace. 413 if too large.
 
 ---
@@ -632,8 +657,8 @@ Live `message` events from a human/agent/system write may omit
 - **Tools available**: the agent's `tools` list, exposed via function
   calling. In a 1:1 (`kind=dm`), a group (`kind=group`), and on `[routine:…]` ticks, tools are
   always offered. In a room they are offered **only when the latest
-  human message looks like a file/history/memory/skill/workspace
-  request**. Greetings in a room (`@swarm hi`) still get a text-only
+  human message looks like a file/history/memory/skill/workspace/
+  computer/browser/app request**. Greetings in a room (`@swarm hi`) still get a text-only
   completion.
   - `read_only_shell` runs in a sandboxed working directory
     (`SWARM_SANDBOX_DIR`; default `/tmp/swarm-sandbox`, or `%TEMP%\swarm-sandbox`
@@ -655,6 +680,16 @@ Live `message` events from a human/agent/system write may omit
   - `save_skill(name, body)` upserts an account-wide skill.
   - `request_approval(action, detail)` inserts a pending approval,
     sets Bot status to `needs_approval`, and tells the model to stop.
+  - `computer_run(command)` is the write-capable shared-computer shell
+    (30s timeout, destructive-command denylist). `computer_open` reads a
+    workspace path; http(s) URLs should use `browser_navigate`.
+  - `browser_navigate` / `snapshot` / `click` / `type` / `press` /
+    `wait` / `screenshot` drive an optional Playwright Chromium session
+    (`SWARM_BROWSER=0` disables; missing playwright degrades with a
+    clear error).
+  - `plugin:composio:*` lists, connects, and executes Composio app
+    tools (Gmail, Slack, GitHub, Notion, …) with one workspace `user_id`.
+    External sends still go through `request_approval`.
   - Capped at the agent's `max_tool_calls` per single trigger (not
     per message — if two agents are mentioned, each gets its own cap).
   - Every tool call is persisted as a `system`-kind message
@@ -733,6 +768,9 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR11.1 | Onboarding: register → job template → create Bot → 1:1 + suggested prompt | ✅ (UI) |
 | FR11.2 | `SWARM_DEMO=1` mock replies + optional `#general` seed thread | ✅ |
 | FR11.3 | `/api/status.demo`, `/api/jobs` suggested fields, register `created` | ✅ |
+| FR12.1 | Computer-use builtins (`computer_run` / `open` / `screenshot`) | ✅ |
+| FR12.2 | Browser-use builtins (Playwright Chromium, optional) | ✅ |
+| FR12.3 | Composio plugin + workspace Apps panel (1000+ app toolkits) | ✅ |
 | FR12.1 | Custom Bot `display_name`; mention handle stays `@name` | ✅ |
 | FR12.2 | Group chats: members hear without `@`; `@` still targets one | ✅ |
 | FR13.1 | First user is admin; Bot/team/tool/provider writes are admin-only | ✅ |
@@ -761,6 +799,6 @@ Unchanged from V1: no Nostr/event-signing, no git hosting, no
 canvas/media comments, no huddle/voice, no multi-tenant hosting, no
 vector search (Phase 6, intentionally unbuilt). Admin role, people DMs,
 teams, audit export, and bot archive shipped. Phase 10 does **not** include a
-cloud VM, remote desktop, browser computer-use, connectors to
-Salesforce/Slack, or teach-by-demonstration recording. The shared
-"computer" is the local sandbox workspace.
+cloud VM, remote desktop, teach-by-demonstration recording, or
+container-per-agent isolation. Computer-use is local sandbox + optional
+Playwright + Composio connectors.

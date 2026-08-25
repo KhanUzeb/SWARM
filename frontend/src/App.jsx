@@ -3,6 +3,8 @@ import katex from "katex";
 import ApiConfigStep from "./ai-support/ApiConfigStep.jsx";
 import ProviderPanel from "./ai-support/ProviderPanel.jsx";
 import ToolsPanel from "./ai-support/ToolsPanel.jsx";
+import BrowserPanel from "./ai-support/BrowserPanel.jsx";
+import AppsPanel from "./ai-support/AppsPanel.jsx";
 import {
   ALL_TOOLS, CACHE_TTL, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, apiJson, authHeaders, botLabel, bustCache,
   escapeHtml, extractPaper, fmtTime, formatInline, groupedWith, initials, insertMention,
@@ -1833,10 +1835,16 @@ export default function App() {
             <button type="button" className="btn ghost" onClick={() => setComputerOpen(false)}>Close</button>
           </div>
           <div className="panel-tabs" role="tablist">
-            {["files", "tools", "plugins", "ai", "skills", "routines", "approvals"].map((tab) => (
+            {["files", "browser", "apps", "tools", "plugins", "ai", "skills", "routines", "approvals"].map((tab) => (
               <button key={tab} type="button" className={`tab${panelTab === tab ? " active" : ""}`} onClick={() => setPanelTab(tab)}>{tab === "ai" ? "AI" : tab[0].toUpperCase() + tab.slice(1)}</button>
             ))}
           </div>
+          {panelTab === "browser" && (
+            <BrowserPanel token={token} flash={flash} />
+          )}
+          {panelTab === "apps" && (
+            <AppsPanel token={token} flash={flash} />
+          )}
           {panelTab === "tools" && (
             <ToolsPanel
               token={token}

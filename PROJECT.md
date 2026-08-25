@@ -12,7 +12,7 @@ thesis without Nostr/git/workflows.
 | `SPEC.md` | Technical contract — if code disagrees, file a bug |
 | `PROMPTS.md` | Phase history + gated build prompts |
 
-**Status: V3 workspace complete (admin, teams, people DMs, audit export, bot archive).**
+**Status: V3 workspace complete (admin, teams, people DMs, audit export, bot archive, computer-use, browser-use, Composio apps).**
 Onboarding, demo mode, tool registry, plugins, multi-provider AI, and
 authenticated API reads are live. Pip mascot removed. Remaining gated
 items: semantic history (Phase 6). See `docs/CHANGELOG.md`.
@@ -150,15 +150,19 @@ Full detail in `VISION.md`. Summary:
 | V3.6 Audit export | ✅ shipped — JSON/CSV per channel |
 | V3.7 Demo mode (mock LLM) | ✅ shipped (`SWARM_DEMO=1`) |
 
-Permanently out of V3: Nostr signing, git hosting, Slack connectors,
-cloud VM, browser computer-use, container-per-agent isolation.
+Permanently out of V3: Nostr signing, git hosting, multi-tenant SaaS,
+cloud VM / remote desktop, container-per-agent isolation.
+
+Shipped on the computer: local sandbox shell, optional Playwright
+browser-use, and a Composio plugin so Bots can connect Gmail, Slack,
+GitHub, Notion, and other app toolkits with one workspace key.
 
 ## Natural next steps (still gated)
 
 Same rule as Phase 6 — don't build speculatively:
 
 1. Semantic history — only if keyword search has proven insufficient.
-2. Real computer-use — only if sandbox has proven insufficient.
+2. Isolated cloud VMs — only if the local sandbox + browser session has proven insufficient.
 
 ## Competitive positioning (web research, Aug 2026)
 

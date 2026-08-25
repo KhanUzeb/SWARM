@@ -110,8 +110,7 @@ V3 does not mean "clone Buzz." It means a stranger can run the demo, understand 
 ### Explicitly out (even at V3)
 
 - Nostr signing, git hosting, branch-as-channel (Buzz's hard problems).
-- Cloud VM, browser computer-use, teach-by-demonstration (Grok Bot cloud tier).
-- Salesforce / Slack / Notion connectors (job templates name these roles; they do not connect APIs).
+- Cloud VM / remote desktop and teach-by-demonstration (Grok Bot cloud tier). Local computer-use, Playwright browser-use, and Composio app connectors **shipped**.
 - Multi-tenant SaaS, mobile native app, voice huddles, canvases.
 - Container-per-agent isolation (Clawix-level); sandbox stays cwd+timeout unless threat model changes.
 
