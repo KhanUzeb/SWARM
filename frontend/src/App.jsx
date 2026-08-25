@@ -651,6 +651,15 @@ export default function App() {
     localStorage.setItem("swarm_show_tools", showTools ? "1" : "0");
   }, [showTools]);
 
+  useEffect(() => {
+    function closeMore(ev) {
+      const open = document.querySelector("details.topbar-more[open]");
+      if (open && !open.contains(ev.target)) open.open = false;
+    }
+    document.addEventListener("click", closeMore);
+    return () => document.removeEventListener("click", closeMore);
+  }, []);
+
   async function enterWorkspace(handle, tok, preferred, { suggestedDraft } = {}) {
     setToken(tok);
     setUser(handle);
