@@ -1819,7 +1819,7 @@ export default function App() {
             />
             <button type="button" className="btn primary send" onClick={() => { sendFrom(draft, null); setDraft(""); }}>Send</button>
           </div>
-          <div className="composer-hint">@bot · @core for the pod · /skill · people DMs stay private</div>
+          <div className="composer-hint">@bot · @core · /standup /digest /research /plan · people DMs stay private</div>
         </div>
       </main>
 

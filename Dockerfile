@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 COPY plugins/ ./plugins/
 COPY profiles/ ./profiles/
+COPY skills/ ./skills/
 COPY --from=web /web/dist ./frontend/dist
 
 RUN useradd --create-home --shell /bin/false swarm \

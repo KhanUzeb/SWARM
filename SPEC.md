@@ -192,7 +192,10 @@ Indexed on `(agent_name, created_at)`. Notes are written by the
 | created_at | REAL    | |
 | updated_at | REAL    | |
 
-Skills are account-wide, not per-Bot.
+Skills are account-wide, not per-Bot. Ten bundled `/commands` seed on
+first boot from `skills/*.md` (`standup`, `digest`, `decide`,
+`research`, `page`, `repro`, `draft`, `review`, `plan`, `brief`).
+`INSERT OR IGNORE` — editing a skill in the UI is not overwritten.
 
 ### `routines`
 
@@ -531,8 +534,9 @@ row includes `id`, `job`, `prompt`, `suggested_name`, and
 `suggested_prompt` (first message hint for the Bot's 1:1).
 
 ### `GET /api/skills` / `POST /api/skills`
-List is unauthenticated. Create/upsert requires auth. Body:
+Auth required to list (Bearer). Create/upsert requires auth. Body:
 `{"name": "weekly-health", "body": "..."}`. Same name upserts.
+Seeded `/commands` are listed here.
 
 ### `PATCH /api/skills/{id}` / `DELETE /api/skills/{id}`
 Auth required. 404 if missing.

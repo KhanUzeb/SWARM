@@ -29,6 +29,7 @@ swarm/
   frontend/         React 19 + Vite 8 (bun). Production build in frontend/dist
     src/ai-support/   Provider + tools panels, onboarding API step
   plugins/          Optional tool manifests (plugin:slug:name)
+  skills/           Bundled /commands (standup, digest, research, …)
   profiles/         Bot profile.md (seeded Bots + job templates)
   ai-support/       User-facing README → backend/ai_support/
   cli/swarm_cli.py  JSON in / JSON out — scripts and other agents post here
@@ -73,7 +74,8 @@ Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/Ope
 5. **People:** Message a person from Direct messages — private 1:1.
 6. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
 7. **Governance:** Bot requests approval → Allow once / Deny in UI.
-8. **Computer / export:** Shared sandbox + JSON/CSV audit export from the channel header.
+8. **Slash skills:** `/standup` `/digest` `/research` `/plan` `/brief` — type `/` in the composer.
+9. **Computer / export:** Shared sandbox + JSON/CSV audit export from the channel header.
 
 Full script: [`VISION.md` § Demo narrative](VISION.md).
 

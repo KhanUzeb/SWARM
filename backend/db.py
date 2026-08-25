@@ -436,6 +436,20 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
                 (agent_name, i),
             )
     await _grant_computer_use_tools(db)
+    await _seed_bundled_skills(db)
+
+
+async def _seed_bundled_skills(db: aiosqlite.Connection) -> None:
+    """Insert bundled /commands if missing. Do not overwrite a human-edited body."""
+    from .bundled_skills import load_bundled_skills
+
+    now = time.time()
+    for name, body in load_bundled_skills():
+        await db.execute(
+            "INSERT OR IGNORE INTO skills (name, body, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (name, body, now, now),
+        )
 
 
 async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:

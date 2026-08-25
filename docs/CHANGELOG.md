@@ -13,6 +13,7 @@ Track feature layers for easy `git revert` / bisect. Each row maps to one commit
 | Make swarm a Slack-shaped AI workspace | admin, people DMs, `@team`, export, archive, mascot removed | Reverts small-team workspace + restores Pip |
 | Add computer-use, browser-use, and Composio plugin | `backend/tools/{computer,browser,composio_client}.py`, `plugins/composio/`, Computer → Browser/Apps | Removes agent computer/browser/app tools |
 | Add bot profiles and research/CUA connectors | `profiles/`, `backend/profiles.py`, `backend/tools/connectors.py` | Removes profile.md + Exa/Tavily/Firecrawl/browser-use/CUA |
+| Seed ten /commands | `skills/*.md`, `backend/bundled_skills.py` | Removes bundled standup/digest/research/… skills |
 
 ## Feature summary (post-merge)
 
@@ -24,5 +25,6 @@ Track feature layers for easy `git revert` / bisect. Each row maps to one commit
 - **Frontend:** Slack-style sidebar (DMs, teams, channels, search); 3-step onboarding with API key save; Browser + Apps computer tabs
 - **Bots:** Custom `display_name`; group chats; `@core` team; archive instead of hard-delete
 - **People:** Private 1:1s; JSON/CSV audit export per channel
+- **Slash commands:** `/standup` `/digest` `/decide` `/research` `/page` `/repro` `/draft` `/review` `/plan` `/brief`
 
 Reference: [Hugging Face tau `src/tau_ai`](https://github.com/huggingface/tau/tree/main/src/tau_ai)

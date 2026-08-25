@@ -121,7 +121,19 @@ def test_skills_crud(client, auth):
     assert "Cite sources" in patched.json()["body"]
     _clear_rate()
     assert client.delete(f"/api/skills/{skill['id']}", headers=auth).status_code == 200
-    assert client.get("/api/skills", headers=auth).json() == []
+    listed = client.get("/api/skills", headers=auth).json()
+    assert not any(s["name"] == "weekly-health" for s in listed)
+
+
+def test_bundled_slash_commands(client, auth):
+    names = {s["name"] for s in client.get("/api/skills", headers=auth).json()}
+    expected = {
+        "standup", "digest", "decide", "research", "page",
+        "repro", "draft", "review", "plan", "brief",
+    }
+    assert expected <= names
+    standup = next(s for s in client.get("/api/skills", headers=auth).json() if s["name"] == "standup")
+    assert "blockers" in standup["body"].lower()
 
 
 def test_routines_and_due(client, auth, monkeypatch):
