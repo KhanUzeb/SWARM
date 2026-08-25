@@ -33,20 +33,17 @@ async def resolve_runtime_auth(provider_id: str) -> RuntimeProviderAuth | None:
 
 
 def map_model_for_provider(agent_model: str, provider_id: str, *, stored_model: str | None = None) -> str:
-    spec = get_provider(provider_id)
-    if spec is None:
-        return agent_model
+    spec = get_provider(provider_id) or {}
     aliases = spec.get("model_aliases") or {}
-    if agent_model in aliases:
-        return aliases[agent_model]
-    # HF / Together expect repo-style slugs — prefer connected default when agent uses Groq ids.
-    if provider_id in ("huggingface", "together") and agent_model.startswith("openai/"):
-        return stored_model or spec.get("default_model") or agent_model
-    if stored_model and agent_model in (spec.get("models") or []):
-        return agent_model
-    if stored_model:
-        return stored_model
-    return aliases.get(agent_model, agent_model)
+    chosen = (agent_model or "").strip()
+    if chosen in aliases:
+        return aliases[chosen]
+    # HF / Together expect repo-style slugs — map Groq-style ids to the connected default.
+    if provider_id in ("huggingface", "together") and chosen.startswith("openai/"):
+        return stored_model or spec.get("default_model") or chosen
+    if chosen:
+        return chosen
+    return stored_model or spec.get("default_model") or chosen
 
 
 def openai_compatible_config(auth: RuntimeProviderAuth) -> OpenAICompatibleConfig:

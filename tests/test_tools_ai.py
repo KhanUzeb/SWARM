@@ -89,3 +89,46 @@ def test_ai_provider_connect_status(client, auth):
     _clear_rate()
     disconnect = client.delete("/api/ai-support/connect/groq", headers=auth)
     assert disconnect.status_code == 200
+
+
+def test_map_model_keeps_live_id():
+    from backend.ai_support.resolver import map_model_for_provider
+    assert map_model_for_provider("gpt-4o-mini", "openai", stored_model="gpt-4o") == "gpt-4o-mini"
+    assert map_model_for_provider("openai/gpt-oss-20b", "huggingface", stored_model="Qwen/Qwen2.5-72B-Instruct") == "Qwen/Qwen2.5-72B-Instruct"
+
+
+def test_ai_models_catalog_without_key(client, auth):
+    res = client.get("/api/ai-support/providers/groq/models", headers=auth)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["live"] is False
+    ids = {m["id"] for m in body["models"]}
+    assert "openai/gpt-oss-120b" in ids
+
+    all_models = client.get("/api/ai-support/models", headers=auth)
+    assert all_models.status_code == 200
+    payload = all_models.json()
+    groq = next(p for p in payload["providers"] if p["id"] == "groq")
+    assert any(m["id"] == "openai/gpt-oss-120b" for m in groq["models"])
+    assert payload["models"]
+
+
+def test_ai_models_live_mock(client, auth, monkeypatch):
+    async def fake_list(provider_id, *, api_key=None):
+        return {
+            "provider_id": provider_id,
+            "name": "Groq",
+            "live": True,
+            "models": [
+                {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B", "owned_by": "groq", "default": False},
+                {"id": "openai/gpt-oss-120b", "name": "GPT-OSS 120B", "owned_by": "groq", "default": True},
+            ],
+            "default_model": "openai/gpt-oss-120b",
+        }
+
+    monkeypatch.setattr("backend.main.list_provider_models", fake_list)
+    res = client.get("/api/ai-support/providers/groq/models", headers=auth)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["live"] is True
+    assert [m["id"] for m in body["models"]] == ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { DEFAULT_MODEL, api, apiJson, bustCache, CACHE_TTL } from "../lib.js";
+import { api, apiJson, bustCache, CACHE_TTL } from "../lib.js";
+import ModelPicker from "./ModelPicker.jsx";
 
 export default function ProviderPanel({ token, onStatusChange, flash }) {
   const [providers, setProviders] = useState([]);
@@ -18,8 +19,16 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
 
   useEffect(() => { load(); }, [load]);
 
+  function draftFor(provider) {
+    return drafts[provider.id] || {
+      key: "",
+      model: provider.model || provider.default_model || "",
+    };
+  }
+
   async function connect(provider) {
-    const key = (drafts[provider.id]?.key || "").trim();
+    const draft = draftFor(provider);
+    const key = (draft.key || "").trim();
     if (key.length < 8) {
       flash?.("Enter a valid API key (8+ chars)", true);
       return;
@@ -31,7 +40,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
         method: "POST",
         body: {
           api_key: key,
-          model: drafts[provider.id]?.model || provider.default_model || undefined,
+          model: draft.model || provider.default_model || undefined,
         },
       });
       if (res.ok) {
@@ -43,6 +52,31 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
       } else flash?.(`Couldn't connect ${provider.name}`, true);
     } catch {
       flash?.(`Couldn't connect ${provider.name}`, true);
+    }
+    setBusy(null);
+  }
+
+  async function saveModel(provider) {
+    const model = (draftFor(provider).model || provider.model || "").trim();
+    if (!model) {
+      flash?.("Pick a model first", true);
+      return;
+    }
+    setBusy(`model-${provider.id}`);
+    try {
+      const res = await api(`/api/ai-support/connect/${provider.id}`, {
+        token,
+        method: "PATCH",
+        body: { model },
+      });
+      if (res.ok) {
+        flash?.(`Using ${model} on ${provider.name}`);
+        bustCache("/api/status", "/api/ai-support");
+        await load();
+        onStatusChange?.();
+      } else flash?.("Couldn't save that model", true);
+    } catch {
+      flash?.("Couldn't save that model", true);
     }
     setBusy(null);
   }
@@ -66,72 +100,104 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
   return (
     <div className="ai-support-panel">
       <p className="panel-note">
-        Connect AI providers here — keys are stored encrypted in SQLite. Env vars still work as fallbacks.
+        Connect a provider, then pick a live model from their API. Keys stay encrypted in SQLite.
+        Env vars still work as fallbacks.
       </p>
       <ul className="provider-list">
         {!providers.length && <li className="empty-state">Loading providers…</li>}
-        {providers.map((p) => (
-          <li key={p.id} className={`provider-card${p.connected ? " connected" : ""}`}>
-            <div className="provider-head">
-              <span className="provider-name">{p.name}</span>
-              <span className="provider-kind">{p.kind || "openai_compatible"}</span>
-              <span className={`provider-badge${p.connected ? " on" : ""}`}>
-                {p.connected ? "Connected" : "Not connected"}
-              </span>
-            </div>
-            {p.note && <p className="provider-desc">{p.note}</p>}
-            {!p.connected ? (
-              <>
-                <label className="sr-only" htmlFor={`key-${p.id}`}>{p.name} API key</label>
-                <input
-                  id={`key-${p.id}`}
-                  type="password"
-                  autoComplete="off"
-                  placeholder="Paste API key"
-                  value={drafts[p.id]?.key || ""}
-                  onChange={(e) => setDrafts((d) => ({
-                    ...d,
-                    [p.id]: { ...d[p.id], key: e.target.value },
-                  }))}
-                />
-                {(p.models?.length > 0) && (
-                  <select
-                    value={drafts[p.id]?.model || p.default_model || p.models[0]}
+        {providers.map((p) => {
+          const draft = draftFor(p);
+          return (
+            <li key={p.id} className={`provider-card${p.connected ? " connected" : ""}`}>
+              <div className="provider-head">
+                <span className="provider-name">{p.name}</span>
+                <span className="provider-kind">{p.kind || "openai_compatible"}</span>
+                <span className={`provider-badge${p.connected ? " on" : ""}`}>
+                  {p.connected ? (p.via === "env" ? "Env" : "Connected") : "Not connected"}
+                </span>
+              </div>
+              {p.note && <p className="provider-desc">{p.note}</p>}
+              {!p.connected ? (
+                <>
+                  <label className="sr-only" htmlFor={`key-${p.id}`}>{p.name} API key</label>
+                  <input
+                    id={`key-${p.id}`}
+                    type="password"
+                    autoComplete="off"
+                    placeholder="Paste API key"
+                    value={draft.key}
                     onChange={(e) => setDrafts((d) => ({
                       ...d,
-                      [p.id]: { ...d[p.id], model: e.target.value },
+                      [p.id]: { ...draftFor(p), key: e.target.value },
                     }))}
-                  >
-                    {p.models.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                )}
-                <div className="provider-actions">
-                  <a className="btn ghost" href={p.key_url} target="_blank" rel="noreferrer">Get key</a>
-                  <button
-                    type="button"
-                    className="btn primary"
-                    disabled={busy === p.id}
-                    onClick={() => connect(p)}
-                  >
-                    {busy === p.id ? "Connecting…" : (p.oauth_label || "Connect")}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="provider-actions">
-                <span className="hint">Model: {p.model || p.default_model || "default"}</span>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  disabled={busy === p.id}
-                  onClick={() => disconnect(p.id, p.name)}
-                >
-                  Disconnect
-                </button>
-              </div>
-            )}
-          </li>
-        ))}
+                  />
+                  <label className="field-label" htmlFor={`model-${p.id}`}>Model</label>
+                  <ModelPicker
+                    id={`model-${p.id}`}
+                    token={token}
+                    providerId={p.id}
+                    apiKey={draft.key}
+                    value={draft.model || p.default_model || ""}
+                    onChange={(model) => setDrafts((d) => ({
+                      ...d,
+                      [p.id]: { ...draftFor(p), model },
+                    }))}
+                    placeholder="Search this provider's models"
+                  />
+                  <div className="provider-actions">
+                    <a className="btn ghost" href={p.key_url} target="_blank" rel="noreferrer">Get key</a>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      disabled={busy === p.id}
+                      onClick={() => connect(p)}
+                    >
+                      {busy === p.id ? "Connecting…" : (p.oauth_label || "Connect")}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <label className="field-label" htmlFor={`model-${p.id}`}>Model</label>
+                  <ModelPicker
+                    id={`model-${p.id}`}
+                    token={token}
+                    providerId={p.id}
+                    value={draft.model || p.model || p.default_model || ""}
+                    onChange={(model) => setDrafts((d) => ({
+                      ...d,
+                      [p.id]: { ...draftFor(p), model },
+                    }))}
+                    placeholder="Search live models"
+                  />
+                  <div className="provider-actions">
+                    {p.via !== "env" && (
+                      <button
+                        type="button"
+                        className="btn primary"
+                        disabled={busy === `model-${p.id}` || !(draft.model || p.model)}
+                        onClick={() => saveModel(p)}
+                      >
+                        {busy === `model-${p.id}` ? "Saving…" : "Use this model"}
+                      </button>
+                    )}
+                    {p.via !== "env" && (
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        disabled={busy === p.id}
+                        onClick={() => disconnect(p.id, p.name)}
+                      >
+                        Disconnect
+                      </button>
+                    )}
+                    {p.via === "env" && <span className="hint">Model is chosen per bot when using an env key.</span>}
+                  </div>
+                </>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

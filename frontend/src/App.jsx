@@ -6,23 +6,42 @@ import ToolsPanel from "./ai-support/ToolsPanel.jsx";
 import BrowserPanel from "./ai-support/BrowserPanel.jsx";
 import AppsPanel from "./ai-support/AppsPanel.jsx";
 import SystemPanel from "./ai-support/SystemPanel.jsx";
+import ModelPicker from "./ai-support/ModelPicker.jsx";
 import {
   ALL_TOOLS, CACHE_TTL, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, apiJson, authHeaders, botLabel, bustCache,
   escapeHtml, extractPaper, fmtBytes, fmtTime, formatInline, groupedWith, initials, insertMention,
   mentionQuery, slugFromName, statusLabel, tokenizeBody,
 } from "./lib.js";
 
-const PANEL_TABS = [
-  { id: "files", label: "Sandbox" },
-  { id: "system", label: "System" },
-  { id: "browser", label: "Browser" },
-  { id: "apps", label: "Apps" },
-  { id: "tools", label: "Tools" },
-  { id: "plugins", label: "Plugins" },
-  { id: "ai", label: "AI" },
-  { id: "skills", label: "Skills" },
-  { id: "routines", label: "Routines" },
-  { id: "approvals", label: "Approvals" },
+const PANEL_GROUPS = [
+  {
+    id: "places",
+    label: "Places",
+    tabs: [
+      { id: "files", label: "Sandbox" },
+      { id: "system", label: "System" },
+      { id: "browser", label: "Browser" },
+    ],
+  },
+  {
+    id: "connect",
+    label: "Connect",
+    tabs: [
+      { id: "ai", label: "AI" },
+      { id: "apps", label: "Apps" },
+      { id: "tools", label: "Tools" },
+      { id: "plugins", label: "Plugins" },
+    ],
+  },
+  {
+    id: "automate",
+    label: "Automate",
+    tabs: [
+      { id: "skills", label: "Skills" },
+      { id: "routines", label: "Routines" },
+      { id: "approvals", label: "Approvals" },
+    ],
+  },
 ];
 
 function renderMath(tex, display) {
@@ -1288,6 +1307,7 @@ export default function App() {
     () => (toolCatalog.length ? toolCatalog.map((t) => t.name) : ALL_TOOLS),
     [toolCatalog],
   );
+  const panelGroup = PANEL_GROUPS.find((g) => g.tabs.some((t) => t.id === panelTab)) || PANEL_GROUPS[0];
 
   return (
     <div className={layout}>
@@ -1674,7 +1694,13 @@ export default function App() {
               <label htmlFor="agent-prompt">How they should work</label>
               <textarea id="agent-prompt" required maxLength={4000} rows={5} placeholder="One job, sources, deliverable, and what needs approval." value={agentForm.prompt} onChange={(e) => setAgentForm((f) => ({ ...f, prompt: e.target.value }))} />
               <label htmlFor="agent-model">Model</label>
-              <input id="agent-model" maxLength={128} placeholder={DEFAULT_MODEL} value={agentForm.model} onChange={(e) => setAgentForm((f) => ({ ...f, model: e.target.value }))} />
+              <ModelPicker
+                id="agent-model"
+                token={token}
+                value={agentForm.model}
+                onChange={(model) => setAgentForm((f) => ({ ...f, model }))}
+                placeholder={DEFAULT_MODEL}
+              />
               <label htmlFor="agent-scope">Channel scope</label>
               <select id="agent-scope" value={agentForm.scope} onChange={(e) => setAgentForm((f) => ({ ...f, scope: e.target.value }))}>
                 <option value="">Every channel (plus their 1:1)</option>
@@ -1742,6 +1768,7 @@ export default function App() {
 
       <nav id="sidebar" aria-label="Workspace">
         <div className="brand">swarm<small>workspace · bots as teammates</small></div>
+        <div className="sidebar-scroll">
         <form className="sidebar-search" onSubmit={runSearch}>
           <label className="sr-only" htmlFor="workspace-search">Search messages</label>
           <input
@@ -1858,8 +1885,9 @@ export default function App() {
         <button type="button" id="new-channel" onClick={() => { setChannelErr(""); setChannelModal("room"); }}>+ New channel</button>
         <div id="agents-box">
           <div id="groq-status" className={agentsReady ? "ready" : "missing"}>
-            {demoMode ? "Demo mode — mock replies" : agentsReady ? "Bots ready" : "Set GROQ_API_KEY or SWARM_DEMO=1"}
+            {demoMode ? "Demo mode — mock replies" : agentsReady ? "Bots ready" : "Connect AI in Computer"}
           </div>
+        </div>
         </div>
         <div id="me">
           <div className="avatar">{initials(user || "?")}</div>
@@ -1988,7 +2016,7 @@ export default function App() {
             />
             <button type="button" className="btn primary send" onClick={() => { sendFrom(draft, null); setDraft(""); }}>Send</button>
           </div>
-          <div className="composer-hint">@bot · @core · /standup /digest /research /plan · Computer: sandbox + this machine</div>
+          <div className="composer-hint">@bot · @core · /standup /digest · Computer → System to work outside the project</div>
         </div>
       </main>
 
@@ -1999,22 +2027,38 @@ export default function App() {
               <div className="thread-title">Computer</div>
               <div className="thread-sub">
                 {panelTab === "system"
-                  ? (computer?.system?.root ? `This machine · ${computer.system.root}` : "This machine")
-                  : computer
-                    ? `Sandbox · ${computer.files.length} file${computer.files.length === 1 ? "" : "s"}`
-                    : "Sandbox"}
+                  ? "This machine — any folder"
+                  : panelTab === "ai"
+                    ? "Live models from your providers"
+                    : computer
+                      ? `Sandbox · ${computer.files.length} file${computer.files.length === 1 ? "" : "s"}`
+                      : "Sandbox"}
               </div>
             </div>
             <button type="button" className="btn ghost" onClick={() => setComputerOpen(false)}>Close</button>
           </div>
+          <div className="panel-groups" role="tablist" aria-label="Computer sections">
+            {PANEL_GROUPS.map((group) => (
+              <button
+                key={group.id}
+                type="button"
+                className={`panel-group${panelGroup.id === group.id ? " active" : ""}`}
+                onClick={() => {
+                  if (panelGroup.id !== group.id) setPanelTab(group.tabs[0].id);
+                }}
+              >
+                {group.label}
+              </button>
+            ))}
+          </div>
           <div className="panel-tabs" role="tablist">
-            {PANEL_TABS.map((tab, i) => (
+            {panelGroup.tabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 role="tab"
                 aria-selected={panelTab === tab.id}
-                className={`tab${panelTab === tab.id ? " active" : ""}${i === 3 ? " tab-split" : ""}`}
+                className={`tab${panelTab === tab.id ? " active" : ""}`}
                 onClick={() => setPanelTab(tab.id)}
               >
                 {tab.label}
@@ -2022,7 +2066,7 @@ export default function App() {
             ))}
           </div>
           {panelTab === "system" && (
-            <SystemPanel token={token} flash={flash} />
+            <SystemPanel token={token} flash={flash} onRootChange={loadComputer} />
           )}
           {panelTab === "browser" && (
             <BrowserPanel token={token} flash={flash} />

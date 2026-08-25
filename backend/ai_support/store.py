@@ -69,6 +69,19 @@ async def get_connection_model(provider_id: str) -> str | None:
     return None
 
 
+async def set_model(provider_id: str, model: str) -> dict[str, Any] | None:
+    row = await db.update_ai_provider_model(provider_id, model)
+    if row is None:
+        return None
+    return {
+        "provider_id": row["provider_id"],
+        "connected": True,
+        "model": row.get("model"),
+        "connected_at": row.get("connected_at"),
+        "key_hint": row.get("key_hint"),
+    }
+
+
 async def primary_llm_key() -> tuple[str | None, str]:
     from .resolver import resolve_runtime_auth
     from .providers import providers_by_priority

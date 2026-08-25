@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { DEFAULT_MODEL, api, apiJson, CACHE_TTL } from "../lib.js";
+import ModelPicker from "./ModelPicker.jsx";
 
 /**
  * Onboarding step 1 — connect Groq (recommended) or OpenRouter.
@@ -85,12 +86,14 @@ export default function ApiConfigStep({ token, onContinue, onSkip, flash }) {
       <a className="hint linkish" href="https://console.groq.com/keys" target="_blank" rel="noreferrer">Get a Groq key</a>
 
       <label htmlFor="onboard-model">Default model</label>
-      <input
+      <ModelPicker
         id="onboard-model"
-        maxLength={128}
-        placeholder={DEFAULT_MODEL}
+        token={token}
+        providerId={groqKey.trim().length >= 8 || groqConnected ? "groq" : (orKey.trim().length >= 8 || orConnected ? "openrouter" : undefined)}
+        apiKey={groqKey.trim().length >= 8 ? groqKey : (orKey.trim().length >= 8 ? orKey : undefined)}
         value={model}
-        onChange={(e) => setModel(e.target.value)}
+        onChange={setModel}
+        placeholder={DEFAULT_MODEL}
       />
 
       <label htmlFor="onboard-or">OpenRouter key <span className="optional">(optional fallback)</span></label>

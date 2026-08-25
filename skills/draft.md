@@ -1,4 +1,4 @@
-When to use: write an email, LinkedIn note, or in-app message in the user's voice — do not send it.
+When to use: write an email, LinkedIn note, or in-app message in the user's voice, but do not send it.
 
 Inputs: audience, goal, and any facts after the command.
 

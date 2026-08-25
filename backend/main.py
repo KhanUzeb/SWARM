@@ -26,14 +26,16 @@ from fastapi.staticfiles import StaticFiles
 
 from . import agent, db
 from .ai_support import store as ai_store
+from .ai_support.catalog import list_all_models, list_provider_models
 from .ai_support.providers import get_provider, list_providers, providers_by_priority
 from .jobs import JOB_TEMPLATES
 from .profiles import list_profiles, load_job_profile
 from .models import (
-    AgentCreate, AgentPatch, AiProviderConnect, ApprovalResolve, ChannelCreate,
-    ComposioToolkitConnect, CustomToolCreate, CustomToolPatch, DirectMessageCreate,
-    MessageCreate, ReactionCreate, RegisterRequest, RoutineCreate, RoutinePatch,
-    SkillCreate, SkillPatch, TeamCreate, TeamPatch,
+    AgentCreate, AgentPatch, AiModelsPreview, AiProviderConnect, AiProviderModel,
+    ApprovalResolve, ChannelCreate, ComposioToolkitConnect, CustomToolCreate,
+    CustomToolPatch, DirectMessageCreate, MessageCreate, ReactionCreate,
+    RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate, SkillPatch,
+    SystemRootSet, TeamCreate, TeamPatch,
 )
 from .security import (
     allowed_origins, install_api_guard, is_loopback, optional_auth, parse_token,
@@ -128,6 +130,8 @@ HANDOFF_DEPTH = 2
 async def on_startup() -> None:
     global _routine_task
     await db.init_db()
+    from .tools import system as system_mod
+    await system_mod.hydrate_root()
     await reload_registry()
     _routine_task = asyncio.create_task(_routine_loop())
 
@@ -646,12 +650,18 @@ async def api_ai_providers(handle: str = Depends(require_auth)):
     catalog = list_providers()
     connections = {c["provider_id"]: c for c in await ai_store.status()}
     for p in catalog:
+        spec = get_provider(p["id"]) or {}
         conn = connections.get(p["id"])
-        p["connected"] = conn is not None
+        env_name = spec.get("env_fallback")
+        env_ok = _key_set(env_name) if env_name else False
+        p["connected"] = conn is not None or env_ok
+        p["via"] = "stored" if conn else ("env" if env_ok else None)
         if conn:
             p["model"] = conn.get("model")
             p["key_hint"] = conn.get("key_hint")
             p["connected_at"] = conn.get("connected_at")
+        elif env_ok:
+            p["model"] = spec.get("default_model")
     return catalog
 
 
@@ -678,6 +688,41 @@ async def api_ai_disconnect(provider_id: str, handle: str = Depends(require_admi
     if not await ai_store.disconnect(provider_id):
         raise HTTPException(404, "not connected")
     return {"ok": True}
+
+
+@app.patch("/api/ai-support/connect/{provider_id}")
+async def api_ai_set_model(
+    provider_id: str, payload: AiProviderModel, handle: str = Depends(require_admin)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if get_provider(provider_id) is None:
+        raise HTTPException(404, "unknown provider")
+    row = await ai_store.set_model(provider_id, payload.model.strip())
+    if row is None:
+        raise HTTPException(404, "not connected")
+    return row
+
+
+@app.get("/api/ai-support/models")
+async def api_ai_models(handle: str = Depends(require_auth)):
+    return await list_all_models()
+
+
+@app.get("/api/ai-support/providers/{provider_id}/models")
+async def api_ai_provider_models(provider_id: str, handle: str = Depends(require_auth)):
+    if get_provider(provider_id) is None:
+        raise HTTPException(404, "unknown provider")
+    return await list_provider_models(provider_id)
+
+
+@app.post("/api/ai-support/providers/{provider_id}/models")
+async def api_ai_provider_models_preview(
+    provider_id: str, payload: AiModelsPreview, handle: str = Depends(require_auth)
+):
+    if get_provider(provider_id) is None:
+        raise HTTPException(404, "unknown provider")
+    return await list_provider_models(provider_id, api_key=payload.api_key)
 
 
 @app.get("/api/skills")
@@ -830,6 +875,7 @@ async def api_resolve_approval(
 async def api_computer(handle: str = Depends(require_auth)):
     from .tools import computer as computer_mod
     from .tools import system as system_mod
+    await system_mod.hydrate_root()
     system_info = system_mod.listing("")
     return {
         "workspace": agent.SANDBOX_DIR,
@@ -840,9 +886,9 @@ async def api_computer(handle: str = Depends(require_auth)):
         "system": system_info,
         "note": (
             "Bots share two places on this host: the sandbox (Sandbox tab) and "
-            f"the machine root {system_info.get('root')} (System tab, system_run). "
-            "Optional Playwright, Browser Use CLI, CUA, Exa/Tavily/Firecrawl, and "
-            "Composio apps live in the other tabs. Not a remote cloud desktop."
+            f"the machine folder {system_info.get('root')} (System tab, system_run). "
+            "Change that folder from System → Places. Optional Playwright, Browser Use "
+            "CLI, CUA, Exa/Tavily/Firecrawl, and Composio apps live in the other tabs."
         ),
     }
 
@@ -863,7 +909,21 @@ async def api_computer_file(path: str, handle: str = Depends(require_auth)):
 @app.get("/api/computer/system")
 async def api_computer_system(path: str = "", handle: str = Depends(require_auth)):
     from .tools import system as system_mod
+    await system_mod.hydrate_root()
     return system_mod.listing(path)
+
+
+@app.post("/api/computer/system/root")
+async def api_computer_system_root(
+    payload: SystemRootSet, handle: str = Depends(require_auth)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import system as system_mod
+    result = await system_mod.set_root(payload.path)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "invalid path")
+    return system_mod.listing("")
 
 
 @app.get("/api/computer/system/file")
@@ -871,6 +931,7 @@ async def api_computer_system_file(path: str, handle: str = Depends(require_auth
     from .tools import system as system_mod
     if not system_mod.enabled():
         raise HTTPException(403, "system tools disabled")
+    await system_mod.hydrate_root()
     target = system_mod.safe_path(path)
     if target is None or not target.is_file():
         raise HTTPException(404, "no such file")

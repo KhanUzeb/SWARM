@@ -353,10 +353,10 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "system_run",
             "description": (
-                "Run a shell command on this machine (full PATH, cwd = SWARM_SYSTEM_ROOT, "
-                "usually the swarm repo). 60s timeout. Destructive commands are blocked. "
-                "Use for git, pytest, installs, and editing the live project. "
-                "computer_run is the isolated sandbox."
+                "Run a shell command on this machine (full PATH, cwd = the current "
+                "System folder from Computer → System, which can be the project, Home, "
+                "Desktop, or any other directory). 60s timeout. Destructive commands "
+                "are blocked. computer_run is the isolated sandbox."
             ),
             "parameters": {
                 "type": "object",
@@ -372,7 +372,7 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "system_ls",
-            "description": "List a directory on this machine under the system root.",
+            "description": "List a directory on this machine under the current System folder (Computer → System). Use an empty path for the folder root.",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -383,7 +383,7 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "system_read",
-            "description": "Read a text file on this machine under the system root (cap 200k chars).",
+            "description": "Read a text file on this machine under the current System folder (cap 200k chars).",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -396,7 +396,7 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "system_write",
             "description": (
-                "Write a text file on this machine under the system root. "
+                "Write a text file on this machine under the current System folder. "
                 ".env and swarm.db are protected. Request approval before production changes."
             ),
             "parameters": {

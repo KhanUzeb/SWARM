@@ -146,7 +146,19 @@ class CustomToolPatch(BaseModel):
 
 class AiProviderConnect(BaseModel):
     api_key: str = Field(min_length=8, max_length=512)
-    model: str | None = Field(default=None, max_length=128)
+    model: str | None = Field(default=None, max_length=200)
+
+
+class AiProviderModel(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class AiModelsPreview(BaseModel):
+    api_key: str | None = Field(default=None, max_length=512)
+
+
+class SystemRootSet(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
 
 
 class RegisterRequest(BaseModel):
@@ -171,7 +183,7 @@ class AgentCreate(BaseModel):
     name: str = Field(default="", max_length=32)
     display_name: str = Field(default="", max_length=40)
     system_prompt: str = Field(min_length=1, max_length=4000)
-    model: str = DEFAULT_GROQ_MODEL
+    model: str = Field(default=DEFAULT_GROQ_MODEL, min_length=1, max_length=200)
     channel_scope: str | None = None
     history_window: int = Field(default=12, ge=1, le=50)
     max_tool_calls: int = Field(default=3, ge=1, le=8)
@@ -206,7 +218,7 @@ class AgentCreate(BaseModel):
 class AgentPatch(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=40)
     system_prompt: str | None = Field(default=None, min_length=1, max_length=4000)
-    model: str | None = Field(default=None, min_length=1, max_length=128)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
     channel_scope: str | None = None
     history_window: int | None = Field(default=None, ge=1, le=50)
     max_tool_calls: int | None = Field(default=None, ge=1, le=8)

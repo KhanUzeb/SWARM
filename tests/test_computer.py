@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+from pathlib import Path
 
 import backend.main as main
 from backend.tools import browser, composio_client, computer
@@ -128,6 +131,111 @@ def test_system_api_disabled(client, auth, tmp_path, monkeypatch):
     assert client.get(
         "/api/computer/system/file", params={"path": "x"}, headers=auth
     ).status_code == 403
+
+
+def test_system_root_mobility(client, auth, tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    other = tmp_path / "elsewhere"
+    project.mkdir()
+    other.mkdir()
+    (other / "outside.md").write_text("hello-outside", encoding="utf-8")
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
+
+    listing = client.get("/api/computer/system", headers=auth).json()
+    assert listing["enabled"] is True
+    assert Path(listing["root"]) == project.resolve()
+    assert any(p["id"] == "home" for p in listing["places"])
+    assert "crumbs" in listing
+
+    _clear_rate()
+    moved = client.post(
+        "/api/computer/system/root",
+        json={"path": str(other)},
+        headers=auth,
+    )
+    assert moved.status_code == 200
+    body = moved.json()
+    assert Path(body["root"]) == other.resolve()
+    assert any(e["name"] == "outside.md" for e in body["entries"])
+    preview = client.get(
+        "/api/computer/system/file", params={"path": "outside.md"}, headers=auth
+    ).json()
+    assert preview["content"] == "hello-outside"
+
+    _clear_rate()
+    up = client.post(
+        "/api/computer/system/root",
+        json={"path": body["parent_abs"]},
+        headers=auth,
+    )
+    assert up.status_code == 200
+    assert Path(up.json()["root"]) == other.parent.resolve()
+
+    _clear_rate()
+    denied = client.post(
+        "/api/computer/system/root",
+        json={"path": tmp_path.anchor},
+        headers=auth,
+    )
+    assert denied.status_code == 400
+
+
+def test_system_listing_is_only_the_bound_folder(tmp_path, monkeypatch):
+    project = tmp_path / "recall"
+    project.mkdir()
+    (project / "app").mkdir()
+    (project / "data").mkdir()
+    (project / "readme.md").write_text("ok", encoding="utf-8")
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
+    system_mod.reset_runtime()
+    names = {e["name"] for e in system_mod.listing("")["entries"]}
+    assert names == {"app", "data", "readme.md"}
+    home_shell = {"Documents", "Music", "My Music", "My Documents"}
+    assert names.isdisjoint(home_shell)
+
+
+def test_system_listing_skips_escaping_junctions(tmp_path, monkeypatch):
+    project = tmp_path / "recall"
+    outside = tmp_path / "Documents"
+    project.mkdir()
+    outside.mkdir()
+    (project / "app").mkdir()
+    decoy = project / "Documents"
+    if os.name == "nt":
+        created = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(decoy), str(outside)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if created.returncode != 0:
+            import pytest
+            pytest.skip(created.stderr or created.stdout or "could not create junction")
+    else:
+        decoy.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
+    system_mod.reset_runtime()
+    names = {e["name"] for e in system_mod.listing("")["entries"]}
+    assert "app" in names
+    assert "Documents" not in names
+
+
+def test_system_listing_hides_legacy_shell_folders(tmp_path, monkeypatch):
+    project = tmp_path / "homeish"
+    project.mkdir()
+    (project / "real").mkdir()
+    (project / "My Music").mkdir()
+    (project / "My Documents").mkdir()
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
+    system_mod.reset_runtime()
+    names = {e["name"] for e in system_mod.listing("")["entries"]}
+    assert "real" in names
+    assert "My Music" not in names
+    assert "My Documents" not in names
 
 
 def test_browser_status_and_disabled(client, auth, monkeypatch):

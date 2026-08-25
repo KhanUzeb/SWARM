@@ -53,6 +53,14 @@ def client(tmp_path, monkeypatch):
     yield from _app_client(tmp_path, monkeypatch)
 
 
+@pytest.fixture(autouse=True)
+def _reset_system_runtime():
+    from backend.tools import system as system_mod
+    system_mod.reset_runtime()
+    yield
+    system_mod.reset_runtime()
+
+
 @pytest.fixture
 def local_client(tmp_path, monkeypatch):
     yield from _app_client(tmp_path, monkeypatch, ("127.0.0.1", 50000))

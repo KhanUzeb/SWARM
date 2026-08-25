@@ -2,7 +2,7 @@
 
 User-facing AI provider settings live in the **Computer → AI** panel and **onboarding step 1**.
 
-Implementation: `backend/ai_support/` — modeled after [Hugging Face tau `src/tau_ai`](https://github.com/huggingface/tau/tree/main/src/tau_ai):
+Implementation lives in `backend/ai_support/`, modeled after [Hugging Face tau `src/tau_ai`](https://github.com/huggingface/tau/tree/main/src/tau_ai):
 
 | tau concept | swarm |
 |-------------|-------|

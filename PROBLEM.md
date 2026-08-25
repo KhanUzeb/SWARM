@@ -14,11 +14,11 @@ When an agent runs a shell command, searches history, or drafts an outbound emai
 
 Block's [Buzz](https://github.com/block/buzz) states it directly: one event log, one identity model, humans and agents both speaking it, same audit trail. Agents join channels, run workflows, review code, and leave the same record as everyone else.
 
-That's the right *shape*. Buzz's implementation — Rust, Nostr relay, cryptographic signing, git hosting, workflow engine, canvases, huddles, desktop app — is a full product with a security model and multi-tenant hosting. Cloning it teaches infrastructure, not whether the chat-native agent model actually helps.
+That's the right *shape*. But Buzz's implementation (Rust, Nostr relay, cryptographic signing, git hosting, workflow engine, canvases, huddles, desktop app) is a full product with a security model and multi-tenant hosting. Cloning it teaches infrastructure, not whether the chat-native agent model actually helps.
 
 **swarm tests one question:**
 
-> Does putting an agent in the same room as humans — with the same message history, the same `@mention` trigger, and tool calls posted as visible audit messages — produce something more useful than a chatbot sidebar?
+> Does putting an agent in the same room as humans, with the same message history, the same `@mention` trigger, and tool calls posted as visible audit messages, produce something more useful than a chatbot sidebar?
 
 Everything else (signing, multi-tenancy, git integration, canvases, Slack connectors) is infrastructure in service of that question, not the question itself.
 
@@ -32,15 +32,15 @@ Everything else (signing, multi-tenancy, git integration, canvases, Slack connec
 | **IDE-native** | cursor-agents, Sisyphus | Great for coding; not team-visible async work |
 | **Cloud job Bots** | xAI Grok Bot | Named roles + 1:1s + routines; vendor-hosted, cloud computer |
 
-**swarm's slice:** self-hosted workspace, Buzz-shaped agent model, Grok Bot-style named jobs — without Nostr, without Slack dependency, spec'd and Docker-deployable today.
+**swarm's slice:** self-hosted workspace, Buzz-shaped agent model, Grok Bot-style named jobs, without Nostr, without Slack dependency, spec'd and Docker-deployable today.
 
 See `VISION.md` for the full competitive map and V3 scope.
 
 ## Who this is for
 
-1. **Portfolio / interview** — demonstrates real-time systems (WS fanout), agent integration (mention-triggered, tool audit, streaming), and API design (dual REST/WS) as one product.
-2. **Solo builder** — local AI ops desk: Sales, Chief of Staff, Code, Expense Bots with 1:1s, skills, and routines.
-3. **Small team (future V3)** — self-hosted workspace where coworkers see agent work and approve actions in-thread.
+1. **Portfolio / interview.** Real-time systems (WS fanout), agent integration (mention-triggered, tool audit, streaming), and API design (dual REST/WS) as one product.
+2. **Solo builder.** A local AI ops desk: Sales, Chief of Staff, Code, Expense Bots with 1:1s, skills, and routines.
+3. **Small team (future V3).** A self-hosted workspace where coworkers see agent work and approve actions in-thread.
 
 ## Non-goals
 
@@ -69,7 +69,7 @@ See `VISION.md` for the full competitive map and V3 scope.
 - [x] Custom agents + memory, streaming UI, reconnect
 - [x] Named job Bots, 1:1 DMs, skills, routines, approvals, shared computer, bot handoffs
 
-### V3 (partial — see `VISION.md`)
+### V3 (partial; see `VISION.md`)
 
 - [x] Five-minute onboarding + demo mode (V3.2, V3.7)
 - [x] Admin role for Bot creation
@@ -77,4 +77,4 @@ See `VISION.md` for the full competitive map and V3 scope.
 - [x] Human DMs and audit export
 - [ ] Semantic history — gated on actual need
 
-Success for the documentation: someone reads `VISION.md` + `SPEC.md` cold and knows what swarm is, what it isn't, and how it compares to Buzz and SlackHive — without asking the author.
+Success for the documentation: someone reads `VISION.md` + `SPEC.md` cold and knows what swarm is, what it isn't, and how it compares to Buzz and SlackHive, without asking the author.

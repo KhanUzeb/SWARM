@@ -1,3 +1,4 @@
+from .catalog import list_all_models, list_provider_models
 from .config import OpenAICompatibleConfig, RuntimeProviderAuth
 from .providers import get_provider, list_providers, providers_by_priority
 from .resolver import (
@@ -17,6 +18,8 @@ __all__ = [
     "build_openai_compatible_client",
     "get_provider",
     "iter_openai_compatible_attempts",
+    "list_all_models",
+    "list_provider_models",
     "list_providers",
     "map_model_for_provider",
     "openai_compatible_config",

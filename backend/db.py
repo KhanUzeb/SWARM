@@ -1729,6 +1729,23 @@ async def delete_ai_provider(provider_id: str) -> bool:
         return cur.rowcount > 0
 
 
+async def update_ai_provider_model(provider_id: str, model: str | None) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "UPDATE ai_providers SET model = ? WHERE provider_id = ?",
+            (model, provider_id),
+        )
+        await db.commit()
+        if cur.rowcount == 0:
+            return None
+        cur = await db.execute(
+            "SELECT * FROM ai_providers WHERE provider_id = ?", (provider_id,)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
 # ------------------------------------------------------------------ people -
 
 async def get_user(handle: str) -> dict[str, Any] | None:
