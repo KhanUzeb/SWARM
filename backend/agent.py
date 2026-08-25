@@ -70,7 +70,8 @@ _TOOL_HINT = re.compile(
     r"workspace|write|read|fetch|url|digest|save|skill|routine|schedule|approv|"
     r"computer|screenshot|browser|navigate|click|type|press|"
     r"composio|gmail|github|slack|notion|toolkit|"
-    r"handoff|draft|research"
+    r"exa|tavily|firecrawl|crawl|scrape|research|"
+    r"handoff|draft"
     r")\b",
     re.I,
 )
@@ -79,13 +80,15 @@ _TOOL_POLICY = (
     "You are a persistent named teammate. Finish the job and only stop when "
     "the deliverable is ready or something needs approval. "
     "Tools: use them when the work needs files, the shared computer, a browser, "
+    "web search (Exa/Tavily), a Firecrawl scrape, Browser Use CLI, CUA desktop, "
     "a connected app (Composio), history, memory, a saved skill, or an approval "
     "gate. Greetings in a shared room get a short text reply. "
-    "computer_run is the write-capable shell; browser_* drives headless Chromium; "
+    "computer_run is the write-capable shell; browser_* is Playwright; "
+    "browser_use is the Browser Use CLI; cua_desktop is the CUA host driver; "
     "plugin:composio:* lists, connects, and executes Gmail/Slack/GitHub/Notion/etc. "
     "For sending, publishing, deleting, purchasing, or production changes, call "
     "request_approval and wait. Write durable files to the shared workspace. "
-    "You may @mention another bot to hand off work."
+    "You may @mention another bot to hand off work. Follow your profile.md."
 )
 
 OnToolsReady = Callable[[list[dict[str, Any]]], Awaitable[None]]
@@ -397,6 +400,7 @@ def _build_messages(
     invoked_skills: list[dict[str, Any]] | None = None,
     group_mates: list[str] | None = None,
     display_name: str | None = None,
+    profile: str | None = None,
 ) -> list[dict[str, Any]]:
     tools = allowed_tools if allowed_tools is not None else list(DEFAULT_TOOLS)
     policy = _TOOL_POLICY
@@ -409,6 +413,8 @@ def _build_messages(
     else:
         policy += " You have no tools for this turn."
     blocks = [system_prompt, policy]
+    if profile:
+        blocks.append("Bot profile (profile.md):\n" + profile)
     if group_mates:
         others = [n for n in group_mates if n]
         if others:
@@ -831,11 +837,14 @@ async def generate_reply(
                     invoked.append(by_name[slug])
             break
     group_mates = (channel or {}).get("members") if channel_kind == "group" else None
+    from .profiles import load_agent_profile
+    profile = load_agent_profile(name, agent_row.get("job"))
     messages = _build_messages(
         agent_row["system_prompt"], history,
         window=window, allowed_tools=allowed, notes=notes, summary=summary,
         job=agent_row.get("job"), skills=skills, invoked_skills=invoked,
         group_mates=group_mates, display_name=agent_row.get("display_name"),
+        profile=profile,
     )
     use_tools = should_offer_tools(history, channel_kind=channel_kind) and bool(allowed)
 

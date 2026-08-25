@@ -29,6 +29,7 @@ swarm/
   frontend/         React 19 + Vite 8 (bun). Production build in frontend/dist
     src/ai-support/   Provider + tools panels, onboarding API step
   plugins/          Optional tool manifests (plugin:slug:name)
+  profiles/         Bot profile.md (seeded Bots + job templates)
   ai-support/       User-facing README → backend/ai_support/
   cli/swarm_cli.py  JSON in / JSON out — scripts and other agents post here
   tests/            pytest (Groq mocked)
@@ -57,7 +58,7 @@ uvicorn backend.main:app --reload
 
 Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/OpenRouter (encrypted server-side) → pick your first Bot → land in their 1:1. Or set `SWARM_DEMO=1` for mock replies without an API key.
 
-**Computer panel:** Tools · Plugins · **AI** (provider keys) · Skills · Routines.
+**Computer panel:** Files · Browser · **Apps** (Exa, Tavily, Firecrawl, Composio, Browser Use CLI, CUA) · Tools · Plugins · **AI** · Skills · Routines.
 
 **Docker:** [`docs/DEPLOY.md`](docs/DEPLOY.md)
 
@@ -111,6 +112,6 @@ pytest -q
 ## Honest gaps (not hidden)
 
 No cloud VM or remote desktop. Browser-use is optional local Playwright
-(install separately). Composio connectors need a `COMPOSIO_API_KEY`.
-Semantic search is still gated. Sandbox is cwd+timeout, not container isolation.
+or the Browser Use CLI / CUA driver if installed. Composio, Exa, Tavily,
+and Firecrawl need their own keys. Semantic search is still gated.
 See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.

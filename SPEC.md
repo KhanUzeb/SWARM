@@ -72,15 +72,21 @@ a duplicate row or an error.
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
 | archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
-Allowed tool names include **21 builtins** (`read_only_shell`,
+Allowed tool names include **26 builtins** (`read_only_shell`,
 `search_channel_history`, `remember`, `recall`, `list_workspace`,
 `read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
-`save_skill`, `request_approval`, plus computer-use `computer_run` /
-`computer_open` / `computer_screenshot` and browser-use
+`save_skill`, `request_approval`, computer-use `computer_run` /
+`computer_open` / `computer_screenshot`, browser-use
 `browser_navigate` / `browser_snapshot` / `browser_click` /
 `browser_type` / `browser_press` / `browser_wait` /
-`browser_screenshot`), plus **custom tools** (DB) and
-**plugin tools** (`plugin:{slug}:{name}` from `plugins/*/manifest.json`).
+`browser_screenshot`, plus `exa_search`, `tavily_search`,
+`firecrawl_scrape`, `browser_use`, `cua_desktop`), plus **custom tools**
+(DB) and **plugin tools** (`plugin:{slug}:{name}` from
+`plugins/*/manifest.json`).
+Each Bot also has a **profile.md**: seeded Bots load
+`profiles/<name>.md`; job templates load `profiles/jobs/<id>.md`. The
+file is injected at reply time and returned on agent list/get as
+`profile` / `profile_path`.
 The bundled Composio plugin adds `plugin:composio:status`,
 `list_toolkits`, `search_tools`, `connect`, and `execute` so Bots can
 reach Gmail/Slack/GitHub/Notion and 1000+ other apps with one workspace
@@ -356,6 +362,20 @@ Auth required (connect is admin). Workspace-level Composio API key
 ### `GET /api/composio/toolkits?q=` · `POST /api/composio/connect-toolkit`
 Auth required (connect-toolkit is admin). List Composio app toolkits
 or start an OAuth/connect URL for a slug such as `gmail`.
+
+### `GET /api/connectors` · `GET /api/connectors/{id}`
+Auth required. Workspace connectors: Composio, Exa, Tavily, Firecrawl,
+Browser Use CLI, CUA driver. CLI kinds report whether the binary/SDK
+is installed; they do not take an API key.
+
+### `POST/DELETE /api/connectors/{id}/connect`
+Admin. Store or remove an encrypted key for a non-CLI connector
+(`exa`, `tavily`, `firecrawl`, `composio`). Env fallbacks:
+`EXA_API_KEY`, `TAVILY_API_KEY`, `FIRECRAWL_API_KEY`, `COMPOSIO_API_KEY`.
+
+### `GET /api/profiles`
+Auth required. Lists `profiles/*.md` (seeded Bots) and
+`profiles/jobs/*.md` (job templates).
 
 ### `GET /api/channels`
 Auth required.
@@ -690,6 +710,13 @@ Live `message` events from a human/agent/system write may omit
   - `plugin:composio:*` lists, connects, and executes Composio app
     tools (Gmail, Slack, GitHub, Notion, …) with one workspace `user_id`.
     External sends still go through `request_approval`.
+  - `exa_search` / `tavily_search` / `firecrawl_scrape` call those APIs
+    when a workspace key is set (`EXA_API_KEY`, `TAVILY_API_KEY`,
+    `FIRECRAWL_API_KEY` or Computer → Apps).
+  - `browser_use` wraps the Browser Use CLI (`browser-use`) with an
+    allowlisted action list. `cua_desktop` wraps the CUA driver
+    (`cua-driver` / `cua_driver` SDK) for host-desktop computer-use.
+  - Each reply injects `profiles/<name>.md` or `profiles/jobs/<id>.md`.
   - Capped at the agent's `max_tool_calls` per single trigger (not
     per message — if two agents are mentioned, each gets its own cap).
   - Every tool call is persisted as a `system`-kind message
@@ -771,6 +798,9 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR12.1 | Computer-use builtins (`computer_run` / `open` / `screenshot`) | ✅ |
 | FR12.2 | Browser-use builtins (Playwright Chromium, optional) | ✅ |
 | FR12.3 | Composio plugin + workspace Apps panel (1000+ app toolkits) | ✅ |
+| FR12.4 | Bot `profile.md` per seeded Bot and job template | ✅ |
+| FR12.5 | Exa / Tavily / Firecrawl workspace connectors | ✅ |
+| FR12.6 | Browser Use CLI + CUA driver tools | ✅ |
 | FR12.1 | Custom Bot `display_name`; mention handle stays `@name` | ✅ |
 | FR12.2 | Group chats: members hear without `@`; `@` still targets one | ✅ |
 | FR13.1 | First user is admin; Bot/team/tool/provider writes are admin-only | ✅ |

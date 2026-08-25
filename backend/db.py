@@ -289,6 +289,9 @@ def public_agent(row: dict[str, Any]) -> dict[str, Any]:
     out["display_name"] = display or pretty_name(handle)
     out["dm_channel_id"] = dm_channel_id(handle)
     out["archived"] = bool(out.get("archived_at"))
+    from .profiles import load_agent_profile, profile_path
+    out["profile"] = load_agent_profile(handle, out.get("job"))
+    out["profile_path"] = profile_path(handle, out.get("job"))
     return out
 
 
@@ -437,9 +440,9 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
 
 async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:
     """Give existing full-tool Bots computer/browser/Composio without wiping custom lists."""
-    from .tools.registry import COMPOSIO_PLUGIN_TOOLS, COMPUTER_USE_TOOLS
+    from .tools.registry import COMPOSIO_PLUGIN_TOOLS, COMPUTER_USE_TOOLS, RESEARCH_TOOLS
 
-    extras = list(COMPUTER_USE_TOOLS) + list(COMPOSIO_PLUGIN_TOOLS)
+    extras = list(COMPUTER_USE_TOOLS) + list(COMPOSIO_PLUGIN_TOOLS) + list(RESEARCH_TOOLS)
     cur = await db.execute("SELECT name, tools FROM agents")
     rows = await cur.fetchall()
     for name, tools_raw in rows:

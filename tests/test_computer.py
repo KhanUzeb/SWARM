@@ -19,6 +19,11 @@ def test_catalog_includes_computer_browser_composio(client, auth):
     assert "computer_run" in names
     assert "browser_navigate" in names
     assert "plugin:composio:execute" in names
+    assert "exa_search" in names
+    assert "tavily_search" in names
+    assert "firecrawl_scrape" in names
+    assert "browser_use" in names
+    assert "cua_desktop" in names
     plugins = {p["id"] for p in res.json()["plugins"]}
     assert "composio" in plugins
 
@@ -28,6 +33,11 @@ def test_seeded_agents_get_computer_use(client, auth):
     assert "computer_run" in agents["swarm"]["tools"]
     assert "browser_navigate" in agents["swarm"]["tools"]
     assert "plugin:composio:execute" in agents["swarm"]["tools"]
+    assert "exa_search" in agents["swarm"]["tools"]
+    assert "tavily_search" in agents["swarm"]["tools"]
+    assert "firecrawl_scrape" in agents["swarm"]["tools"]
+    assert "browser_use" in agents["swarm"]["tools"]
+    assert "cua_desktop" in agents["swarm"]["tools"]
     assert "computer_run" not in agents["ledger"]["tools"]
     assert "plugin:composio:execute" not in agents["ledger"]["tools"]
 
@@ -49,6 +59,9 @@ def test_computer_open_url_points_at_browser(monkeypatch):
 def test_status_includes_composio_and_browser(client):
     body = client.get("/api/status").json()
     assert body["composio"] is False
+    assert body["exa"] is False
+    assert body["tavily"] is False
+    assert body["firecrawl"] is False
     assert body["browser"] is True
 
 
@@ -105,3 +118,36 @@ def test_composio_client_without_key(client, monkeypatch):
     monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
     text = asyncio.run(composio_client.execute("GMAIL_SEND_EMAIL", {}))
     assert "composio not connected" in text.lower()
+
+
+def test_connectors_catalog_and_exa_without_key(client, auth, monkeypatch):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    res = client.get("/api/connectors", headers=auth)
+    assert res.status_code == 200
+    ids = {c["id"] for c in res.json()}
+    assert ids >= {"composio", "exa", "tavily", "firecrawl", "browser_use", "cua"}
+    text = asyncio.run(__import__("backend.tools.connectors", fromlist=["exa_search"]).exa_search("latest llm papers"))
+    assert "exa not connected" in text.lower()
+
+
+def test_connector_cli_rejects_api_key(client, auth):
+    res = client.post(
+        "/api/connectors/browser_use/connect",
+        json={"api_key": "not-a-real-key-here"},
+        headers=auth,
+    )
+    assert res.status_code == 400
+
+
+def test_browser_use_without_cli(client):
+    text = asyncio.run(
+        __import__("backend.tools.connectors", fromlist=["browser_use_cli"]).browser_use_cli("status")
+    )
+    assert "not installed" in text.lower() or "browser-use" in text.lower()
+
+
+def test_cua_status_degrades(client):
+    text = asyncio.run(
+        __import__("backend.tools.connectors", fromlist=["cua_desktop"]).cua_desktop("status")
+    )
+    assert "cli:" in text.lower() or "cua" in text.lower()

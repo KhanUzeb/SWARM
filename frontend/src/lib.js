@@ -28,6 +28,11 @@ export const ALL_TOOLS = [
   "browser_press",
   "browser_wait",
   "browser_screenshot",
+  "exa_search",
+  "tavily_search",
+  "firecrawl_scrape",
+  "browser_use",
+  "cua_desktop",
 ];
 export const EMOJI = ["🔥", "✅", "👀", "❤️", "🎉", "👍"];
 

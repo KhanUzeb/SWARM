@@ -28,6 +28,7 @@ from . import agent, db
 from .ai_support import store as ai_store
 from .ai_support.providers import get_provider, list_providers, providers_by_priority
 from .jobs import JOB_TEMPLATES
+from .profiles import list_profiles, load_job_profile
 from .models import (
     AgentCreate, AgentPatch, AiProviderConnect, ApprovalResolve, ChannelCreate,
     ComposioToolkitConnect, CustomToolCreate, CustomToolPatch, DirectMessageCreate,
@@ -157,16 +158,17 @@ async def api_status(handle: str | None = Depends(optional_auth)):
         providers_ready[pid] = env_ok or pid in connected_ids
     llm_ready = demo or any(providers_ready.values())
     from .tools import browser as browser_mod
-    from .tools import composio_client
+    from .tools import connectors
     body: dict[str, Any] = {
         "groq": providers_ready.get("groq", False),
         "openrouter": providers_ready.get("openrouter", False),
         "demo": demo,
         "llm_ready": llm_ready,
         "providers_ready": providers_ready,
-        "composio": await composio_client.configured(),
         "browser": browser_mod.enabled(),
     }
+    for row in await connectors.catalog_status():
+        body[row["id"]] = bool(row.get("connected"))
     if handle:
         body["ai_providers"] = connections
         user = await db.get_user(handle)
@@ -524,7 +526,12 @@ async def api_delete_team(team_id: str, handle: str = Depends(require_admin)):
 
 @app.get("/api/jobs")
 async def api_list_jobs(handle: str = Depends(require_auth)):
-    return JOB_TEMPLATES
+    return [{**job, "profile": load_job_profile(job["id"]) or ""} for job in JOB_TEMPLATES]
+
+
+@app.get("/api/profiles")
+async def api_list_profiles(handle: str = Depends(require_auth)):
+    return list_profiles()
 
 
 @app.get("/api/tools")
@@ -777,9 +784,9 @@ async def api_computer(handle: str = Depends(require_auth)):
         "activity": await db.get_recent_system_messages(20),
         "computer": computer_mod.status(),
         "note": (
-            "All Bots share this computer: sandbox files + shell, optional Playwright "
-            "browser, and Composio app connectors. It is still this machine — not a "
-            "remote cloud desktop."
+            "All Bots share this computer: sandbox files + shell, optional Playwright, "
+            "Browser Use CLI, CUA drivers, Exa/Tavily/Firecrawl, and Composio apps. "
+            "It is still this machine — not a remote cloud desktop."
         ),
     }
 
@@ -810,6 +817,49 @@ async def api_browser_close(handle: str = Depends(require_admin)):
     from .tools import browser as browser_mod
     message = await browser_mod.close()
     return {"ok": True, "message": message}
+
+
+@app.get("/api/connectors")
+async def api_list_connectors(handle: str = Depends(require_auth)):
+    from .tools import connectors
+    return await connectors.catalog_status()
+
+
+@app.get("/api/connectors/{connector_id}")
+async def api_get_connector(connector_id: str, handle: str = Depends(require_auth)):
+    from .tools import connectors
+    if connectors.get_connector(connector_id) is None:
+        raise HTTPException(404, "unknown connector")
+    return await connectors.connector_status(connector_id)
+
+
+@app.post("/api/connectors/{connector_id}/connect")
+async def api_connector_connect(
+    connector_id: str, payload: AiProviderConnect, handle: str = Depends(require_admin)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import connectors
+    spec = connectors.get_connector(connector_id)
+    if spec is None:
+        raise HTTPException(404, "unknown connector")
+    if spec.get("kind") == "cli":
+        raise HTTPException(400, "this connector uses a local CLI, not an API key")
+    return await ai_store.connect(connector_id, payload.api_key)
+
+
+@app.delete("/api/connectors/{connector_id}/connect")
+async def api_connector_disconnect(
+    connector_id: str, handle: str = Depends(require_admin)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import connectors
+    if connectors.get_connector(connector_id) is None:
+        raise HTTPException(404, "unknown connector")
+    if not await ai_store.disconnect(connector_id):
+        raise HTTPException(404, "not connected")
+    return {"ok": True}
 
 
 @app.get("/api/composio/status")

@@ -266,6 +266,88 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    "exa_search": {
+        "type": "function",
+        "function": {
+            "name": "exa_search",
+            "description": "Neural web search via Exa. Use for research and citations. Requires EXA_API_KEY.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "num_results": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    "tavily_search": {
+        "type": "function",
+        "function": {
+            "name": "tavily_search",
+            "description": "LLM-oriented web search via Tavily. Requires TAVILY_API_KEY.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    "firecrawl_scrape": {
+        "type": "function",
+        "function": {
+            "name": "firecrawl_scrape",
+            "description": "Scrape a URL to clean markdown via Firecrawl. Requires FIRECRAWL_API_KEY.",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            },
+        },
+    },
+    "browser_use": {
+        "type": "function",
+        "function": {
+            "name": "browser_use",
+            "description": (
+                "Drive the Browser Use CLI (browser-use). Actions: status, open, state, "
+                "click, type, keys, screenshot, scroll, back. Install the CLI separately."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "url": {"type": "string"},
+                    "target": {"type": "string"},
+                    "text": {"type": "string"},
+                    "key": {"type": "string"},
+                },
+            },
+        },
+    },
+    "cua_desktop": {
+        "type": "function",
+        "function": {
+            "name": "cua_desktop",
+            "description": (
+                "CUA driver for the host desktop. Actions: status, screenshot, click, type, key. "
+                "Install cua-driver. Request approval before destructive OS actions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "text": {"type": "string"},
+                    "key": {"type": "string"},
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                },
+            },
+        },
+    },
 }
 
 BUILTIN_TOOL_NAMES = tuple(BUILTIN_SCHEMAS.keys())
@@ -284,6 +366,10 @@ COMPOSIO_PLUGIN_TOOLS = [
     "plugin:composio:search_tools",
     "plugin:composio:connect",
     "plugin:composio:execute",
+]
+RESEARCH_TOOLS = [
+    "exa_search", "tavily_search", "firecrawl_scrape",
+    "browser_use", "cua_desktop",
 ]
 
 from .. import db  # noqa: E402  — after constants so models can import them
@@ -520,6 +606,37 @@ class ToolRegistry:
         if name == "browser_screenshot":
             from . import browser
             return await browser.screenshot()
+        if name == "exa_search":
+            from . import connectors
+            return await connectors.exa_search(
+                args.get("query", ""), num_results=args.get("num_results") or 5,
+            )
+        if name == "tavily_search":
+            from . import connectors
+            return await connectors.tavily_search(
+                args.get("query", ""), max_results=args.get("max_results") or 5,
+            )
+        if name == "firecrawl_scrape":
+            from . import connectors
+            return await connectors.firecrawl_scrape(args.get("url", ""))
+        if name == "browser_use":
+            from . import connectors
+            return await connectors.browser_use_cli(
+                args.get("action") or "status",
+                url=args.get("url") or "",
+                target=args.get("target") or "",
+                text=args.get("text") or "",
+                key=args.get("key") or "",
+            )
+        if name == "cua_desktop":
+            from . import connectors
+            return await connectors.cua_desktop(
+                args.get("action") or "status",
+                text=args.get("text") or "",
+                key=args.get("key") or "",
+                x=args.get("x"),
+                y=args.get("y"),
+            )
         return f"(unimplemented builtin {name})"
 
     async def _exec_custom(self, row: dict[str, Any], args: dict[str, Any]) -> str:

@@ -12,12 +12,14 @@ Track feature layers for easy `git revert` / bisect. Each row maps to one commit
 | Add Pip mascot, custom Bot names, and group chats | mascot, `display_name`, `channel_members`, group trigger | Reverts companion UI, friendly names, and group rooms |
 | Make swarm a Slack-shaped AI workspace | admin, people DMs, `@team`, export, archive, mascot removed | Reverts small-team workspace + restores Pip |
 | Add computer-use, browser-use, and Composio plugin | `backend/tools/{computer,browser,composio_client}.py`, `plugins/composio/`, Computer → Browser/Apps | Removes agent computer/browser/app tools |
+| Add bot profiles and research/CUA connectors | `profiles/`, `backend/profiles.py`, `backend/tools/connectors.py` | Removes profile.md + Exa/Tavily/Firecrawl/browser-use/CUA |
 
 ## Feature summary (post-merge)
 
-- **Tools:** 21 builtins (including computer-use + browser-use) + `plugins/*/manifest.json` (python handlers supported) + DB custom tools + bundled Composio plugin
+- **Tools:** 26 builtins (computer, Playwright, Exa, Tavily, Firecrawl, Browser Use CLI, CUA) + plugins + Composio
+- **Profiles:** `profiles/<bot>.md` for seeded Bots; `profiles/jobs/<id>.md` for each job template
 - **AI providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together (tau-inspired resolver); UI in Computer → AI; onboarding step 1
-- **Apps:** Composio workspace key (`COMPOSIO_API_KEY` or Computer → Apps) shared by every Bot
+- **Apps:** Composio + Exa + Tavily + Firecrawl keys in Computer → Apps; Browser Use CLI and CUA are local installs
 - **Security:** Bearer required on data reads; CORS allowlist; `X-Swarm-Client: web` for browser origins; first user is admin
 - **Frontend:** Slack-style sidebar (DMs, teams, channels, search); 3-step onboarding with API key save; Browser + Apps computer tabs
 - **Bots:** Custom `display_name`; group chats; `@core` team; archive instead of hard-delete
