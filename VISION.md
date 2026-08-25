@@ -99,12 +99,12 @@ V3 does not mean "clone Buzz." It means a stranger can run the demo, understand 
 
 | # | Feature | Why | Condition to build |
 |---|---------|-----|-------------------|
-| V3.1 | **Admin role** | First registered user is admin; only admins create/edit Bots | Multi-user deploy or abuse of open `POST /api/agents` |
+| V3.1 | **Admin role** | First registered user is admin; only admins create/edit/archive Bots | ✅ shipped |
 | V3.2 | **Onboarding flow** | Register → pick first Bot from job template → land in 1:1 with a suggested first message | ✅ shipped |
-| V3.3 | **Agent teams** | `@team-name` expands to an ordered set of Bots (Buzz-style bundles) | After handoffs prove insufficient for "run the whole pod" |
-| V3.4 | **Human DMs** | 1:1 between people, not just Bot DMs | Small team asks for private human chat |
+| V3.3 | **Agent teams** | `@team-name` expands to an ordered set of Bots (Buzz-style bundles) | ✅ shipped (`@core` seeded) |
+| V3.4 | **Human DMs** | 1:1 between people, not just Bot DMs | ✅ shipped |
 | V3.5 | **Semantic history** | Vector search over messages + memory | Keyword search actually fails in daily use |
-| V3.6 | **Audit export** | JSON/CSV export of channel history + tool audit lines | Demo / compliance story |
+| V3.6 | **Audit export** | JSON/CSV export of channel history + tool audit lines | ✅ shipped |
 | V3.7 | **Demo mode** | Seed data + `GROQ_API_KEY`-less mock replies for portfolio reviewers | ✅ shipped (`SWARM_DEMO=1`) |
 
 ### Explicitly out (even at V3)
@@ -120,7 +120,7 @@ V3 does not mean "clone Buzz." It means a stranger can run the demo, understand 
 1. **Five-minute demo:** `docker compose up` → register → create "Chief of Staff" Bot → routine fires → approval flow → export audit — no README archaeology.
 2. **Spec honesty:** `SPEC.md` still matches running code; `VISION.md` matches `PROBLEM.md`.
 3. **Comparable pitch:** a reviewer can place swarm vs Buzz vs SlackHive in one sentence without you in the room.
-4. **Small-team trust:** admin-gated Bot creation; no silent cross-user impersonation.
+4. **Small-team trust:** admin-gated Bot creation; private people DMs; no silent cross-user impersonation.
 
 ---
 
@@ -130,7 +130,7 @@ Use this script when showing the project:
 
 1. **Problem (30s):** "ChatGPT is a sidebar. Slack doesn't see what the agent did. Buzz fixes both but ships half a platform company. swarm is the minimum experiment: same room, same audit trail."
 
-2. **Room (60s):** Post in `#general`: `@swarm what's blocking the release?` Show streaming reply, tool audit line if shell/history runs, thread reply. Pip in the sidebar tracks connection and Bot status.
+2. **Room (60s):** Post in `#general`: `@swarm what's blocking the release?` Show streaming reply, tool audit line if shell/history runs, thread reply. `@core` runs the seeded pod.
 
 3. **Specialist (60s):** Create a Bot named "Maya" (handle `@maya`). Open their 1:1. No `@` needed.
 
@@ -142,7 +142,7 @@ Use this script when showing the project:
 
 7. **Computer (30s):** Open computer panel — shared workspace files the Bots wrote.
 
-8. **Close (15s):** "Self-hosted, spec'd, tested, Docker. V3 adds admin + onboarding + demo mode. Buzz if we need signing and git; SlackHive if we live in Slack."
+8. **Close (15s):** "Self-hosted, spec'd, tested, Docker. Admin-gated Bots, people DMs, `@team` pods, audit export. Buzz if we need signing and git; SlackHive if we live in Slack."
 
 ---
 

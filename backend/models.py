@@ -18,6 +18,8 @@ DEFAULT_JOB = "Teammate"
 AGENT_STATUSES = ("idle", "working", "needs_approval")
 HANDLE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 MAX_GROUP_MEMBERS = 8
+MAX_TEAM_MEMBERS = 8
+USER_ROLES = ("admin", "member")
 
 
 def slugify_handle(text: str, fallback: str = "bot") -> str:
@@ -72,6 +74,49 @@ class ChannelCreate(BaseModel):
             if name and name not in out:
                 out.append(name)
         return out[:MAX_GROUP_MEMBERS]
+
+
+class DirectMessageCreate(BaseModel):
+    handle: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
+
+
+class TeamCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    id: str = Field(default="", max_length=32)
+    description: str = Field(default="", max_length=200)
+    members: list[str] = Field(min_length=1, max_length=MAX_TEAM_MEMBERS)
+
+    @model_validator(mode="after")
+    def team_ok(self) -> TeamCreate:
+        slug = (self.id or "").strip() or slugify_handle(self.name, "team")
+        if not HANDLE_RE.match(slug) or not (1 <= len(slug) <= 32):
+            raise ValueError("id must be 1-32 letters, numbers, _ or -")
+        names: list[str] = []
+        for raw in self.members:
+            name = (raw or "").strip()
+            if name and name not in names:
+                names.append(name)
+        if not names:
+            raise ValueError("team needs at least one bot")
+        return self.model_copy(update={"id": slug, "members": names[:MAX_TEAM_MEMBERS]})
+
+
+class TeamPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=200)
+    members: list[str] | None = Field(default=None, max_length=MAX_TEAM_MEMBERS)
+
+    @field_validator("members")
+    @classmethod
+    def members_ok(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        out: list[str] = []
+        for raw in value:
+            name = (raw or "").strip()
+            if name and name not in out:
+                out.append(name)
+        return out[:MAX_TEAM_MEMBERS]
 
 
 class MessageCreate(BaseModel):

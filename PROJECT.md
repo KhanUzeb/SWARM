@@ -12,10 +12,10 @@ thesis without Nostr/git/workflows.
 | `SPEC.md` | Technical contract — if code disagrees, file a bug |
 | `PROMPTS.md` | Phase history + gated build prompts |
 
-**Status: V2 + Phase 10 + V3.2/V3.7 + tools/providers/security shipped.**
-Onboarding (3 steps), demo mode, tool registry, plugins, tau-style AI
-providers, and authenticated API reads are live. See `docs/CHANGELOG.md`.
-Remaining V3 items (admin, agent teams, human DMs, audit export) gated in `VISION.md`.
+**Status: V3 workspace complete (admin, teams, people DMs, audit export, bot archive).**
+Onboarding, demo mode, tool registry, plugins, multi-provider AI, and
+authenticated API reads are live. Pip mascot removed. Remaining gated
+items: semantic history (Phase 6). See `docs/CHANGELOG.md`.
 
 ## Stack
 
@@ -78,7 +78,8 @@ swarm/
 | 9     | Custom agents + memory     | ✅ done | Agent create/edit UI + GET/PATCH, per-agent harness (window, tool toggles), `agent_memory` notes via remember/recall, context injects notes + rolling summary, classified errors, one retry, optional OpenRouter |
 | 10    | Grok Bot teammates         | ✅ done | Named jobs, 1:1 DMs (no @ needed), job templates, skills, interval routines, approvals, shared workspace/"computer" panel, bot-to-bot handoff, status chips |
 | 11    | V3 onboarding + demo       | ✅ done | Register → job picker → create Bot → 1:1 with suggested prompt; `SWARM_DEMO=1` mock replies + `#general` seed thread |
-| 12    | Companion + groups         | ✅ done | Pip mascot, custom Bot display names, group chats with member trigger |
+| 12    | Companion + groups         | ✅ done | Custom Bot display names, group chats with member trigger (mascot later removed) |
+| 13    | Small-team workspace       | ✅ done | Admin role, human DMs, `@team` pods, audit export, soft-delete bots |
 
 ## What changed from the original plan
 
@@ -113,11 +114,12 @@ swarm/
 - **In-memory WS hub and rate-limit table don't survive a restart or
   scale past one process.** Still true, still fine for a portfolio
   demo. Unchanged from V1.
-- **No admin role.** Anyone with a registered handle can create or
-  edit an agent persona. Named explicitly in `SPEC.md` as a known
-  gap — not closed in Phase 9. Close it if this ever needs more than
-  one trusted user.
-- **No agent delete.** Mentions and history would dangle. Named gap.
+- **Admin role.** First registered handle is `admin`; later handles are
+  `member`. Only admins create/edit/archive Bots, teams, custom tools,
+  and provider keys. Members can still chat, open people DMs, and
+  export history they can see.
+- **Bot archive, not hard-delete.** `DELETE /api/agents/{name}` sets
+  `archived_at`. History keeps the old author; mentions stop firing.
 - **Docker verified locally, not on a VPS.** `docker compose build &&
   up -d` succeeded against Docker Desktop 29.6.1: `/api/channels`
   responded, `swarm-data` kept `persist-check-*` across a down/up
@@ -140,13 +142,13 @@ Full detail in `VISION.md`. Summary:
 
 | Item | Gated on |
 |------|----------|
-| V3.1 Admin role | Multi-user deploy or open endpoint abuse |
-| V3.2 Onboarding flow | Always (UI polish) |
-| V3.3 Agent teams (`@team-name`) | Handoffs insufficient for "run the pod" |
-| V3.4 Human DMs | Small team needs private human chat |
+| V3.1 Admin role | ✅ shipped — first user is admin; Bot/team writes are gated |
+| V3.2 Onboarding flow | ✅ shipped |
+| V3.3 Agent teams (`@team-name`) | ✅ shipped — seeded `@core`; admins can add more |
+| V3.4 Human DMs | ✅ shipped — private `people` 1:1s |
 | V3.5 Semantic history (Phase 6) | Keyword search fails in daily use |
-| V3.6 Audit export | Demo / compliance story |
-| V3.7 Demo mode (mock LLM) | Portfolio reviewers without API keys |
+| V3.6 Audit export | ✅ shipped — JSON/CSV per channel |
+| V3.7 Demo mode (mock LLM) | ✅ shipped (`SWARM_DEMO=1`) |
 
 Permanently out of V3: Nostr signing, git hosting, Slack connectors,
 cloud VM, browser computer-use, container-per-agent isolation.
@@ -155,11 +157,8 @@ cloud VM, browser computer-use, container-per-agent isolation.
 
 Same rule as Phase 6 — don't build speculatively:
 
-1. **V3.2 onboarding + V3.7 demo mode** — highest leverage polish, no new primitives.
-2. **V3.1 admin auth** — when more than one trusted user exists.
-3. Semantic history — only if keyword search has proven insufficient.
-4. Agent delete — only if dangling history is actually a problem.
-5. Real computer-use — only if sandbox has proven insufficient.
+1. Semantic history — only if keyword search has proven insufficient.
+2. Real computer-use — only if sandbox has proven insufficient.
 
 ## Competitive positioning (web research, Aug 2026)
 

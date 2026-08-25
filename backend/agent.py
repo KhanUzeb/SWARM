@@ -133,6 +133,21 @@ def find_mentioned_agents(body: str, agents: list[dict[str, Any]]) -> list[dict[
     return [a for _, a in hits]
 
 
+def find_mentioned_teams(body: str, teams: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Teams mentioned as @team-id, ordered by first mention position."""
+    hits: list[tuple[int, dict[str, Any]]] = []
+    lowered = body.lower()
+    for team in teams:
+        slug = (team.get("id") or "").lower()
+        if not slug:
+            continue
+        match = re.search(rf"@{re.escape(slug)}\b", lowered)
+        if match:
+            hits.append((match.start(), team))
+    hits.sort(key=lambda h: h[0])
+    return [t for _, t in hits]
+
+
 def _env_key(name: str) -> str:
     return (os.environ.get(name) or "").strip().strip('"').strip("'")
 

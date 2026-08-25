@@ -2,7 +2,7 @@
 
 Phases 1–5 and 7–10 are built (see PROJECT.md). This file records
 what actually got built per phase, and keeps paste-ready prompts for
-the remaining gated items (admin role, semantic history, agent delete).
+the remaining gated items (semantic history).
 
 If you're extending this repo with an agentic coding tool, point it at
 `VISION.md`, `PROBLEM.md`, `PROJECT.md`, and `SPEC.md` first either way.
@@ -91,10 +91,9 @@ theme. Explicitly not a cloud VM or browser computer-use.
 
 ## Open — gated leftovers + V3
 
-Admin role, Phase 6 (semantic history), and agent delete remain gated
-below. **V3 scope** (onboarding, demo mode, agent teams, human DMs,
-audit export) is defined in `VISION.md` — build only when each item's
-condition is met. Do not build speculatively.
+Admin role, people DMs, teams, audit export, and bot archive shipped
+in the small-team workspace pass. **Phase 6 (semantic history)** remains
+gated below. Do not build speculatively.
 
 ---
 

@@ -11,12 +11,15 @@ as the first frame after connecting, before any message frames.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,11 +30,14 @@ from .ai_support.providers import get_provider, list_providers, providers_by_pri
 from .jobs import JOB_TEMPLATES
 from .models import (
     AgentCreate, AgentPatch, AiProviderConnect, ApprovalResolve, ChannelCreate,
-    CustomToolCreate, CustomToolPatch, MessageCreate,
+    CustomToolCreate, CustomToolPatch, DirectMessageCreate, MessageCreate,
     ReactionCreate, RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate,
-    SkillPatch,
+    SkillPatch, TeamCreate, TeamPatch,
 )
-from .security import allowed_origins, install_api_guard, optional_auth, parse_token, require_auth
+from .security import (
+    allowed_origins, install_api_guard, optional_auth, parse_token, require_admin,
+    require_auth,
+)
 from .tools.registry import get_registry, reload_registry
 
 app = FastAPI(title="swarm")
@@ -75,12 +81,26 @@ class Hub:
 
     def __init__(self) -> None:
         self._rooms: dict[str, set[WebSocket]] = {}
+        self._presence: dict[str, int] = {}
 
     def join(self, channel_id: str, ws: WebSocket) -> None:
         self._rooms.setdefault(channel_id, set()).add(ws)
 
     def leave(self, channel_id: str, ws: WebSocket) -> None:
         self._rooms.get(channel_id, set()).discard(ws)
+
+    def mark_online(self, handle: str) -> None:
+        self._presence[handle] = self._presence.get(handle, 0) + 1
+
+    def mark_offline(self, handle: str) -> None:
+        remaining = self._presence.get(handle, 0) - 1
+        if remaining <= 0:
+            self._presence.pop(handle, None)
+        else:
+            self._presence[handle] = remaining
+
+    def online_handles(self) -> set[str]:
+        return set(self._presence)
 
     async def broadcast(self, channel_id: str, payload: dict) -> None:
         dead = []
@@ -145,6 +165,9 @@ async def api_status(handle: str | None = Depends(optional_auth)):
     }
     if handle:
         body["ai_providers"] = connections
+        user = await db.get_user(handle)
+        if user:
+            body["me"] = {"handle": user["handle"], "role": user["role"]}
     return body
 
 
@@ -155,19 +178,44 @@ async def api_register(payload: RegisterRequest):
     if await db.user_exists(payload.handle):
         raise HTTPException(409, "handle already registered")
     raw = db.generate_token()
-    await db.create_user(payload.handle, raw)
+    created = await db.create_user(payload.handle, raw)
     return {
         "handle": payload.handle,
         "token": f"{payload.handle}:{raw}",
         "created": True,
+        "role": created["role"],
     }
 
 
 # ---------------------------------------------------------------- REST ----
 
+async def _require_channel(channel_id: str, handle: str) -> dict[str, Any]:
+    channel = await db.get_channel(channel_id)
+    if channel is None:
+        raise HTTPException(404, "no such channel")
+    if not db.can_view_channel(channel, handle):
+        raise HTTPException(403, "private conversation")
+    return channel
+
+
+@app.get("/api/me")
+async def api_me(handle: str = Depends(require_auth)):
+    user = await db.get_user(handle)
+    if user is None:
+        raise HTTPException(401, "missing or invalid bearer token")
+    return user
+
+
+@app.get("/api/people")
+async def api_list_people(handle: str = Depends(require_auth)):
+    online = hub.online_handles()
+    people = await db.list_people()
+    return [{**p, "online": p["handle"] in online} for p in people]
+
+
 @app.get("/api/channels")
 async def api_list_channels(handle: str = Depends(require_auth)):
-    return await db.list_channels()
+    return await db.list_channels(viewer=handle)
 
 
 @app.post("/api/channels")
@@ -197,11 +245,46 @@ async def api_get_history(
     before_id: int | None = None,
     handle: str = Depends(require_auth),
 ):
-    if not await db.channel_exists(channel_id):
-        raise HTTPException(404, "no such channel")
+    await _require_channel(channel_id, handle)
     limit = max(1, min(limit, HISTORY_LIMIT_MAX))
     messages = await db.get_history(channel_id, limit, before_id)
     return await _with_reactions(messages)
+
+
+@app.get("/api/channels/{channel_id}/export")
+async def api_export_channel(
+    channel_id: str,
+    fmt: str = Query("json", alias="format", pattern=r"^(json|csv)$"),
+    handle: str = Depends(require_auth),
+):
+    channel = await _require_channel(channel_id, handle)
+    rows = await db.export_messages(channel_id)
+    if fmt == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["id", "created_at", "author", "author_kind", "parent_id", "body"])
+        for row in rows:
+            created = datetime.fromtimestamp(float(row["created_at"]), tz=timezone.utc).isoformat()
+            writer.writerow([
+                row["id"], created, row["author"], row["author_kind"],
+                row.get("parent_id") or "", row["body"],
+            ])
+        filename = f"{channel_id}-audit.csv"
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    return {
+        "channel": {
+            "id": channel["id"],
+            "name": channel["name"],
+            "kind": channel.get("kind") or "room",
+            "topic": channel.get("topic") or "",
+        },
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "messages": rows,
+    }
 
 
 @app.post("/api/channels/{channel_id}/messages")
@@ -212,8 +295,7 @@ async def api_post_message(
         raise HTTPException(403, "author must match the authenticated handle")
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
-    if not await db.channel_exists(channel_id):
-        raise HTTPException(404, "no such channel")
+    await _require_channel(channel_id, handle)
     if payload.parent_id is not None and not await db.message_exists(payload.parent_id):
         raise HTTPException(404, "parent message does not exist")
 
@@ -225,15 +307,40 @@ async def api_post_message(
     return msg
 
 
+@app.post("/api/dms")
+async def api_open_dm(payload: DirectMessageCreate, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    other = payload.handle.strip()
+    if other.lower() == handle.lower():
+        raise HTTPException(400, "cannot DM yourself")
+    if not await db.user_exists(other):
+        raise HTTPException(404, "no such person")
+    try:
+        return await db.ensure_people_dm(handle, other)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/search")
+async def api_search(
+    q: str = "",
+    limit: int = 30,
+    handle: str = Depends(require_auth),
+):
+    needle = (q or "").strip()
+    if len(needle) < 2:
+        raise HTTPException(400, "query must be at least 2 characters")
+    return await db.search_workspace(needle, viewer=handle, limit=limit)
+
+
 @app.delete("/api/channels/{channel_id}")
 async def api_delete_channel(channel_id: str, handle: str = Depends(require_auth)):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
-    channel = await db.get_channel(channel_id)
-    if channel is None:
-        raise HTTPException(404, "no such channel")
+    channel = await _require_channel(channel_id, handle)
     if channel.get("kind") == "dm":
-        raise HTTPException(400, "cannot delete a 1:1")
+        raise HTTPException(400, "cannot delete a bot 1:1")
     await db.delete_channel(channel_id)
     await hub.broadcast(channel_id, {"type": "channel_deleted", "channel_id": channel_id})
     return {"ok": True, "id": channel_id}
@@ -246,6 +353,7 @@ async def api_delete_message(message_id: int, handle: str = Depends(require_auth
     msg = await db.get_message(message_id)
     if msg is None:
         raise HTTPException(404, "no such message")
+    await _require_channel(msg["channel_id"], handle)
     ids = await db.delete_message(message_id)
     await hub.broadcast(msg["channel_id"], {
         "type": "message_deleted",
@@ -260,6 +368,7 @@ async def api_get_thread(message_id: int, handle: str = Depends(require_auth)):
     parent = await db.get_message(message_id)
     if parent is None:
         raise HTTPException(404, "no such message")
+    await _require_channel(parent["channel_id"], handle)
     replies = await db.get_replies(message_id)
     await _with_reactions([parent, *replies])
     return {"parent": parent, "replies": replies}
@@ -274,6 +383,8 @@ async def api_add_reaction(
     if not await db.message_exists(message_id):
         raise HTTPException(404, "no such message")
     channel_id = await db.channel_of_message(message_id)
+    if channel_id:
+        await _require_channel(channel_id, handle)
     inserted = await db.add_reaction(message_id, payload.author, payload.emoji)
     if inserted:
         await hub.broadcast(channel_id, {
@@ -293,7 +404,7 @@ async def api_list_agents(channel_id: str | None = None, handle: str = Depends(r
 @app.get("/api/agents/{name}")
 async def api_get_agent(name: str, handle: str = Depends(require_auth)):
     row = await db.get_agent(name)
-    if row is None:
+    if row is None or row.get("archived"):
         raise HTTPException(404, "no such agent")
     return row
 
@@ -308,10 +419,7 @@ async def _validate_tool_names(names: list[str] | None) -> None:
 
 
 @app.post("/api/agents")
-async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_auth)):
-    # NOTE: no admin role check yet — any authenticated user can register
-    # a persona. Named gap, see SPEC.md. Fine for a single-tenant
-    # portfolio deployment, not fine past that.
+async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_admin)):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
     if await db.agent_exists(payload.name):
@@ -333,10 +441,11 @@ async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_a
 
 
 @app.patch("/api/agents/{name}")
-async def api_patch_agent(name: str, payload: AgentPatch, handle: str = Depends(require_auth)):
+async def api_patch_agent(name: str, payload: AgentPatch, handle: str = Depends(require_admin)):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
-    if not await db.agent_exists(name):
+    row = await db.fetch_agent(name)
+    if row is None or row.get("archived"):
         raise HTTPException(404, "no such agent")
     fields = payload.model_dump(exclude_unset=True)
     if "channel_scope" in fields and fields["channel_scope"] and not await db.channel_exists(fields["channel_scope"]):
@@ -346,6 +455,67 @@ async def api_patch_agent(name: str, payload: AgentPatch, handle: str = Depends(
     if updated is None:
         raise HTTPException(404, "no such agent")
     return updated
+
+
+@app.delete("/api/agents/{name}")
+async def api_archive_agent(name: str, handle: str = Depends(require_admin)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    row = await db.fetch_agent(name)
+    if row is None or row.get("archived"):
+        raise HTTPException(404, "no such agent")
+    archived = await db.archive_agent(name)
+    await hub.broadcast_all({"type": "bot_archived", "name": name})
+    return archived
+
+
+@app.get("/api/teams")
+async def api_list_teams(handle: str = Depends(require_auth)):
+    return await db.list_teams()
+
+
+@app.post("/api/teams")
+async def api_create_team(payload: TeamCreate, handle: str = Depends(require_admin)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if await db.get_team(payload.id):
+        raise HTTPException(409, "team already exists")
+    if await db.agent_exists(payload.id):
+        raise HTTPException(409, "team id collides with a bot handle")
+    missing = [n for n in payload.members if not await db.agent_exists(n)]
+    if missing:
+        raise HTTPException(404, f"no such agent: {missing[0]}")
+    return await db.create_team(payload.id, payload.name, payload.members, payload.description)
+
+
+@app.patch("/api/teams/{team_id}")
+async def api_patch_team(
+    team_id: str, payload: TeamPatch, handle: str = Depends(require_admin),
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if await db.get_team(team_id) is None:
+        raise HTTPException(404, "no such team")
+    fields = payload.model_dump(exclude_unset=True)
+    if "members" in fields and fields["members"] is not None:
+        if not fields["members"]:
+            raise HTTPException(400, "team needs at least one bot")
+        missing = [n for n in fields["members"] if not await db.agent_exists(n)]
+        if missing:
+            raise HTTPException(404, f"no such agent: {missing[0]}")
+    updated = await db.update_team(team_id, fields)
+    if updated is None:
+        raise HTTPException(404, "no such team")
+    return updated
+
+
+@app.delete("/api/teams/{team_id}")
+async def api_delete_team(team_id: str, handle: str = Depends(require_admin)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await db.delete_team(team_id):
+        raise HTTPException(404, "no such team")
+    return {"ok": True, "id": team_id}
 
 
 @app.get("/api/jobs")
@@ -360,7 +530,7 @@ async def api_list_tools(handle: str = Depends(require_auth)):
 
 
 @app.post("/api/tools/custom")
-async def api_create_custom_tool(payload: CustomToolCreate, handle: str = Depends(require_auth)):
+async def api_create_custom_tool(payload: CustomToolCreate, handle: str = Depends(require_admin)):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
     reg = get_registry()
@@ -379,7 +549,7 @@ async def api_create_custom_tool(payload: CustomToolCreate, handle: str = Depend
 
 @app.patch("/api/tools/custom/{tool_id}")
 async def api_patch_custom_tool(
-    tool_id: int, payload: CustomToolPatch, handle: str = Depends(require_auth)
+    tool_id: int, payload: CustomToolPatch, handle: str = Depends(require_admin),
 ):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
@@ -391,7 +561,7 @@ async def api_patch_custom_tool(
 
 
 @app.delete("/api/tools/custom/{tool_id}")
-async def api_delete_custom_tool(tool_id: int, handle: str = Depends(require_auth)):
+async def api_delete_custom_tool(tool_id: int, handle: str = Depends(require_admin)):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
     if not await db.delete_custom_tool(tool_id):
@@ -401,7 +571,7 @@ async def api_delete_custom_tool(tool_id: int, handle: str = Depends(require_aut
 
 
 @app.post("/api/plugins/reload")
-async def api_reload_plugins(handle: str = Depends(require_auth)):
+async def api_reload_plugins(handle: str = Depends(require_admin)):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
     reg = await reload_registry()
@@ -429,7 +599,7 @@ async def api_ai_connections(handle: str = Depends(require_auth)):
 
 @app.post("/api/ai-support/connect/{provider_id}")
 async def api_ai_connect(
-    provider_id: str, payload: AiProviderConnect, handle: str = Depends(require_auth)
+    provider_id: str, payload: AiProviderConnect, handle: str = Depends(require_admin)
 ):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
@@ -439,7 +609,7 @@ async def api_ai_connect(
 
 
 @app.delete("/api/ai-support/connect/{provider_id}")
-async def api_ai_disconnect(provider_id: str, handle: str = Depends(require_auth)):
+async def api_ai_disconnect(provider_id: str, handle: str = Depends(require_admin)):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
     if not await ai_store.disconnect(provider_id):
@@ -624,7 +794,8 @@ async def api_computer_file(path: str, handle: str = Depends(require_auth)):
 
 @app.websocket("/ws/{channel_id}")
 async def ws_channel(websocket: WebSocket, channel_id: str):
-    if not await db.channel_exists(channel_id):
+    channel = await db.get_channel(channel_id)
+    if channel is None:
         await websocket.close(code=4004)
         return
 
@@ -645,9 +816,13 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
     if not await db.verify_token(handle, token):
         await websocket.close(code=4001)
         return
+    if not db.can_view_channel(channel, handle):
+        await websocket.close(code=4003)
+        return
 
     last_seen_id = first.get("last_seen_id") if isinstance(first, dict) else None
     hub.join(channel_id, websocket)
+    hub.mark_online(handle)
 
     if last_seen_id is not None:
         try:
@@ -677,6 +852,7 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
         pass
     finally:
         hub.leave(channel_id, websocket)
+        hub.mark_offline(handle)
 
 
 async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -> None:
@@ -699,29 +875,56 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
             owner = (channel or {}).get("owner_agent")
             if owner:
                 row = await db.fetch_agent(owner)
-                if row:
+                if row and not row.get("archived"):
                     to_run.append(row)
                     seen.add(row["name"])
 
     scoped_agents = await db.list_agents(channel_id)
     mentioned = agent.find_mentioned_agents(body, scoped_agents)
+    teams = await db.list_teams()
+    mentioned_teams = agent.find_mentioned_teams(body, teams)
     if kind == "agent":
         mentioned = [a for a in mentioned if a["name"] != msg.get("author")]
+        team_bots: list[dict] = []
+        for team in mentioned_teams:
+            for name in team.get("members") or []:
+                if name == msg.get("author"):
+                    continue
+                row = await db.fetch_agent(name)
+                if row and not row.get("archived"):
+                    team_bots.append(row)
+        mentioned = mentioned + [a for a in team_bots if a["name"] not in {x["name"] for x in mentioned}]
         if not mentioned:
             return
         asyncio.create_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1))
         return
 
-    if kind in ("human", "system") and ch_kind == "group" and not mentioned:
+    if kind in ("human", "system") and ch_kind == "group" and not mentioned and not mentioned_teams:
         for name in (channel or {}).get("members") or []:
             if name in seen:
                 continue
             row = await db.fetch_agent(name)
-            if row:
+            if row and not row.get("archived"):
                 to_run.append(row)
                 seen.add(row["name"])
 
+    ranked: list[tuple[int, int, dict]] = []
+    lowered = body.lower()
     for a in mentioned:
+        pos = lowered.find(f"@{a['name'].lower()}")
+        ranked.append((pos if pos >= 0 else 10**9, 0, a))
+    for team in mentioned_teams:
+        pos = lowered.find(f"@{team['id'].lower()}")
+        if pos < 0:
+            pos = 10**9
+        for i, name in enumerate(team.get("members") or []):
+            if name in seen:
+                continue
+            row = await db.fetch_agent(name)
+            if row and not row.get("archived"):
+                ranked.append((pos, i, row))
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    for _, _, a in ranked:
         if a["name"] not in seen:
             to_run.append(a)
             seen.add(a["name"])
@@ -732,6 +935,7 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
         # "in the order mentioned" guarantee. DM owner is prepended so a
         # 1:1 always hears you without an @mention. Group members hear
         # the same way unless the message @mentions specific bots.
+        # @team-id expands to that team's bots in roster order.
         asyncio.create_task(_run_agents_in_order(channel_id, to_run, depth=depth))
 
 
@@ -746,6 +950,8 @@ async def _set_status(name: str, status: str) -> None:
 
 
 async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dict:
+    if agent_row.get("archived"):
+        return {"reply": "", "tool_events": []}
     name = agent_row["name"]
     await _set_status(name, "working")
     await hub.broadcast(channel_id, {"type": "typing", "author": name})
@@ -795,7 +1001,7 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dic
 
 async def _execute_routine(row: dict, *, test_run: bool = False) -> None:
     agent_row = await db.fetch_agent(row["agent_name"])
-    if agent_row is None:
+    if agent_row is None or agent_row.get("archived"):
         await db.mark_routine_run(
             row["id"], status="failed", excerpt="bot missing",
             interval_minutes=row["interval_minutes"],

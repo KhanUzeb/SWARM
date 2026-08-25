@@ -19,7 +19,7 @@ Human posts in #general, a Bot 1:1, or a group chat
 | No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
 | `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
 
-**Status:** V3 tools/plugins, multi-provider AI (tau-inspired), API security, and 3-step onboarding shipped — see [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for commit map.
+**Status:** Slack-shaped workspace: admin-gated Bots, human DMs, `@team` pods, audit export, 3-step onboarding — see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 ```
 swarm/
@@ -68,9 +68,11 @@ Open `http://localhost:8000`. Register a handle → **Step 1:** connect Groq/Ope
 1. **Room:** `@swarm what's blocking release?` — streaming reply + optional tool audit line.
 2. **1:1:** Talk to `dm-swarm` or a custom-named Bot without mentions.
 3. **Group:** Create a group, pick Bots — they all hear you without `@`. `@mention` still targets one.
-4. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
-5. **Governance:** Bot requests approval → Allow once / Deny in UI.
-6. **Computer:** Shared sandbox files Bots wrote; routines tick in the background. Pip (sidebar mascot) tracks connection and Bot status.
+4. **Team:** `@core` in a room runs Swarm, Ledger, and Coder in order.
+5. **People:** Message a person from Direct messages — private 1:1.
+6. **Multi-agent:** `@swarm draft it; @ledger log the decision` — sequential replies in order.
+7. **Governance:** Bot requests approval → Allow once / Deny in UI.
+8. **Computer / export:** Shared sandbox + JSON/CSV audit export from the channel header.
 
 Full script: [`VISION.md` § Demo narrative](VISION.md).
 
@@ -108,4 +110,4 @@ pytest -q
 
 ## Honest gaps (not hidden)
 
-No cloud VM, browser automation, Slack/Salesforce connectors, human DMs, admin role, semantic search, or agent delete. Sandbox is cwd+timeout, not container isolation. See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.
+No cloud VM, browser automation, Slack/Salesforce connectors, or semantic search. Sandbox is cwd+timeout, not container isolation. See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.

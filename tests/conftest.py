@@ -33,6 +33,7 @@ def client(tmp_path, monkeypatch):
     db_mod.DB_PATH = db_path
     main_mod._last_write.clear()
     main_mod.hub._rooms.clear()
+    main_mod.hub._presence.clear()
 
     from fastapi.testclient import TestClient
 
@@ -40,6 +41,7 @@ def client(tmp_path, monkeypatch):
         yield c
 
     main_mod.hub._rooms.clear()
+    main_mod.hub._presence.clear()
     main_mod._last_write.clear()
 
 

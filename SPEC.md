@@ -17,8 +17,8 @@ to leave broken.
 | name       | TEXT  | unique, display name |
 | topic      | TEXT  | default `''` |
 | created_at | REAL  | unix timestamp |
-| kind       | TEXT  | `room` (shared channel), `dm` (a Bot's 1:1), or `group` (selected Bots). default `room` |
-| owner_agent | TEXT | for `dm`: the Bot that always hears this channel. NULL for rooms/groups |
+| kind       | TEXT  | `room` (shared channel), `dm` (a Bot's 1:1), `group` (selected Bots), or `people` (human 1:1). default `room` |
+| owner_agent | TEXT | for `dm`: the Bot that always hears this channel. NULL for rooms/groups/people |
 
 ### `messages`
 
@@ -41,6 +41,7 @@ Indexed on `(channel_id, created_at)` and `(parent_id)`.
 | handle     | TEXT | PK |
 | token_hash | TEXT | SHA-256 of the raw token half, never the raw token itself |
 | created_at | REAL | |
+| role       | TEXT | `admin` \| `member`. First registered user is admin; later users are members |
 
 ### `reactions`
 
@@ -69,6 +70,7 @@ a duplicate row or an error.
 | job             | TEXT    | primary job title; default `Teammate` |
 | status          | TEXT    | `idle` \| `working` \| `needs_approval` |
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
+| archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
 Allowed tool names include **11 builtins** (`read_only_shell`,
 `search_channel_history`, `remember`, `recall`, `list_workspace`,
@@ -84,8 +86,30 @@ tools) and `ledger` (job `Decision log`, unscoped, no shell/workspace
 write — `search_channel_history`, `remember`, `recall`, `channel_digest`).
 Creating an agent also creates its 1:1 channel `dm-<name>` (`kind=dm`,
 `owner_agent=<name>`). Existing databases get those DMs from
-`ensure_schema()`. Deleting an agent is not supported (history would
-dangle) — named gap.
+`ensure_schema()`. Archiving an agent (`DELETE`) sets `archived_at`;
+history keeps the author name, mentions stop firing, and the handle
+cannot be reused.
+
+### `channel_people`
+
+| column     | type | notes |
+|------------|------|-------|
+| channel_id | TEXT | FK → channels.id |
+| handle     | TEXT | registered user |
+
+Used by `kind=people` 1:1s. Channel list/history/search hide these from
+anyone not in the pair.
+
+### `agent_teams` / `agent_team_members`
+
+| column     | type | notes |
+|------------|------|-------|
+| id         | TEXT | PK, mention key (`@core`) |
+| name       | TEXT | display name |
+| members    | —    | ordered bot handles via `agent_team_members` |
+
+Seeded: `@core` → swarm, ledger, coder. `@team-id` in a room expands
+to those Bots in roster order.
 
 Existing databases that predate these columns are upgraded in
 `ensure_schema()` via `PRAGMA table_info` + `ALTER TABLE`, not Alembic.
@@ -198,8 +222,7 @@ message into that channel ("Approved: … Continue from here." /
 No `threads` table separate from `messages.parent_id` — flat storage
 with a nullable self-reference is sufficient; `GET /api/messages/{id}/thread`
 returns one level (the parent plus rows whose `parent_id` equals that
-id). Admin role for `POST /api/agents` is still a named gap — see
-`PROJECT.md`. No agent delete. No vector search (Phase 6). No cloud VM,
+id). Semantic search (Phase 6) is still gated. No cloud VM,
 browser computer-use, or teach-by-demonstration recording — the
 "computer" is the shared sandbox workspace.
 
@@ -234,24 +257,48 @@ separately from the token on every call.
   path (which never lets the client set `author` at all) but REST
   still accepts an explicit `author` field, so the check is load-
   bearing there.
+- **Admin role.** First registered handle is `admin`. `POST`/`PATCH`/`DELETE`
+  on `/api/agents`, `/api/teams`, `/api/tools/custom`, plugin reload, and
+  AI provider connect/disconnect require `role = admin`. Chat, people DMs,
+  rooms, groups, and export stay open to any valid token.
 - **Rate limit**: 500ms minimum between writes, tracked per handle in
   an in-memory dict (`_last_write` in `main.py`). Violating it returns
   `429` (REST) or a `{"type": "error", "detail": "slow down"}` frame
   (WS) — the WS connection stays open, the message is just dropped.
-- **No admin role.** `POST /api/agents` and `PATCH /api/agents/{name}`
-  require only a valid token, not any elevated permission. Named gap,
-  not a bug — see `PROJECT.md`.
 
 ---
 
 ## 3. REST API (current)
+
+### `GET /api/me` · `GET /api/people`
+Auth required. `me` is `{handle, role, created_at}`. `people` adds `online`
+from the in-memory WebSocket presence table.
+
+### `POST /api/dms`
+Auth required. `{ "handle": "maya" }` opens or returns a private
+`kind=people` channel (`people-{a}-{b}` sorted). 400 if self, 404 if
+the other handle is not registered.
+
+### `GET /api/teams` · `POST /api/teams` · `PATCH/DELETE /api/teams/{id}`
+List is any token. Writes are admin-only. `@id` in a room expands to
+`members` in order.
+
+### `GET /api/search?q=`
+Auth required. Keyword search over messages the caller can see
+(people DMs excluded unless they are in the pair).
+
+### `GET /api/channels/{id}/export?format=json|csv`
+Auth required. Full channel history including system tool-audit lines.
+
+### `DELETE /api/agents/{name}`
+Admin only. Soft-delete (`archived_at`). 404 if already archived.
 
 ### `POST /api/register`
 ```json
 // request
 {"handle": "uzeb"}
 // response 200
-{"handle": "uzeb", "token": "uzeb:2y0-_JDXp9NN...", "created": true}
+{"handle": "uzeb", "token": "uzeb:2y0-_JDXp9NN...", "created": true, "role": "admin"}
 // response 409 if handle taken
 {"detail": "handle already registered"}
 ```
@@ -405,7 +452,7 @@ last).
 404 if the name is not registered.
 
 ### `POST /api/agents`
-Auth required (any valid token — no admin check, see section 2).
+Auth required (`admin` only).
 Harness fields are optional; omitted values use the defaults above.
 `tools` defaults to all eight names. `job` defaults to `Teammate`.
 `display_name` is the friendly name (spaces allowed, max 40). If
@@ -688,6 +735,11 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR11.3 | `/api/status.demo`, `/api/jobs` suggested fields, register `created` | ✅ |
 | FR12.1 | Custom Bot `display_name`; mention handle stays `@name` | ✅ |
 | FR12.2 | Group chats: members hear without `@`; `@` still targets one | ✅ |
+| FR13.1 | First user is admin; Bot/team/tool/provider writes are admin-only | ✅ |
+| FR13.2 | Human 1:1s (`kind=people`) visible only to the pair | ✅ |
+| FR13.3 | `@team-id` expands to an ordered Bot roster | ✅ |
+| FR13.4 | Channel audit export JSON/CSV | ✅ |
+| FR13.5 | Soft-delete Bots (`archived_at`); history kept | ✅ |
 
 ---
 
@@ -707,8 +759,8 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 
 Unchanged from V1: no Nostr/event-signing, no git hosting, no
 canvas/media comments, no huddle/voice, no multi-tenant hosting, no
-vector search (Phase 6, intentionally unbuilt), no admin role (named
-gap, still gated), no agent delete. Phase 10 does **not** include a
+vector search (Phase 6, intentionally unbuilt). Admin role, people DMs,
+teams, audit export, and bot archive shipped. Phase 10 does **not** include a
 cloud VM, remote desktop, browser computer-use, connectors to
 Salesforce/Slack, or teach-by-demonstration recording. The shared
 "computer" is the local sandbox workspace.

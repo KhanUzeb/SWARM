@@ -3,7 +3,6 @@ import katex from "katex";
 import ApiConfigStep from "./ai-support/ApiConfigStep.jsx";
 import ProviderPanel from "./ai-support/ProviderPanel.jsx";
 import ToolsPanel from "./ai-support/ToolsPanel.jsx";
-import Mascot from "./components/Mascot.jsx";
 import {
   ALL_TOOLS, CACHE_TTL, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, apiJson, authHeaders, botLabel, bustCache,
   escapeHtml, extractPaper, fmtTime, formatInline, groupedWith, initials, insertMention,
@@ -204,6 +203,17 @@ export default function App() {
   const [agentForm, setAgentForm] = useState({
     name: "", display_name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [],
   });
+  const [meRole, setMeRole] = useState("member");
+  const [people, setPeople] = useState([]);
+  const [teams, setTeams] = useState([]);
+  const [peopleModal, setPeopleModal] = useState(false);
+  const [teamModal, setTeamModal] = useState(false);
+  const [teamForm, setTeamForm] = useState({ id: "", name: "", description: "", members: [] });
+  const [teamErr, setTeamErr] = useState("");
+  const [searchQ, setSearchQ] = useState("");
+  const [searchHits, setSearchHits] = useState(null);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const isAdmin = meRole === "admin";
 
   const wsRef = useRef(null);
   const wsGen = useRef(0);
@@ -224,9 +234,11 @@ export default function App() {
 
   const current = channels.find((c) => c.id === channel) || { id: channel, name: channel, topic: "" };
   const bot = allAgents.find((a) => a.dm_channel_id === channel);
-  const rooms = channels.filter((c) => c.kind !== "dm" && c.kind !== "group");
+  const rooms = channels.filter((c) => c.kind !== "dm" && c.kind !== "group" && c.kind !== "people");
   const groups = channels.filter((c) => c.kind === "group");
+  const peopleDms = channels.filter((c) => c.kind === "people");
   const group = current.kind === "group" ? current : null;
+  const peopleChat = current.kind === "people" ? current : null;
   const roots = order.map((id) => messages[id]).filter(Boolean);
   const pendingHere = approvals.filter((a) => a.status === "pending" && a.channel_id === channel);
   const pendingAll = approvals.filter((a) => a.status === "pending");
@@ -317,6 +329,7 @@ export default function App() {
       const data = authed.ok ? authed.data : (pub.data || {});
       setDemoMode(!!data.demo);
       setAgentsReady(!!(data.llm_ready || data.groq || data.openrouter || data.demo));
+      if (data.me?.role) setMeRole(data.me.role);
     } catch {
       setDemoMode(false);
       setAgentsReady(false);
@@ -383,6 +396,26 @@ export default function App() {
       setComputer(res.ok ? res.data : null);
     } catch {
       setComputer(null);
+    }
+  }
+
+  async function loadPeople() {
+    if (!tokenRef.current) return;
+    try {
+      const res = await apiJson("/api/people", { token: tokenRef.current, cacheTtl: 8_000 });
+      setPeople(res.ok ? res.data : []);
+    } catch {
+      setPeople([]);
+    }
+  }
+
+  async function loadTeams() {
+    if (!tokenRef.current) return;
+    try {
+      const res = await apiJson("/api/teams", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      setTeams(res.ok ? res.data : []);
+    } catch {
+      setTeams([]);
     }
   }
 
@@ -540,6 +573,10 @@ export default function App() {
         });
       } else if (data.type === "bot_status") {
         setAllAgents((list) => list.map((a) => (a.name === data.name ? { ...a, status: data.status } : a)));
+      } else if (data.type === "bot_archived") {
+        loadAllAgents();
+      } else if (data.type === "presence") {
+        setPeople((list) => list.map((p) => (p.handle === data.handle ? { ...p, online: !!data.online } : p)));
       } else if (data.type === "approval") {
         setApprovals((list) => {
           const i = list.findIndex((a) => a.id === data.approval?.id);
@@ -603,7 +640,10 @@ export default function App() {
     setUser(handle);
     localStorage.setItem(`swarm_token_${handle}`, tok);
     localStorage.setItem("swarm_last_handle", handle);
-    const [chs] = await Promise.all([loadChannels(), loadAllAgents(), loadJobs(), loadSkills(), loadRoutines(), loadToolCatalog()]);
+    const [chs] = await Promise.all([
+      loadChannels(), loadAllAgents(), loadJobs(), loadSkills(), loadRoutines(),
+      loadToolCatalog(), loadPeople(), loadTeams(), loadGroqStatus(),
+    ]);
     const next = (chs || []).some((c) => c.id === (preferred || "dm-swarm"))
       ? (preferred || "dm-swarm")
       : (chs[0]?.id || "general");
@@ -653,27 +693,33 @@ export default function App() {
       });
       let tok = null;
       if (res.ok) {
-        tok = (await res.json()).token;
+        const body = await res.json();
+        tok = body.token;
         setToken(tok);
         tokenRef.current = tok;
         setUser(handle);
+        setMeRole(body.role || "member");
         localStorage.setItem(`swarm_token_${handle}`, tok);
         localStorage.setItem("swarm_last_handle", handle);
-        await Promise.all([loadChannels(), loadAllAgents(), loadGroqStatus()]);
-        const templatesRes = await apiJson("/api/jobs", { token: tok, cacheTtl: CACHE_TTL.catalog });
-        const templates = templatesRes.ok ? templatesRes.data : [];
-        setJobs(templates);
-        const pick = templates.find((j) => j.id === "chief-of-staff") || templates[0] || null;
-        setOnboarding({
-          step: 1,
-          template: pick,
-          name: pick?.suggested_name || "",
-          displayName: pick?.suggested_name
-            ? pick.suggested_name.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-            : "",
-          err: "",
-          busy: false,
-        });
+        if (body.role !== "admin") {
+          await enterWorkspace(handle, tok);
+        } else {
+          await Promise.all([loadChannels(), loadAllAgents(), loadGroqStatus()]);
+          const templatesRes = await apiJson("/api/jobs", { token: tok, cacheTtl: CACHE_TTL.catalog });
+          const templates = templatesRes.ok ? templatesRes.data : [];
+          setJobs(templates);
+          const pick = templates.find((j) => j.id === "chief-of-staff") || templates[0] || null;
+          setOnboarding({
+            step: 1,
+            template: pick,
+            name: pick?.suggested_name || "",
+            displayName: pick?.suggested_name
+              ? pick.suggested_name.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+              : "",
+            err: "",
+            busy: false,
+          });
+        }
       } else if (res.status === 409) {
         tok = localStorage.getItem(`swarm_token_${handle}`);
         if (!tok) setLoginErr("handle taken and no saved session — pick another");
@@ -763,13 +809,22 @@ export default function App() {
       return;
     }
     const pool = q.mode === "at"
-      ? (agents.length ? agents : allAgents)
-          .filter((a) => a.name.toLowerCase().startsWith(q.query))
-          .map((a) => ({
-            label: botLabel(a) !== a.name ? `@${a.name} · ${botLabel(a)}` : `@${a.name}`,
-            value: a.name,
-            kind: "at",
-          }))
+      ? [
+          ...(agents.length ? agents : allAgents)
+            .filter((a) => a.name.toLowerCase().startsWith(q.query))
+            .map((a) => ({
+              label: botLabel(a) !== a.name ? `@${a.name} · ${botLabel(a)}` : `@${a.name}`,
+              value: a.name,
+              kind: "at",
+            })),
+          ...teams
+            .filter((t) => t.id.toLowerCase().startsWith(q.query) || (t.name || "").toLowerCase().startsWith(q.query))
+            .map((t) => ({
+              label: `@${t.id} · team`,
+              value: t.id,
+              kind: "at",
+            })),
+        ]
       : skills
           .filter((s) => s.name.toLowerCase().startsWith(q.query))
           .map((s) => ({ label: `/${s.name}`, value: s.name, kind: "slash" }));
@@ -925,6 +980,10 @@ export default function App() {
   }
 
   function openCreateAgent() {
+    if (!isAdmin) {
+      flash("Only admins can create bots", true);
+      return;
+    }
     setAgentErr("");
     setHandleTouched(false);
     setAgentForm({ name: "", display_name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [] });
@@ -985,11 +1044,102 @@ export default function App() {
         return;
       }
       if (res.status === 409) setAgentErr("that agent name is taken");
+      else if (res.status === 403) setAgentErr("only admins can manage bots");
       else if (res.status === 404) setAgentErr("channel or agent not found");
       else setAgentErr("couldn't save agent");
     } catch {
       setAgentErr("couldn't save agent");
     }
+  }
+
+  function peopleLabel(c) {
+    const roster = c.people || [];
+    return roster.find((h) => h !== user) || roster[0] || c.name;
+  }
+
+  async function openHumanDm(handle) {
+    const res = await api("/api/dms", { token, method: "POST", body: { handle } });
+    if (!res.ok) {
+      flash(res.status === 404 ? "No such person" : "Couldn't open that DM", true);
+      return;
+    }
+    const created = await res.json();
+    setPeopleModal(false);
+    await loadChannels();
+    switchChannel(created.id);
+  }
+
+  async function archiveAgent() {
+    if (!isAdmin || !agentForm.name) return;
+    if (!window.confirm(`Archive @${agentForm.name}? Old messages stay; they will stop answering.`)) return;
+    const res = await api(`/api/agents/${encodeURIComponent(agentForm.name)}`, { token, method: "DELETE", json: false });
+    if (!res.ok) {
+      setAgentErr("couldn't archive that bot");
+      return;
+    }
+    setAgentModal(null);
+    await Promise.all([loadAllAgents(), loadChannels(), loadTeams()]);
+    flash(`Archived ${agentForm.display_name || agentForm.name}`);
+    if (channel === `dm-${agentForm.name}`) switchChannel("general");
+  }
+
+  async function saveTeam(ev) {
+    ev.preventDefault();
+    setTeamErr("");
+    const name = (teamForm.name || "").trim();
+    const id = (teamForm.id || slugFromName(name)).trim();
+    if (!name || !id) {
+      setTeamErr("name is required");
+      return;
+    }
+    if (!teamForm.members.length) {
+      setTeamErr("pick at least one bot");
+      return;
+    }
+    const res = await api("/api/teams", {
+      token,
+      method: "POST",
+      body: { id, name, description: teamForm.description, members: teamForm.members },
+    });
+    if (!res.ok) {
+      setTeamErr(res.status === 409 ? "that team id is taken" : res.status === 403 ? "admin only" : "couldn't create team");
+      return;
+    }
+    setTeamModal(false);
+    await loadTeams();
+    flash(`@${id} is ready — mention the team in a room`);
+  }
+
+  async function exportChannel(fmt) {
+    const res = await api(`/api/channels/${encodeURIComponent(channel)}/export?format=${fmt}`, { token, json: false });
+    if (!res.ok) {
+      flash("Couldn't export this channel", true);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${channel}-audit.${fmt}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function runSearch(ev) {
+    ev?.preventDefault();
+    const q = searchQ.trim();
+    if (q.length < 2) {
+      setSearchHits(null);
+      return;
+    }
+    setSearchBusy(true);
+    try {
+      const res = await apiJson(`/api/search?q=${encodeURIComponent(q)}`, { token: tokenRef.current });
+      setSearchHits(res.ok ? res.data : []);
+    } catch {
+      setSearchHits([]);
+    }
+    setSearchBusy(false);
   }
 
   async function resolveApproval(id, status) {
@@ -1034,9 +1184,11 @@ export default function App() {
 
   const placeholder = bot
     ? (bot.name === "coder" ? `Ask ${botLabel(bot)} for a program, proof, or listing` : `Message ${botLabel(bot)} — they already hear you`)
-    : group
-      ? `Message ${current.name} — everyone in the group hears you`
-      : `Message #${current.name || current.id} — @coder for code, @swarm to talk`;
+    : peopleChat
+      ? `Message ${peopleLabel(peopleChat)} — private, like Slack DMs`
+      : group
+        ? `Message ${current.name} — everyone in the group hears you`
+        : `Message #${current.name || current.id} — @name a bot, @core the pod`;
 
   const layout = [
     "app",
@@ -1052,7 +1204,6 @@ export default function App() {
     () => (toolCatalog.length ? toolCatalog.map((t) => t.name) : ALL_TOOLS),
     [toolCatalog],
   );
-  const mascotWorking = streamRows.length > 0 || allAgents.some((a) => a.status === "working");
 
   return (
     <div className={layout}>
@@ -1221,6 +1372,86 @@ export default function App() {
         </div>
       )}
 
+      {peopleModal && (
+        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setPeopleModal(false)}>
+          <div className="modal-card" role="dialog" aria-modal="true">
+            <h2>Message a person</h2>
+            <p className="hint">Private 1:1 — only the two of you see it. @mention a bot to pull them in.</p>
+            <div className="member-picks">
+              {people.filter((p) => p.handle !== user).map((p) => (
+                <button key={p.handle} type="button" className="member-pick" onClick={() => openHumanDm(p.handle)}>
+                  <span className={`dot ${p.online ? "working" : "idle"}`} />
+                  <span className="bot-name">{p.handle}</span>
+                  <span className="bot-job">{p.online ? "online" : p.role}</span>
+                </button>
+              ))}
+              {!people.filter((p) => p.handle !== user).length && <p className="empty-state">No other people yet. Have a teammate register.</p>}
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setPeopleModal(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {teamModal && (
+        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setTeamModal(false)}>
+          <div className="modal-card" role="dialog" aria-modal="true">
+            <h2>New team</h2>
+            <form onSubmit={saveTeam}>
+              <p className="hint">@team-id in any room runs these bots in order — Buzz-style pods without leaving chat.</p>
+              <label htmlFor="team-name">Name</label>
+              <input
+                id="team-name"
+                required
+                maxLength={64}
+                placeholder="Launch"
+                value={teamForm.name}
+                onChange={(e) => setTeamForm((f) => ({ ...f, name: e.target.value, id: f.id || slugFromName(e.target.value) }))}
+              />
+              <label htmlFor="team-id">Mention handle</label>
+              <input
+                id="team-id"
+                required
+                maxLength={32}
+                pattern="[A-Za-z0-9_\-]+"
+                placeholder="launch"
+                value={teamForm.id}
+                onChange={(e) => setTeamForm((f) => ({ ...f, id: e.target.value }))}
+              />
+              <label htmlFor="team-desc">Description <span className="optional">(optional)</span></label>
+              <input id="team-desc" maxLength={200} value={teamForm.description} onChange={(e) => setTeamForm((f) => ({ ...f, description: e.target.value }))} />
+              <label>Bots</label>
+              <div className="member-picks">
+                {allAgents.map((a) => {
+                  const on = teamForm.members.includes(a.name);
+                  return (
+                    <button
+                      key={a.name}
+                      type="button"
+                      className={`member-pick${on ? " active" : ""}`}
+                      onClick={() => setTeamForm((f) => ({
+                        ...f,
+                        members: on ? f.members.filter((n) => n !== a.name) : [...f.members, a.name],
+                      }))}
+                    >
+                      <span className={`dot ${a.status || "idle"}`} />
+                      <span className="bot-name">{botLabel(a)}</span>
+                      <span className="bot-job">@{a.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="err" role="alert">{teamErr}</div>
+              <div className="modal-actions">
+                <button type="button" className="btn" onClick={() => setTeamModal(false)}>Cancel</button>
+                <button type="submit" className="btn primary">Create team</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {agentModal && (
         <div className="overlay" onClick={(e) => e.target === e.currentTarget && setAgentModal(null)}>
           <div className="modal-card agent-card" role="dialog" aria-modal="true">
@@ -1332,6 +1563,9 @@ export default function App() {
                     if (found) switchChannel(found.dm_channel_id);
                   }}>Open 1:1</button>
                 )}
+                {agentModal === "edit" && isAdmin && (
+                  <button type="button" className="btn danger" onClick={archiveAgent}>Archive</button>
+                )}
                 <button type="submit" className="btn primary">{agentModal === "edit" ? "Save" : "Create"}</button>
               </div>
             </form>
@@ -1350,16 +1584,51 @@ export default function App() {
       <div id="sidebar-backdrop" hidden={!sidebarOpen} onClick={() => setSidebarOpen(false)} />
 
       <nav id="sidebar" aria-label="Workspace">
-        <div className="brand">swarm<small>talk · code · paper</small></div>
-        <Mascot
-          wsStatus={wsStatus}
-          demoMode={demoMode}
-          botStatus={bot?.status}
-          working={mascotWorking}
-        />
-        <div className="section-label">Bots</div>
+        <div className="brand">swarm<small>workspace · bots as teammates</small></div>
+        <form className="sidebar-search" onSubmit={runSearch}>
+          <label className="sr-only" htmlFor="workspace-search">Search messages</label>
+          <input
+            id="workspace-search"
+            value={searchQ}
+            onChange={(e) => { setSearchQ(e.target.value); if (!e.target.value) setSearchHits(null); }}
+            placeholder="Search"
+            autoComplete="off"
+          />
+        </form>
+        {searchHits && (
+          <div className="search-hits" role="listbox" aria-label="Search results">
+            {searchBusy && <div className="empty">Searching…</div>}
+            {!searchBusy && !searchHits.length && <div className="empty">No matches</div>}
+            {!searchBusy && searchHits.map((hit) => (
+              <button
+                key={hit.id}
+                type="button"
+                className="search-hit"
+                onClick={() => { switchChannel(hit.channel_id); setSearchHits(null); setSearchQ(""); }}
+              >
+                <span className="ch-name plain">
+                  {hit.channel_kind === "people" || hit.channel_kind === "dm" ? hit.channel_name : `#${hit.channel_name}`}
+                </span>
+                <span className="hit-body">{hit.author}: {String(hit.body || "").slice(0, 80)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="section-label">Direct messages</div>
         <div id="bots-list">
-          {!allAgents.length && <div className="empty">No bots yet</div>}
+          {peopleDms.map((c) => {
+            const other = peopleLabel(c);
+            const person = people.find((p) => p.handle === other);
+            return (
+              <button key={c.id} type="button" className={`bot-item${c.id === channel ? " active" : ""}`} onClick={() => switchChannel(c.id)}>
+                <span className={`dot ${person?.online ? "working" : "idle"}`} />
+                <span className="bot-meta">
+                  <span className="bot-name">{other}</span>
+                  <span className="bot-job">{person?.online ? "online" : "person"}</span>
+                </span>
+              </button>
+            );
+          })}
           {allAgents.map((a) => (
             <button key={a.name} type="button" className={`bot-item${a.dm_channel_id === channel ? " active" : ""}`} onClick={() => switchChannel(a.dm_channel_id)}>
               <span className={`dot ${a.status || "idle"}`} />
@@ -1369,8 +1638,35 @@ export default function App() {
               </span>
             </button>
           ))}
+          {!allAgents.length && !peopleDms.length && <div className="empty">No conversations yet</div>}
         </div>
-        <button type="button" id="new-agent" onClick={openCreateAgent}>+ New Bot</button>
+        <button type="button" id="new-dm" onClick={() => setPeopleModal(true)}>+ Message a person</button>
+        {isAdmin && <button type="button" id="new-agent" onClick={openCreateAgent}>+ New Bot</button>}
+        <div className="section-label">Teams</div>
+        <ul id="team-list">
+          {!teams.length && <li className="empty-state">No teams yet</li>}
+          {teams.map((t) => (
+            <li key={t.id} className="channel-item">
+              <button type="button" className="team-item" onClick={() => { setDraft((d) => (d ? `${d} @${t.id} ` : `@${t.id} `)); inputRef.current?.focus(); }}>
+                <span className="ch-name plain">@{t.id}</span>
+                <span className="ch-topic">{(t.members || []).map(labelFor).join(", ") || t.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        {isAdmin && (
+          <button
+            type="button"
+            id="new-team"
+            onClick={() => {
+              setTeamErr("");
+              setTeamForm({ id: "", name: "", description: "", members: allAgents.slice(0, 2).map((a) => a.name) });
+              setTeamModal(true);
+            }}
+          >
+            + New team
+          </button>
+        )}
         <div className="section-label">Groups</div>
         <ul id="group-list">
           {!groups.length && <li className="empty-state">No groups yet</li>}
@@ -1411,7 +1707,7 @@ export default function App() {
         <div id="me">
           <div className="avatar">{initials(user || "?")}</div>
           <div className="me-meta">
-            <div className="handle">{user || "anon"}</div>
+            <div className="handle">{user || "anon"}{isAdmin ? <span className="role-pill">admin</span> : null}</div>
             <div className={`sub ${wsStatus}`}>{wsStatus}</div>
           </div>
           <button type="button" className="btn ghost" onClick={() => { if (user) localStorage.removeItem(`swarm_token_${user}`); logout(); }}>Log out</button>
@@ -1422,13 +1718,15 @@ export default function App() {
         <div id="topbar">
           <button type="button" id="menu-btn" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}>☰</button>
           <div className="channel-meta">
-            <div className="name">{bot ? botLabel(bot) : group ? current.name : `#${current.name || current.id}`}</div>
+            <div className="name">{bot ? botLabel(bot) : peopleChat ? peopleLabel(peopleChat) : group ? current.name : `#${current.name || current.id}`}</div>
             <div className="topic">
               {bot
                 ? (bot.job || current.topic || "Teammate")
-                : group
-                  ? ((current.members || []).map(labelFor).join(", ") || current.topic || "Group chat")
-                  : (current.topic || "No topic set")}
+                : peopleChat
+                  ? "Private conversation — only you two see this"
+                  : group
+                    ? ((current.members || []).map(labelFor).join(", ") || current.topic || "Group chat")
+                    : (current.topic || "No topic set")}
             </div>
           </div>
           <div className="view-tabs" role="tablist" aria-label="Channel view">
@@ -1437,7 +1735,9 @@ export default function App() {
           </div>
           {bot && <span className={`status-chip ${bot.status || "idle"}`}>{statusLabel(bot.status)}</span>}
           <span className="who">you're <span>{user || "anon"}</span></span>
-          {bot && <button type="button" className="btn ghost" onClick={() => openAgentPanel(bot.name)}>Configure</button>}
+          {bot && isAdmin && <button type="button" className="btn ghost" onClick={() => openAgentPanel(bot.name)}>Configure</button>}
+          <button type="button" className="btn ghost" onClick={() => exportChannel("json")}>Export JSON</button>
+          <button type="button" className="btn ghost" onClick={() => exportChannel("csv")}>Export CSV</button>
           <button type="button" className="btn ghost" onClick={() => setShowTools((v) => !v)}>{showTools ? "Hide tool log" : "Show tool log"}</button>
           <button type="button" className="btn ghost" onClick={() => setComputerOpen((v) => !v)}>Computer</button>
         </div>
@@ -1457,9 +1757,11 @@ export default function App() {
                 ? "Empty page. Ask for a function, a proof, or a listing — code and TeX compile into Paper."
                 : bot
                   ? `A blank channel. Give ${botLabel(bot)} a real task.`
-                  : group
+                  : peopleChat
+                    ? `Private 1:1 with ${peopleLabel(peopleChat)}. Bots only join if you @mention them.`
+                    : group
                     ? "A group chat. Message the room and every member hears you — or @mention one."
-                    : "A blank channel. Talk here, or @coder when you want a listing."}
+                    : "A blank channel. Talk here, @coder for a listing, or @core to run the pod."}
             </div>
           )}
           {roots.map((m, i) => (
@@ -1515,7 +1817,7 @@ export default function App() {
             />
             <button type="button" className="btn primary send" onClick={() => { sendFrom(draft, null); setDraft(""); }}>Send</button>
           </div>
-          <div className="composer-hint">@swarm to talk · @coder for listings · Paper compiles code and TeX</div>
+          <div className="composer-hint">@bot · @core for the pod · /skill · people DMs stay private</div>
         </div>
       </main>
 
