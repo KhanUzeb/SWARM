@@ -28,6 +28,7 @@ export default function ModelPicker({
   const rootRef = useRef(null);
   const inputRef = useRef(null);
   const fetchGen = useRef(0);
+  const openedFetch = useRef(false);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -74,9 +75,17 @@ export default function ModelPicker({
   }, [token, providerId, apiKey]);
 
   useEffect(() => {
-    const t = setTimeout(load, apiKey ? 350 : 0);
+    if (!apiKey || apiKey.trim().length < 8) return undefined;
+    const t = setTimeout(load, 350);
     return () => clearTimeout(t);
   }, [load, apiKey]);
+
+  useEffect(() => {
+    if (open && !models.length && !loading && !openedFetch.current) {
+      openedFetch.current = true;
+      load();
+    }
+  }, [open, models.length, loading, load]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -145,8 +154,9 @@ export default function ModelPicker({
           {current ? labelOf(current) : (value || placeholder)}
         </span>
         <span className={`model-live${live ? " on" : ""}`}>
-          {loading ? "Loading" : live ? "Live" : "Catalog"}
+          {loading ? "Loading" : live ? "Live API" : "Fallback"}
         </span>
+        <span className="model-picker-chevron" aria-hidden="true">⌄</span>
       </button>
       {open && (
         <div className="model-picker-pop">

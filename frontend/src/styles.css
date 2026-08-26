@@ -25,6 +25,133 @@
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --radius: 16px;
 }
+
+/* 2026 surface refresh: calm, tactile, and deliberately product-like. */
+:root {
+  --bg: #f7f7f5;
+  --sidebar: #171819;
+  --panel: #ffffff;
+  --hover: #f0f1f2;
+  --active: #e8eef8;
+  --border: #e4e5e7;
+  --text: #1c1d20;
+  --dim: #73767d;
+  --pin: #3566d4;
+  --pin2: #244fae;
+  --green: #277a54;
+  --green2: #3b9b70;
+  --amber: #96621e;
+  --amber2: #704714;
+  --red: #c83b4b;
+  --input: #fbfbfb;
+  --cream: #f7f7f5;
+  --ink: #1c1d20;
+  --on-ink: #f7f7f5;
+  --gold: #c79643;
+  --radius: 14px;
+}
+html, body { background: var(--bg); color: var(--text); font-size: 14px; letter-spacing: -0.015em; }
+button, input, textarea, select { -webkit-font-smoothing: antialiased; }
+.btn { border-radius: 10px; padding: 8px 12px; box-shadow: none; }
+.btn.primary { box-shadow: 0 3px 8px rgba(53,102,212,.18); }
+#sidebar { box-shadow: inset -1px 0 rgba(255,255,255,.06); }
+#sidebar .brand { padding: 24px 20px 20px; font-family: var(--sans); font-size: 22px; letter-spacing: -0.05em; }
+#sidebar .brand::first-letter { color: #89a9ff; }
+#sidebar .brand small { font-size: 9px; letter-spacing: .12em; color: #70747b; }
+.section-label { padding: 20px 18px 8px; color: #70747b; font-size: 9px; }
+.sidebar-search { padding: 12px 14px 6px; }
+.sidebar-search input { background: #242629; border-color: #34373b; padding: 9px 12px; }
+.channel-item > button:first-child, .bot-item { border-radius: 9px; }
+.channel-item > button:first-child.active, .bot-item.active { background: rgba(111,149,238,.18); color: #eef3ff; }
+.channel-item > button:first-child.active .ch-topic, .bot-item.active .bot-job { color: #a8bff7; }
+.ch-name::before { color: #6f747b; }
+#new-channel, #new-group, #new-dm, #new-team, #new-agent { border-radius: 9px; border-style: solid; border-color: #34373b; margin-left: 14px; margin-right: 14px; }
+#me { background: #121314; padding: 14px; }
+#me .avatar { border-radius: 10px; background: #6d8fe3; }
+#main { background: var(--bg); }
+#topbar { min-height: 72px; padding: 16px 28px; background: rgba(247,247,245,.88); backdrop-filter: blur(18px); }
+#topbar .name { font-family: var(--sans); font-size: 18px; font-weight: 700; letter-spacing: -0.035em; }
+#topbar .topic { font-size: 12px; margin-top: 4px; }
+.view-tabs { background: #e9eaec; }
+.view-tabs .tab { padding: 6px 11px; font-size: 11px; }
+.view-tabs .tab.active { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+.status-chip { padding: 4px 8px; font-size: 9px; }
+#log { padding: 18px 0 12px; }
+.row { padding: 4px 28px 4px 28px; }
+.row:not(.grouped) { margin-top: 14px; }
+.row:hover { background: rgba(28,29,32,.025); }
+.row-main { gap: 10px; }
+.avatar { width: 34px; height: 34px; border-radius: 10px; font-size: 12px; }
+.row.grouped .avatar { width: 34px; }
+.row.human .avatar { background: #25272b; }
+.row.agent .avatar { background: #d9e3ff; color: #315cac; }
+.row .body { line-height: 1.6; max-width: 760px; }
+.row .who { font-size: 13px; }
+.row .ts { font-size: 11px; }
+.badge { background: #e8eefb; color: #315cac; padding: 2px 6px; font-size: 9px; }
+.reactions, .thread-count { margin-left: 44px; }
+.row-actions { border-radius: 9px; box-shadow: 0 8px 22px rgba(0,0,0,.1); }
+#composer { padding: 0 28px 24px; }
+#inputbar, #inputbar-thread { border-radius: 14px; padding: 9px 10px; box-shadow: 0 8px 24px rgba(28,29,32,.06); }
+#msg-input, #thread-input { font-size: 14px; }
+.btn.send { border-radius: 9px; padding: 9px 15px; }
+.composer-hint { padding: 0 2px; font-size: 10px; }
+.empty-state.editorial { font-family: var(--sans); font-style: normal; font-size: 16px; color: #73767d; }
+#computer-panel, #thread-panel { background: #fbfbfb; }
+.computer-head, .thread-head { padding: 18px 20px; }
+.thread-title { font-family: var(--sans); font-size: 16px; }
+.panel-tabs { padding: 10px 14px; }
+.panel-tabs .tab.active { background: #e8eef8; color: #315cac; }
+.modal-card, #login .card, #onboarding .onboarding-card { border-radius: 18px; box-shadow: 0 24px 70px rgba(28,29,32,.14); }
+.modal-card h2, #login .card h1, #onboarding .onboarding-card h1 { font-family: var(--sans); }
+#login { background: radial-gradient(700px 360px at 80% 0%, rgba(53,102,212,.12), transparent 65%), var(--bg); }
+#login .card { padding: 36px; }
+#login .card h1 { font-size: 32px; }
+#toast { border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.18); }
+@media (max-width: 720px) {
+  #topbar { padding: 14px 16px; min-height: 64px; }
+  .row { padding-left: 16px; padding-right: 16px; }
+  #composer { padding-left: 16px; padding-right: 16px; }
+}
+
+/* Viewport and interaction fixes. Keep the workspace anchored to the browser
+   viewport even when the browser reports a non-standard document height. */
+html, body, #root { width: 100%; min-height: 100%; height: 100%; overflow: hidden; }
+.app { height: 100dvh; min-height: 520px; overflow: hidden; }
+#main { min-height: 0; }
+#log { overscroll-behavior: contain; }
+#computer-panel, #thread-panel { min-height: 0; overflow: hidden; }
+.computer-body, .thread-body, .panel-content { min-height: 0; overflow-y: auto; }
+
+/* Give empty conversations a clear landing state instead of a large dead zone. */
+.empty-state.editorial {
+  max-width: 520px; margin: 12vh auto 0; padding: 28px 32px;
+  border: 1px solid var(--border); border-radius: 18px;
+  background: linear-gradient(145deg, rgba(255,255,255,.92), rgba(232,238,248,.48));
+  box-shadow: 0 16px 38px rgba(28,29,32,.06); text-align: left;
+}
+.empty-state.editorial::before {
+  content: "✦"; display: block; margin-bottom: 12px; color: var(--pin);
+  font-family: var(--sans); font-size: 22px; font-style: normal;
+}
+#composer { background: linear-gradient(180deg, transparent, rgba(247,247,245,.9) 26%); }
+#inputbar { border-color: #cfd6e4; box-shadow: 0 10px 30px rgba(53,102,212,.1); }
+#inputbar:focus-within { border-color: var(--pin); box-shadow: 0 0 0 4px rgba(53,102,212,.1); }
+
+/* The model control is an API-backed combobox, with a visible affordance. */
+.model-picker-toggle { padding-right: 9px; }
+.model-picker-chevron { flex: 0 0 auto; color: var(--dim); font-size: 18px; line-height: 1; margin-left: 2px; }
+.model-live.on { background: #edf8f1; }
+.model-live:not(.on) { background: #f4f5f6; }
+.model-option.selected { background: #edf3ff; }
+.provider-card { transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+.provider-card:hover { border-color: #cbd6ee; box-shadow: 0 10px 26px rgba(28,29,32,.07); transform: translateY(-1px); }
+.provider-card.connected { border-color: #cbdccf; }
+
+@media (max-width: 720px) {
+  .app { min-height: 0; }
+  .empty-state.editorial { margin: 8vh 16px 0; }
+}
 * { box-sizing: border-box; }
 html, body {
   margin: 0; height: 100%; background: var(--bg); color: var(--text);
@@ -876,4 +1003,61 @@ body.hide-tools .row.system, .app.hide-tools .row.system { display: none; }
   .paper-doc { padding: 28px 18px 40px; }
   .paper-doc h1 { font-size: 30px; }
 
+}
+
+/* Final surface tokens and layout overrides. */
+:root {
+  --bg: #f7f7f5; --sidebar: #171819; --panel: #fff; --hover: #f0f1f2;
+  --active: #e8eef8; --border: #e4e5e7; --text: #1c1d20; --dim: #73767d;
+  --pin: #3566d4; --pin2: #244fae; --input: #fbfbfb; --cream: #f7f7f5;
+  --ink: #1c1d20; --on-ink: #f7f7f5; --gold: #c79643; --radius: 14px;
+}
+html, body { background: var(--bg); color: var(--text); font-size: 14px; letter-spacing: -.015em; }
+.btn { border-radius: 10px; padding: 8px 12px; box-shadow: none; }
+.btn.primary { box-shadow: 0 3px 8px rgba(53,102,212,.18); }
+#sidebar { box-shadow: inset -1px 0 rgba(255,255,255,.06); }
+#sidebar .brand { padding: 24px 20px 20px; font-family: var(--sans); font-size: 22px; letter-spacing: -.05em; }
+#sidebar .brand small { font-size: 9px; letter-spacing: .12em; color: #70747b; }
+.section-label { padding: 20px 18px 8px; color: #70747b; font-size: 9px; }
+.sidebar-search { padding: 12px 14px 6px; }
+.sidebar-search input { background: #242629; border-color: #34373b; padding: 9px 12px; }
+.channel-item > button:first-child, .bot-item { border-radius: 9px; }
+.channel-item > button:first-child.active, .bot-item.active { background: rgba(111,149,238,.18); color: #eef3ff; }
+#new-channel, #new-group, #new-dm, #new-team, #new-agent { border-radius: 9px; border-style: solid; border-color: #34373b; margin-left: 14px; margin-right: 14px; }
+#me { background: #121314; padding: 14px; }
+#me .avatar { border-radius: 10px; background: #6d8fe3; }
+#topbar { min-height: 72px; padding: 16px 28px; background: rgba(247,247,245,.88); backdrop-filter: blur(18px); }
+#topbar .name { font-family: var(--sans); font-size: 18px; letter-spacing: -.035em; }
+#topbar .topic { font-size: 12px; margin-top: 4px; }
+.view-tabs { background: #e9eaec; }
+.view-tabs .tab { padding: 6px 11px; font-size: 11px; }
+.view-tabs .tab.active { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+.row { padding: 4px 28px; }
+.row:not(.grouped) { margin-top: 14px; }
+.row-main { gap: 10px; }
+.avatar { width: 34px; height: 34px; border-radius: 10px; font-size: 12px; }
+.row.grouped .avatar { width: 34px; }
+.row.human .avatar { background: #25272b; }
+.row.agent .avatar { background: #d9e3ff; color: #315cac; }
+.row .body { line-height: 1.6; max-width: 760px; }
+.row .who { font-size: 13px; }
+.badge { background: #e8eefb; color: #315cac; padding: 2px 6px; font-size: 9px; }
+.reactions, .thread-count { margin-left: 44px; }
+#composer { padding: 0 28px 24px; }
+#inputbar, #inputbar-thread { border-radius: 14px; padding: 9px 10px; box-shadow: 0 8px 24px rgba(28,29,32,.06); }
+#msg-input, #thread-input { font-size: 14px; }
+.btn.send { border-radius: 9px; padding: 9px 15px; }
+.empty-state.editorial { font-family: var(--sans); font-style: normal; font-size: 16px; color: #73767d; }
+#computer-panel, #thread-panel { background: #fbfbfb; }
+.computer-head, .thread-head { padding: 18px 20px; }
+.thread-title { font-family: var(--sans); font-size: 16px; }
+.panel-tabs .tab.active { background: #e8eef8; color: #315cac; }
+.modal-card, #login .card, #onboarding .onboarding-card { border-radius: 18px; box-shadow: 0 24px 70px rgba(28,29,32,.14); }
+.modal-card h2, #login .card h1, #onboarding .onboarding-card h1 { font-family: var(--sans); }
+#login { background: radial-gradient(700px 360px at 80% 0%, rgba(53,102,212,.12), transparent 65%), var(--bg); }
+#toast { border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.18); }
+@media (max-width: 720px) {
+  #topbar { padding: 14px 16px; min-height: 64px; }
+  .row { padding-left: 16px; padding-right: 16px; }
+  #composer { padding-left: 16px; padding-right: 16px; }
 }

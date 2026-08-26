@@ -14,6 +14,11 @@ JOBS_DIR = PROFILES_DIR / "jobs"
 PROFILE_CAP = 8000
 
 
+def _repo_relative(path: Path) -> str:
+    """Return a stable, platform-independent path for API responses."""
+    return path.relative_to(ROOT).as_posix()
+
+
 def _read(path: Path) -> str | None:
     if not path.is_file():
         return None
@@ -70,12 +75,12 @@ def profile_path(name: str, job: str | None = None) -> str | None:
     if slug:
         path = PROFILES_DIR / f"{slug}.md"
         if path.is_file():
-            return str(path.relative_to(ROOT))
+            return _repo_relative(path)
     jid = job_id_for_title(job)
     if jid:
         path = JOBS_DIR / f"{jid}.md"
         if path.is_file():
-            return str(path.relative_to(ROOT))
+            return _repo_relative(path)
     return None
 
 
@@ -86,7 +91,7 @@ def list_profiles() -> list[dict[str, Any]]:
             out.append({
                 "id": path.stem,
                 "kind": "bot",
-                "path": str(path.relative_to(ROOT)),
+            "path": _repo_relative(path),
                 "body": _read(path) or "",
             })
     if JOBS_DIR.is_dir():
@@ -94,7 +99,7 @@ def list_profiles() -> list[dict[str, Any]]:
             out.append({
                 "id": path.stem,
                 "kind": "job",
-                "path": str(path.relative_to(ROOT)),
+                "path": _repo_relative(path),
                 "body": _read(path) or "",
             })
     return out

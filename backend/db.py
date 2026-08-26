@@ -865,6 +865,16 @@ async def message_exists(message_id: int) -> bool:
         return await cur.fetchone() is not None
 
 
+async def message_in_channel(message_id: int, channel_id: str) -> bool:
+    """Whether a message can be used as a parent in the given channel."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM messages WHERE id = ? AND channel_id = ?",
+            (message_id, channel_id),
+        )
+        return await cur.fetchone() is not None
+
+
 async def delete_message(message_id: int) -> list[int]:
     """Delete a message and its direct replies. Returns removed ids."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1557,19 +1567,24 @@ async def list_approvals(
 
 
 async def resolve_approval(approval_id: int, status: str) -> dict[str, Any] | None:
-    row = await get_approval(approval_id)
-    if row is None:
-        return None
+    if status not in {"approved", "denied"}:
+        raise ValueError("invalid approval status")
     ts = time.time()
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE approvals SET status = ?, resolved_at = ? WHERE id = ?",
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "UPDATE approvals SET status = ?, resolved_at = ? "
+            "WHERE id = ? AND status = 'pending'",
             (status, ts, approval_id),
         )
+        if cur.rowcount == 0:
+            cur = await db.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
+            row = await cur.fetchone()
+            return None if row is None else {**dict(row), "_already_resolved": True}
+        cur = await db.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
+        row = await cur.fetchone()
         await db.commit()
-    row["status"] = status
-    row["resolved_at"] = ts
-    return row
+    return dict(row) if row else None
 
 
 # ---------------------------------------------------------- custom tools --

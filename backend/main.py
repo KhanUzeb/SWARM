@@ -15,6 +15,7 @@ import csv
 import io
 import os
 import time
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -138,8 +139,12 @@ async def on_startup() -> None:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
+    global _routine_task
     if _routine_task is not None:
         _routine_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await _routine_task
+        _routine_task = None
 
 
 # --------------------------------------------------------------- status ---
@@ -356,7 +361,9 @@ async def api_post_message(
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
     await _require_channel(channel_id, handle)
-    if payload.parent_id is not None and not await db.message_exists(payload.parent_id):
+    if payload.parent_id is not None and not await db.message_in_channel(
+        payload.parent_id, channel_id
+    ):
         raise HTTPException(404, "parent message does not exist")
 
     msg = await db.add_message(
@@ -837,7 +844,16 @@ async def api_list_approvals(
     status: str | None = "pending",
     handle: str = Depends(require_auth),
 ):
-    return await db.list_approvals(channel_id=channel_id, status=status)
+    if channel_id is not None:
+        await _require_channel(channel_id, handle)
+        return await db.list_approvals(channel_id=channel_id, status=status)
+    rows = await db.list_approvals(status=status)
+    visible: list[dict[str, Any]] = []
+    for row in rows:
+        channel = await db.get_channel(row["channel_id"])
+        if db.can_view_channel(channel, handle):
+            visible.append(row)
+    return visible
 
 
 @app.post("/api/approvals/{approval_id}/resolve")
@@ -849,9 +865,12 @@ async def api_resolve_approval(
     row = await db.get_approval(approval_id)
     if row is None:
         raise HTTPException(404, "no such approval")
+    await _require_channel(row["channel_id"], handle)
     if row["status"] != "pending":
         raise HTTPException(409, "already resolved")
     updated = await db.resolve_approval(approval_id, payload.status)
+    if updated is None or updated.get("_already_resolved"):
+        raise HTTPException(409, "already resolved")
     await db.set_agent_status(row["agent_name"], "idle")
     await hub.broadcast_all({
         "type": "bot_status", "name": row["agent_name"], "status": "idle",
@@ -1104,6 +1123,15 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
                 await websocket.send_json({"type": "error", "detail": "slow down"})
                 continue
             parent_id = data.get("parent_id")
+            if parent_id is not None:
+                try:
+                    parent_id = int(parent_id)
+                except (TypeError, ValueError):
+                    await websocket.send_json({"type": "error", "detail": "invalid parent message"})
+                    continue
+                if not await db.message_in_channel(parent_id, channel_id):
+                    await websocket.send_json({"type": "error", "detail": "parent message does not exist"})
+                    continue
             msg = await db.add_message(channel_id, handle, body, "human", parent_id)
             await hub.broadcast(channel_id, {"type": "message", "message": msg})
             await _maybe_trigger_agents(channel_id, msg)
