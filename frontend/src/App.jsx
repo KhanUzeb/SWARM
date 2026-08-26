@@ -131,6 +131,24 @@ function Toast({ toast }) {
   return <div id="toast" className={`visible${toast.error ? " error" : ""}`} role="status">{toast.msg}</div>;
 }
 
+function WorkspacePulse({ agents, approvals, messages, wsStatus, computerOpen }) {
+  const working = agents.filter((a) => a.status === "working").length;
+  const attention = approvals.filter((a) => a.status === "pending").length;
+  return (
+    <div className="context-strip" aria-label="Workspace pulse">
+      <div className="context-intro">
+        <span className="eyebrow">Workspace pulse</span>
+        <strong>{working ? `${working} crew member${working === 1 ? "" : "s"} in motion` : "Crew standing by"}</strong>
+        <span className="context-caption">Live operating picture · {wsStatus}</span>
+      </div>
+      <div className="pulse-stat"><span className="pulse-index">01</span><strong>{agents.length}</strong><span>agents online</span></div>
+      <div className={`pulse-stat${attention ? " alert" : ""}`}><span className="pulse-index">02</span><strong>{attention}</strong><span>{attention === 1 ? "approval" : "approvals"} waiting</span></div>
+      <div className="pulse-stat"><span className="pulse-index">03</span><strong>{messages}</strong><span>messages in view</span></div>
+      <div className="pulse-mode"><span className={`mode-dot ${computerOpen ? "on" : ""}`} />{computerOpen ? "Context open" : "Focus mode"}</div>
+    </div>
+  );
+}
+
 function MessageRow({ m, grouped, inThread, reactions, replyCount, onReply, onReact, onOpenThread, onToggleEmoji, onDelete, label }) {
   const counts = {};
   for (const r of reactions || []) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
@@ -1315,8 +1333,8 @@ export default function App() {
       {!user && (
         <div id="login">
           <form className="card" onSubmit={onLogin}>
-            <p className="kicker">Agents as teammates</p>
-            <h1>Same room. Same audit trail.</h1>
+            <p className="kicker">Swarm command console</p>
+            <h1>Put the crew to work.</h1>
             {loginKind === "choose" && (
               <>
                 <p>This workspace already has an admin. Sign in with the password, or join as a member with just a handle.</p>
@@ -1767,7 +1785,7 @@ export default function App() {
       <div id="sidebar-backdrop" hidden={!sidebarOpen} onClick={() => setSidebarOpen(false)} />
 
       <nav id="sidebar" aria-label="Workspace">
-        <div className="brand">swarm<small>workspace · bots as teammates</small></div>
+        <div className="brand">swarm<small>operator console · crew status live</small></div>
         <div className="sidebar-scroll">
         <form className="sidebar-search" onSubmit={runSearch}>
           <label className="sr-only" htmlFor="workspace-search">Search messages</label>
@@ -1940,6 +1958,7 @@ export default function App() {
             </details>
           </div>
         </div>
+        <WorkspacePulse agents={allAgents} approvals={approvals} messages={roots.length} wsStatus={wsStatus} computerOpen={computerOpen} />
         {mainView === "paper" ? (
           <div id="log" ref={logRef} className="paper-log" role="document">
             <PaperView title={bot ? bot.name : (current.name || current.id)} messages={[...roots, ...Object.values(messages).filter((m) => m.parent_id)]} />
