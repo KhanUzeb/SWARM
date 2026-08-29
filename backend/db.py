@@ -520,6 +520,7 @@ async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:
 
 async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         await db.executescript(SCHEMA)
         await _ensure_schema(db)
         await db.commit()
@@ -1489,7 +1490,8 @@ async def due_routines(now: float | None = None) -> list[dict[str, Any]]:
 
 
 async def mark_routine_run(
-    routine_id: int, *, status: str, excerpt: str, interval_minutes: int
+    routine_id: int, *, status: str, excerpt: str, interval_minutes: int,
+    advance_schedule: bool = True,
 ) -> None:
     ts = time.time()
     next_run = ts + interval_minutes * 60
@@ -1499,10 +1501,11 @@ async def mark_routine_run(
             "VALUES (?, ?, ?, ?, ?)",
             (routine_id, ts, ts, status, excerpt[:500]),
         )
-        await db.execute(
-            "UPDATE routines SET last_run_at = ?, next_run_at = ? WHERE id = ?",
-            (ts, next_run, routine_id),
-        )
+        if advance_schedule:
+            await db.execute(
+                "UPDATE routines SET last_run_at = ?, next_run_at = ? WHERE id = ?",
+                (ts, next_run, routine_id),
+            )
         await db.commit()
 
 
@@ -1716,6 +1719,21 @@ async def upsert_ai_provider(
         "provider_id": provider_id, "connected": True,
         "model": model, "connected_at": ts, "key_hint": hint,
     }
+
+
+async def update_ai_provider_oauth(
+    provider_id: str, secret: str, refresh_secret: str | None, expires_at: float | None, *, model: str | None = None
+) -> dict[str, Any]:
+    ts = time.time()
+    hint = f"…{secret[-4:]}" if len(secret) > 4 else "****"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO ai_providers (provider_id, secret, key_hint, model, connected_at, auth_method, refresh_secret, expires_at) VALUES (?, ?, ?, ?, ?, 'oauth', ?, ?) "
+            "ON CONFLICT(provider_id) DO UPDATE SET secret=excluded.secret, key_hint=excluded.key_hint, model=COALESCE(excluded.model, ai_providers.model), connected_at=excluded.connected_at, auth_method='oauth', refresh_secret=excluded.refresh_secret, expires_at=excluded.expires_at",
+            (provider_id, secret, hint, model, ts, refresh_secret, expires_at),
+        )
+        await db.commit()
+    return {"provider_id": provider_id, "connected": True, "model": model, "connected_at": ts, "key_hint": hint, "auth_method": "oauth", "expires_at": expires_at}
 
 
 async def list_ai_providers() -> list[dict[str, Any]]:

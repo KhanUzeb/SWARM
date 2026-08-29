@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import logging
 import os
 import time
 from contextlib import suppress
@@ -25,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, db
+from . import agent, db, v2
 from .ai_support import store as ai_store
 from .ai_support.catalog import list_all_models, list_provider_models
 from .ai_support.providers import get_provider, list_providers, providers_by_priority
@@ -36,7 +37,7 @@ from .models import (
     ApprovalResolve, ChannelCreate, ComposioToolkitConnect, CustomToolCreate,
     CustomToolPatch, DirectMessageCreate, MessageCreate, ReactionCreate,
     RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate, SkillPatch,
-    SystemRootSet, TeamCreate, TeamPatch,
+    SystemRootSet, TeamCreate, TeamPatch, RunCreate, WorkflowCreate, WorkflowPatch,
 )
 from .security import (
     allowed_origins, install_api_guard, is_loopback, optional_auth, parse_token,
@@ -61,6 +62,9 @@ DIST_DIR = FRONTEND_DIR / "dist"  # Vite production output
 RATE_LIMIT_SECONDS = 0.5
 HISTORY_LIMIT_MAX = 100
 _last_write: dict[str, float] = {}
+_background_tasks: set[asyncio.Task] = set()
+_active_routines: set[int] = set()
+_logger = logging.getLogger("swarm.backend")
 
 
 def _rate_limited(handle: str) -> bool:
@@ -131,10 +135,13 @@ HANDOFF_DEPTH = 2
 async def on_startup() -> None:
     global _routine_task
     await db.init_db()
+    await v2.init_db()
+    for recoverable in await v2.recoverable_runs():
+        v2.start_run(recoverable["id"], recoverable["owner"])
     from .tools import system as system_mod
     await system_mod.hydrate_root()
     await reload_registry()
-    _routine_task = asyncio.create_task(_routine_loop())
+    _routine_task = _track_task(_routine_loop(), "routine scheduler")
 
 
 @app.on_event("shutdown")
@@ -145,9 +152,249 @@ async def on_shutdown() -> None:
         with suppress(asyncio.CancelledError):
             await _routine_task
         _routine_task = None
+    pending = [task for task in _background_tasks if not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    _background_tasks.clear()
+    await v2.shutdown()
+
+
+def _track_task(coro: Any, label: str) -> asyncio.Task:
+    task = asyncio.create_task(coro, name=label)
+    _background_tasks.add(task)
+
+    def finished(done: asyncio.Task) -> None:
+        _background_tasks.discard(done)
+        if done.cancelled():
+            return
+        exc = done.exception()
+        if exc is not None:
+            _logger.error(
+                "background task failed: %s",
+                label,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+
+    task.add_done_callback(finished)
+    return task
 
 
 # --------------------------------------------------------------- status ---
+
+# --------------------------------------------------------------- v2 workflows/runs ---
+
+@app.get("/api/v2/workflows")
+async def api_v2_workflows(handle: str = Depends(require_auth)):
+    return await v2.list_workflows(handle)
+
+
+@app.get("/api/v2/providers")
+async def api_v2_providers(handle: str = Depends(require_auth)):
+    catalog = list_providers()
+    connections = {c["provider_id"]: c for c in await ai_store.status()}
+    for provider in catalog:
+        spec = get_provider(provider["id"]) or {}
+        provider["connected"] = provider["id"] in connections or _key_set(spec.get("env_fallback"))
+        provider["via"] = "stored" if provider["id"] in connections else ("env" if provider["connected"] else None)
+        provider["capabilities"] = {"streaming": True, "tool_calling": spec.get("kind") == "openai_compatible", "vision": False}
+        provider["oauth_configured"] = bool(spec.get("oauth_authorize_url") and os.environ.get(f"SWARM_{provider['id'].upper()}_OAUTH_CLIENT_ID"))
+    return catalog
+
+
+@app.get("/api/v2/providers/{provider_id}/oauth/start")
+async def api_v2_oauth_start(provider_id: str, handle: str = Depends(require_auth)):
+    spec = get_provider(provider_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="provider not found")
+    try:
+        return {"provider_id": provider_id, "authorization_url": v2.oauth_start(provider_id, handle, spec)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/v2/oauth/callback")
+async def api_v2_oauth_callback(code: str, state: str):
+    try:
+        return await v2.oauth_callback(state, code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("provider OAuth callback failed: %s", exc)
+        raise HTTPException(status_code=502, detail="provider OAuth exchange failed")
+
+
+@app.get("/api/v2/providers/{provider_id}/models")
+async def api_v2_provider_models(provider_id: str, handle: str = Depends(require_auth)):
+    try:
+        return await list_provider_models(provider_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="provider not found")
+
+
+@app.get("/api/v2/model-routing/validate")
+async def api_v2_validate_model(provider_id: str, model: str, requires_tools: bool = False, handle: str = Depends(require_auth)):
+    spec = get_provider(provider_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="provider not found")
+    connected = await ai_store.resolve_key(provider_id, env_fallback=spec.get("env_fallback"))
+    supported = not requires_tools or spec.get("kind") == "openai_compatible"
+    return {"provider_id": provider_id, "model": model, "connected": bool(connected), "supported": supported, "reason": None if supported else "This provider adapter does not support tool calling yet."}
+
+
+@app.post("/api/v2/workflows")
+async def api_v2_create_workflow(payload: WorkflowCreate, handle: str = Depends(require_auth)):
+    errors = v2.validate_graph(payload.graph)
+    if errors:
+        raise HTTPException(status_code=422, detail={"message": "invalid workflow graph", "errors": errors})
+    return await v2.create_workflow(handle, payload.name, payload.description, payload.graph)
+
+
+@app.get("/api/v2/workflows/{workflow_id}")
+async def api_v2_get_workflow(workflow_id: str, handle: str = Depends(require_auth)):
+    row = await v2.get_workflow(workflow_id, handle)
+    if not row:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return row
+
+
+@app.patch("/api/v2/workflows/{workflow_id}")
+async def api_v2_patch_workflow(workflow_id: str, payload: WorkflowPatch, handle: str = Depends(require_auth)):
+    if payload.graph is not None:
+        errors = v2.validate_graph(payload.graph)
+        if errors:
+            raise HTTPException(status_code=422, detail={"message": "invalid workflow graph", "errors": errors})
+    row = await v2.update_workflow(workflow_id, handle, payload.model_dump(exclude_unset=True))
+    if not row:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return row
+
+
+@app.get("/api/v2/runs")
+async def api_v2_runs(limit: int = Query(default=50, ge=1, le=100), handle: str = Depends(require_auth)):
+    return await v2.list_runs(handle, limit)
+
+
+@app.post("/api/v2/runs")
+async def api_v2_create_run(payload: RunCreate, handle: str = Depends(require_auth)):
+    if payload.workflow_id and not await v2.get_workflow(payload.workflow_id, handle):
+        raise HTTPException(status_code=404, detail="workflow not found")
+    run = await v2.create_run(handle, payload.objective, payload.workflow_id, payload.policy)
+    v2.start_run(run["id"], handle)
+    return run
+
+
+@app.get("/api/v2/runs/{run_id}")
+async def api_v2_get_run(run_id: str, handle: str = Depends(require_auth)):
+    row = await v2.get_run(run_id, handle)
+    if not row:
+        raise HTTPException(status_code=404, detail="run not found")
+    return row
+
+
+@app.get("/api/v2/runs/{run_id}/events")
+async def api_v2_run_events(run_id: str, after: int = Query(default=0, ge=0), handle: str = Depends(require_auth)):
+    if not await v2.get_run(run_id, handle):
+        raise HTTPException(status_code=404, detail="run not found")
+    return await v2.list_events(run_id, handle, after)
+
+
+@app.get("/api/v2/runs/{run_id}/report")
+async def api_v2_run_report(run_id: str, handle: str = Depends(require_auth)):
+    run = await v2.get_run(run_id, handle)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    if not run.get("report"):
+        raise HTTPException(status_code=409, detail="run report is not ready")
+    return {"run_id": run_id, "status": run["status"], "report": run["report"]}
+
+
+@app.get("/api/v2/runs/{run_id}/artifacts")
+async def api_v2_run_artifacts(run_id: str, handle: str = Depends(require_auth)):
+    if not await v2.get_run(run_id, handle):
+        raise HTTPException(status_code=404, detail="run not found")
+    rows = await v2.list_artifacts(run_id, handle)
+    for row in rows:
+        row["download_url"] = f"/api/v2/artifacts/{row['id']}"
+        row.pop("uri", None)
+    return rows
+
+
+@app.get("/api/v2/artifacts/{artifact_id}")
+async def api_v2_download_artifact(artifact_id: str, handle: str = Depends(require_auth)):
+    row = await v2.get_artifact(artifact_id, handle)
+    if not row:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    target = Path(str(row["uri"])).resolve()
+    from .agent import SANDBOX_DIR
+    root = Path(SANDBOX_DIR).resolve()
+    if root not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="artifact file not found")
+    return FileResponse(target, media_type=row.get("mime_type") or "application/octet-stream", filename=row.get("name") or target.name)
+
+
+@app.post("/api/v2/runs/{run_id}/start")
+async def api_v2_start_run(run_id: str, handle: str = Depends(require_auth)):
+    run = await v2.get_run(run_id, handle)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    v2.start_run(run_id, handle)
+    return await v2.get_run(run_id, handle)
+
+
+@app.post("/api/v2/runs/{run_id}/cancel")
+async def api_v2_cancel_run(run_id: str, handle: str = Depends(require_auth)):
+    if not await v2.cancel_run(run_id, handle):
+        raise HTTPException(status_code=404, detail="run is not active")
+    return await v2.get_run(run_id, handle)
+
+
+@app.post("/api/v2/runs/{run_id}/approvals/{step_id}")
+async def api_v2_resolve_run_approval(run_id: str, step_id: str, payload: ApprovalResolve, handle: str = Depends(require_auth)):
+    run = await v2.get_run(run_id, handle)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run["status"] != "waiting_for_approval":
+        raise HTTPException(status_code=409, detail="run is not waiting for approval")
+    await v2.append_event(run_id, "approval_resolved", {"decision": payload.status}, step_id)
+    if payload.status == "approved":
+        v2.start_run(run_id, handle)
+    else:
+        await v2.update_run(run_id, handle, "cancelled")
+        await v2.append_event(run_id, "run_denied", {"step_id": step_id})
+    return await v2.get_run(run_id, handle)
+
+
+@app.websocket("/api/v2/ws/runs/{run_id}")
+async def ws_v2_run(websocket: WebSocket, run_id: str):
+    await websocket.accept()
+    try:
+        first = await websocket.receive_json()
+        parsed = parse_token(first.get("token", "")) if isinstance(first, dict) else None
+        if parsed is None or not await db.verify_token(parsed[0], parsed[1]):
+            await websocket.close(code=4001)
+            return
+        owner = parsed[0]
+        if not await v2.get_run(run_id, owner):
+            await websocket.close(code=4004)
+            return
+        cursor = int(first.get("after", 0) or 0)
+        while True:
+            events = await v2.list_events(run_id, owner, cursor)
+            for event in events:
+                await websocket.send_json(event)
+                cursor = max(cursor, int(event["seq"]))
+            run = await v2.get_run(run_id, owner)
+            if run and run["status"] in {"completed", "failed", "cancelled"}:
+                await websocket.send_json({"type": "run_terminal", "status": run["status"], "run_id": run_id})
+                break
+            await asyncio.sleep(0.75)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        with suppress(Exception):
+            await websocket.close(code=1011)
 
 def _key_set(name: str) -> bool:
     return bool((os.environ.get(name) or "").strip().strip('"').strip("'"))
@@ -827,7 +1074,7 @@ async def api_run_routine(routine_id: int, handle: str = Depends(require_auth)):
     row = await db.get_routine(routine_id)
     if row is None:
         raise HTTPException(404, "no such routine")
-    asyncio.create_task(_execute_routine(row, test_run=True))
+    _track_task(_execute_routine(row, test_run=True), f"routine {routine_id} manual run")
     return {"ok": True, "status": "started"}
 
 
@@ -1183,7 +1430,7 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
         mentioned = mentioned + [a for a in team_bots if a["name"] not in {x["name"] for x in mentioned}]
         if not mentioned:
             return
-        asyncio.create_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1))
+        _track_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1), "agent handoff")
         return
 
     if kind in ("human", "system") and ch_kind == "group" and not mentioned and not mentioned_teams:
@@ -1223,7 +1470,7 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
         # 1:1 always hears you without an @mention. Group members hear
         # the same way unless the message @mentions specific bots.
         # @team-id expands to that team's bots in roster order.
-        asyncio.create_task(_run_agents_in_order(channel_id, to_run, depth=depth))
+        _track_task(_run_agents_in_order(channel_id, to_run, depth=depth), "agent reply batch")
 
 
 async def _run_agents_in_order(channel_id: str, agents: list[dict], *, depth: int = 0) -> None:
@@ -1269,57 +1516,86 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dic
     async def on_token(delta: str) -> None:
         await hub.broadcast(channel_id, {"type": "agent_token", "author": name, "delta": delta})
 
-    result = await agent.generate_reply(
-        agent_row, channel_id, history,
-        on_tools_ready=persist_tools,
-        on_stream_start=on_stream_start,
-        on_token=on_token,
-    )
-    await persist_tools(result["tool_events"])
+    try:
+        result = await agent.generate_reply(
+            agent_row, channel_id, history,
+            on_tools_ready=persist_tools,
+            on_stream_start=on_stream_start,
+            on_token=on_token,
+        )
+        await persist_tools(result["tool_events"])
 
-    msg = await db.add_message(channel_id, name, result["reply"], "agent")
-    await hub.broadcast(channel_id, {"type": "message", "message": msg})
-    asked = any(e["tool"] == "request_approval" for e in result["tool_events"])
-    await _set_status(name, "needs_approval" if asked else "idle")
-    if depth < HANDOFF_DEPTH:
-        await _maybe_trigger_agents(channel_id, msg, depth=depth + 1)
-    return result
+        msg = await db.add_message(channel_id, name, result["reply"], "agent")
+        await hub.broadcast(channel_id, {"type": "message", "message": msg})
+        asked = any(e["tool"] == "request_approval" for e in result["tool_events"])
+        await _set_status(name, "needs_approval" if asked else "idle")
+        if depth < HANDOFF_DEPTH:
+            await _maybe_trigger_agents(channel_id, msg, depth=depth + 1)
+        return result
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "agent run failed for %s",
+            name,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        detail = agent.classify_error(exc)
+        try:
+            failure = await db.add_message(channel_id, name, detail, "agent")
+            await hub.broadcast(channel_id, {"type": "message", "message": failure})
+        finally:
+            await _set_status(name, "idle")
+        return {"reply": detail, "tool_events": [], "usage": {}}
 
 
 async def _execute_routine(row: dict, *, test_run: bool = False) -> None:
-    agent_row = await db.fetch_agent(row["agent_name"])
-    if agent_row is None or agent_row.get("archived"):
-        await db.mark_routine_run(
-            row["id"], status="failed", excerpt="bot missing",
-            interval_minutes=row["interval_minutes"],
-        )
-        return
-    channel_id = db.dm_channel_id(row["agent_name"])
-    if not await db.channel_exists(channel_id):
-        await db.mark_routine_run(
-            row["id"], status="failed", excerpt="no 1:1 channel",
-            interval_minutes=row["interval_minutes"],
-        )
-        return
-    prefix = "[routine-test:" if test_run else "[routine:"
-    body = (
-        f"{prefix}{row['title']}] {row['instructions']}\n"
-        "Do this job now. Stop for approval before any external send/publish/delete."
-    )
-    msg = await db.add_message(channel_id, "routine", body, "system")
-    await hub.broadcast(channel_id, {"type": "message", "message": msg})
     try:
+        routine_id = int(row["id"])
+        if routine_id in _active_routines:
+            _logger.info("skipping already active routine %s", routine_id)
+            return
+        _active_routines.add(routine_id)
+        agent_row = await db.fetch_agent(row["agent_name"])
+        if agent_row is None or agent_row.get("archived"):
+            raise RuntimeError("bot missing")
+        channel_id = db.dm_channel_id(row["agent_name"])
+        if not await db.channel_exists(channel_id):
+            raise RuntimeError("no 1:1 channel")
+        prefix = "[routine-test:" if test_run else "[routine:"
+        body = (
+            f"{prefix}{row['title']}] {row['instructions']}\n"
+            "Do this job now. Stop for approval before any external send/publish/delete."
+        )
+        msg = await db.add_message(channel_id, "routine", body, "system")
+        await hub.broadcast(channel_id, {"type": "message", "message": msg})
         result = await _run_agent(channel_id, agent_row)
         excerpt = (result.get("reply") or "")[:240]
         await db.mark_routine_run(
             row["id"], status="ok", excerpt=excerpt,
             interval_minutes=row["interval_minutes"],
+            advance_schedule=not test_run,
         )
     except Exception as exc:  # noqa: BLE001
-        await db.mark_routine_run(
-            row["id"], status="failed", excerpt=str(exc)[:240],
-            interval_minutes=row["interval_minutes"],
+        _logger.error(
+            "routine %s failed",
+            row.get("id"),
+            exc_info=(type(exc), exc, exc.__traceback__),
         )
+        try:
+            await db.mark_routine_run(
+                row["id"], status="failed", excerpt=str(exc)[:240],
+                interval_minutes=row["interval_minutes"],
+                advance_schedule=not test_run,
+            )
+        except Exception as persist_exc:  # noqa: BLE001
+            _logger.error(
+                "could not persist routine failure %s",
+                row.get("id"),
+                exc_info=(type(persist_exc), persist_exc, persist_exc.__traceback__),
+            )
+    finally:
+        _active_routines.discard(int(row["id"]))
 
 
 async def run_due_routines() -> int:

@@ -123,7 +123,7 @@ class TeamPatch(BaseModel):
 class MessageCreate(BaseModel):
     author: str = Field(min_length=1, max_length=64)
     body: str = Field(min_length=1, max_length=8000)
-    author_kind: str = "human"
+    author_kind: str = Field(default="human", pattern=r"^human$")
     parent_id: int | None = None
 
 
@@ -269,3 +269,21 @@ class ApprovalResolve(BaseModel):
 
 class ComposioToolkitConnect(BaseModel):
     toolkit: str = Field(min_length=1, max_length=64)
+
+
+class WorkflowCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    graph: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    graph: dict[str, Any] | None = None
+
+
+class RunCreate(BaseModel):
+    objective: str = Field(min_length=1, max_length=4000)
+    workflow_id: str | None = Field(default=None, max_length=64)
+    policy: str = Field(default="supervised", pattern=r"^(supervised|autonomous|checkpointed)$")
