@@ -1,207 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import katex from "katex";
-import ApiConfigStep from "./ai-support/ApiConfigStep.jsx";
-import ProviderPanel from "./ai-support/ProviderPanel.jsx";
-import ToolsPanel from "./ai-support/ToolsPanel.jsx";
-import BrowserPanel from "./ai-support/BrowserPanel.jsx";
-import AppsPanel from "./ai-support/AppsPanel.jsx";
-import SystemPanel from "./ai-support/SystemPanel.jsx";
-import ModelPicker from "./ai-support/ModelPicker.jsx";
+import "./components.css";
 import {
-  ALL_TOOLS, CACHE_TTL, DEFAULT_MODEL, EMOJI, HISTORY_LIMIT, api, apiJson, authHeaders, botLabel, bustCache,
-  escapeHtml, extractPaper, fmtBytes, fmtTime, formatInline, groupedWith, initials, insertMention,
-  mentionQuery, slugFromName, statusLabel, tokenizeBody,
-} from "./lib.js";
+  api, apiJson, authHeaders, CACHE_TTL, HISTORY_LIMIT, DEFAULT_MODEL, ALL_TOOLS,
+  escapeHtml, fmtTime, fmtBytes, initials, botLabel, slugFromName, statusLabel, renderMath,
+  Avatar, Badge, Button, Input, Textarea, Card, Dropdown, Tooltip, ToastContainer, Modal, Skeleton, Spinner, EmptyState, ScrollArea, Divider,
+  RichBody, CodeBlock,
+} from "./ui.jsx";
+import { ApprovalCard, AgentMessage, TaskRow, PixelLoader } from "./beautifului.jsx";
+import { Sidebar } from "./components/Sidebar.jsx";
+import { TopBar } from "./components/TopBar.jsx";
+import { MessageList } from "./components/MessageList.jsx";
+import { Composer } from "./components/Composer.jsx";
+import { ComputerPanel } from "./components/ComputerPanel.jsx";
+import { CommandPalette } from "./components/CommandPalette.jsx";
+import { LoginScreen } from "./components/LoginScreen.jsx";
+import { CommandCenter, RunMonitor } from "./components/CommandCenter.jsx";
 
 const PANEL_GROUPS = [
-  {
-    id: "places",
-    label: "Places",
-    tabs: [
-      { id: "files", label: "Sandbox" },
-      { id: "system", label: "System" },
-      { id: "browser", label: "Browser" },
-    ],
-  },
-  {
-    id: "connect",
-    label: "Connect",
-    tabs: [
-      { id: "ai", label: "AI" },
-      { id: "apps", label: "Apps" },
-      { id: "tools", label: "Tools" },
-      { id: "plugins", label: "Plugins" },
-    ],
-  },
-  {
-    id: "automate",
-    label: "Automate",
-    tabs: [
-      { id: "skills", label: "Skills" },
-      { id: "routines", label: "Routines" },
-      { id: "approvals", label: "Approvals" },
-    ],
-  },
+  { id: "places", label: "Places", tabs: [
+    { id: "files", label: "Sandbox" }, { id: "system", label: "System" }, { id: "browser", label: "Browser" },
+  ]},
+  { id: "connect", label: "Connect", tabs: [
+    { id: "ai", label: "AI" }, { id: "apps", label: "Apps" }, { id: "tools", label: "Tools" }, { id: "plugins", label: "Plugins" },
+  ]},
+  { id: "automate", label: "Automate", tabs: [
+    { id: "skills", label: "Skills" }, { id: "routines", label: "Routines" }, { id: "approvals", label: "Approvals" },
+  ]},
 ];
-
-function renderMath(tex, display) {
-  try {
-    return katex.renderToString(tex, { throwOnError: false, displayMode: !!display });
-  } catch {
-    return escapeHtml(tex);
-  }
-}
-
-function CodeBlock({ lang, text }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="code-block">
-      <div className="code-head">
-        <span>{lang || "text"}</span>
-        <button type="button" className="btn ghost" onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1400);
-          } catch { /* ignore */ }
-        }}>{copied ? "Copied" : "Copy"}</button>
-      </div>
-      <pre><code>{text}</code></pre>
-    </div>
-  );
-}
-
-function RichBody({ body }) {
-  const parts = useMemo(() => tokenizeBody(body), [body]);
-  return (
-    <div className="body rich">
-      {parts.map((part, i) => {
-        if (part.type === "code") return <CodeBlock key={i} lang={part.lang} text={part.text} />;
-        if (part.type === "math") {
-          return (
-            <span
-              key={i}
-              className={part.display ? "math-display" : "math-inline"}
-              dangerouslySetInnerHTML={{ __html: renderMath(part.tex, part.display) }}
-            />
-          );
-        }
-        return <span key={i} dangerouslySetInnerHTML={{ __html: formatInline(part.text) }} />;
-      })}
-    </div>
-  );
-}
-
-function PaperView({ title, messages }) {
-  const paper = useMemo(() => extractPaper(messages), [messages]);
-  return (
-    <article className="paper-doc" aria-label="LaTeX paper">
-      <p className="paper-kicker">swarm preprint</p>
-      <h1>{title}</h1>
-      <p className="paper-meta">A compiled view of this channel · talk stays in Talk</p>
-
-      <section>
-        <h2><span className="tex-cmd">{"\\subsection*{Code}"}</span> Code</h2>
-        {!paper.code.length && <p className="paper-empty">No listings yet. Ask @coder — they write fenced programs into this subsection.</p>}
-        {paper.code.map((block, i) => (
-          <figure key={`${block.id}-${i}`} className="listing">
-            <figcaption>Listing {i + 1} · {block.lang} · {block.author}</figcaption>
-            <CodeBlock lang={block.lang} text={block.text} />
-          </figure>
-        ))}
-      </section>
-
-      <section>
-        <h2><span className="tex-cmd">{"\\subsection*{Mathematics}"}</span> Mathematics</h2>
-        {!paper.math.length && <p className="paper-empty">No TeX yet. Inline $...$ or display $$...$$ from @coder lands here.</p>}
-        {paper.math.map((m, i) => (
-          <div
-            key={`${m.id}-${i}`}
-            className="math-display paper-math"
-            dangerouslySetInnerHTML={{ __html: renderMath(m.tex, true) }}
-          />
-        ))}
-      </section>
-    </article>
-  );
-}
-
-function Toast({ toast }) {
-  if (!toast) return null;
-  return <div id="toast" className={`visible${toast.error ? " error" : ""}`} role="status">{toast.msg}</div>;
-}
-
-function WorkspacePulse({ agents, approvals, messages, wsStatus, computerOpen }) {
-  const working = agents.filter((a) => a.status === "working").length;
-  const attention = approvals.filter((a) => a.status === "pending").length;
-  return (
-    <div className="context-strip" aria-label="Workspace pulse">
-      <div className="context-intro">
-        <span className="eyebrow">Workspace pulse</span>
-        <strong>{working ? `${working} crew member${working === 1 ? "" : "s"} in motion` : "Crew standing by"}</strong>
-        <span className="context-caption">Live operating picture · {wsStatus}</span>
-      </div>
-      <div className="pulse-stat"><span className="pulse-index">01</span><strong>{agents.length}</strong><span>agents online</span></div>
-      <div className={`pulse-stat${attention ? " alert" : ""}`}><span className="pulse-index">02</span><strong>{attention}</strong><span>{attention === 1 ? "approval" : "approvals"} waiting</span></div>
-      <div className="pulse-stat"><span className="pulse-index">03</span><strong>{messages}</strong><span>messages in view</span></div>
-      <div className="pulse-mode"><span className={`mode-dot ${computerOpen ? "on" : ""}`} />{computerOpen ? "Context open" : "Focus mode"}</div>
-    </div>
-  );
-}
-
-function MessageRow({ m, grouped, inThread, reactions, replyCount, onReply, onReact, onOpenThread, onToggleEmoji, onDelete, label }) {
-  const counts = {};
-  for (const r of reactions || []) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
-  return (
-    <div className={`row ${m.author_kind || "human"}${grouped ? " grouped" : ""}${m.streaming ? " streaming" : ""}`}>
-      <div className="row-main">
-        <div className="avatar">{initials(label || m.author)}</div>
-        <div className="content">
-          <div className="meta">
-            <span className="who">{label || m.author}</span>
-            {m.author_kind === "agent" && <span className="badge">{m.author === "coder" ? "code" : "agent"}</span>}
-            <span className="ts">{fmtTime(m.created_at)}</span>
-          </div>
-          <RichBody body={m.body || ""} />
-        </div>
-      </div>
-      {m.author_kind !== "system" && !m.streaming && m.id != null && (
-        <div className="row-actions">
-          <button type="button" onClick={() => onReply(m.parent_id || m.id)}>Reply</button>
-          <button type="button" onClick={(ev) => onToggleEmoji(m.id, ev.currentTarget)}>React</button>
-          {onDelete && <button type="button" className="danger" onClick={() => onDelete(m)}>Delete</button>}
-        </div>
-      )}
-      {!m.streaming && m.id != null && (
-        <div className="reactions">
-          {Object.entries(counts).map(([emoji, count]) => (
-            <button key={emoji} type="button" className="reaction-chip" onClick={() => onReact(m.id, emoji)}>
-              {emoji} {count}
-            </button>
-          ))}
-        </div>
-      )}
-      {!inThread && !m.parent_id && !m.streaming && replyCount > 0 && (
-        <button type="button" className="thread-count" onClick={() => onOpenThread(m.id)}>
-          {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function ApprovalCard({ a, onResolve }) {
-  return (
-    <div className="approval-card">
-      <div className="who">{a.agent_name} needs approval</div>
-      <p>{a.detail ? `${a.action} — ${a.detail}` : a.action}</p>
-      <div className="actions">
-        <button type="button" className="btn primary" onClick={() => onResolve(a.id, "approved")}>Allow once</button>
-        <button type="button" className="btn" onClick={() => onResolve(a.id, "denied")}>Deny</button>
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -210,67 +35,32 @@ export default function App() {
   const [channels, setChannels] = useState([]);
   const [agents, setAgents] = useState([]);
   const [allAgents, setAllAgents] = useState([]);
-  const [jobs, setJobs] = useState([]);
-  const [skills, setSkills] = useState([]);
-  const [routines, setRoutines] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [computer, setComputer] = useState(null);
-  const [filePreview, setFilePreview] = useState("");
-  const [panelTab, setPanelTab] = useState("files");
   const [messages, setMessages] = useState({});
   const [order, setOrder] = useState([]);
   const [replyCounts, setReplyCounts] = useState({});
   const [reactions, setReactions] = useState({});
-  const [streams, setStreams] = useState({});
   const [hasMore, setHasMore] = useState(false);
   const [loadingLog, setLoadingLog] = useState(false);
-  const [logError, setLogError] = useState("");
   const [threadId, setThreadId] = useState(null);
   const [threadParent, setThreadParent] = useState(null);
   const [threadReplies, setThreadReplies] = useState([]);
   const [wsStatus, setWsStatus] = useState("offline");
-  const [agentsReady, setAgentsReady] = useState(false);
   const [toast, setToast] = useState(null);
   const [loginErr, setLoginErr] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
-  const [onboarding, setOnboarding] = useState(null);
   const [demoMode, setDemoMode] = useState(false);
-  const [toolCatalog, setToolCatalog] = useState([]);
-  const [pluginList, setPluginList] = useState([]);
-  const [handleDraft, setHandleDraft] = useState(() => localStorage.getItem("swarm_last_handle") || "");
   const [computerOpen, setComputerOpen] = useState(() => localStorage.getItem("swarm_computer") !== "0");
-  const [showTools, setShowTools] = useState(() => localStorage.getItem("swarm_show_tools") === "1");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [channelModal, setChannelModal] = useState(null);
-  const [groupMembers, setGroupMembers] = useState([]);
-  const [handleTouched, setHandleTouched] = useState(false);
-  const [agentModal, setAgentModal] = useState(null);
-  const [mainView, setMainView] = useState("talk");
-  const [mention, setMention] = useState({ open: false, index: 0, items: [] });
-  const [emoji, setEmoji] = useState(null);
-  const [draft, setDraft] = useState("");
-  const [threadDraft, setThreadDraft] = useState("");
+  const [panelTab, setPanelTab] = useState("files");
+  const [mainView, setMainView] = useState("dashboard");
+  const [cmdOpen, setCmdOpen] = useState(false);
   const [typing, setTyping] = useState("");
-  const [channelErr, setChannelErr] = useState("");
-  const [agentErr, setAgentErr] = useState("");
-  const [agentForm, setAgentForm] = useState({
-    name: "", display_name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [],
-  });
   const [meRole, setMeRole] = useState("member");
-  const [people, setPeople] = useState([]);
-  const [teams, setTeams] = useState([]);
-  const [peopleModal, setPeopleModal] = useState(false);
-  const [teamModal, setTeamModal] = useState(false);
-  const [teamForm, setTeamForm] = useState({ id: "", name: "", description: "", members: [] });
-  const [teamErr, setTeamErr] = useState("");
-  const [searchQ, setSearchQ] = useState("");
-  const [searchHits, setSearchHits] = useState(null);
-  const [searchBusy, setSearchBusy] = useState(false);
-  const [loginKind, setLoginKind] = useState("setup");
-  const [passwordDraft, setPasswordDraft] = useState("");
-  const [passwordConfirm, setPasswordConfirm] = useState("");
-  const [admins, setAdmins] = useState([]);
-  const isAdmin = meRole === "admin";
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [selectedRun, setSelectedRun] = useState(null);
+  const [quickAction, setQuickAction] = useState(null);
 
   const wsRef = useRef(null);
   const wsGen = useRef(0);
@@ -278,42 +68,27 @@ export default function App() {
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef(null);
   const intentionalClose = useRef(false);
-  const logRef = useRef(null);
-  const threadLogRef = useRef(null);
-  const inputRef = useRef(null);
-  const threadInputRef = useRef(null);
-  const toastTimer = useRef(null);
-  const typingTimer = useRef(null);
-  const channelRef = useRef(channel);
   const tokenRef = useRef(token);
-  channelRef.current = channel;
-  tokenRef.current = token;
+  const channelRef = useRef(channel);
+  tokenRef.current = token; channelRef.current = channel;
 
-  const current = channels.find((c) => c.id === channel) || { id: channel, name: channel, topic: "" };
-  const bot = allAgents.find((a) => a.dm_channel_id === channel);
-  const rooms = channels.filter((c) => c.kind !== "dm" && c.kind !== "group" && c.kind !== "people");
-  const groups = channels.filter((c) => c.kind === "group");
-  const peopleDms = channels.filter((c) => c.kind === "people");
-  const group = current.kind === "group" ? current : null;
-  const peopleChat = current.kind === "people" ? current : null;
-  const roots = order.map((id) => messages[id]).filter(Boolean);
-  const pendingHere = approvals.filter((a) => a.status === "pending" && a.channel_id === channel);
-  const pendingAll = approvals.filter((a) => a.status === "pending");
-  const labelFor = (name) => {
-    const a = allAgents.find((x) => x.name === name);
-    return a ? botLabel(a) : name;
-  };
+  const current = channels.find(c => c.id === channel) || { id: channel, name: channel, topic: "" };
+  const bot = allAgents.find(a => a.dm_channel_id === channel);
+  const rooms = channels.filter(c => c.kind !== "dm" && c.kind !== "group" && c.kind !== "people");
+  const groups = channels.filter(c => c.kind === "group");
+  const peopleDms = channels.filter(c => c.kind === "people");
+  const roots = order.map(id => messages[id]).filter(Boolean);
+  const pendingHere = approvals.filter(a => a.status === "pending" && a.channel_id === channel);
 
-  const flash = useCallback((msg, error = false) => {
-    setToast({ msg, error });
-    clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 3200);
+  const flash = useCallback((msg, type = "info", title) => {
+    setToast({ msg, type, title });
+    setTimeout(() => setToast(null), 3500);
   }, []);
 
   const remember = useCallback((m) => {
     if (m.id && m.id > lastSeenId.current) lastSeenId.current = m.id;
-    setMessages((prev) => ({ ...prev, [m.id]: m }));
-    setReactions((prev) => {
+    setMessages(prev => ({ ...prev, [m.id]: m }));
+    setReactions(prev => {
       if (m.reactions) return { ...prev, [m.id]: m.reactions.slice() };
       if (prev[m.id]) return prev;
       return { ...prev, [m.id]: [] };
@@ -321,33 +96,41 @@ export default function App() {
   }, []);
 
   const ingestLive = useCallback((raw) => {
+    if (raw?.type === "message_deleted") {
+      const deleted = new Set(raw.ids || [raw.message_id]);
+      setMessages(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => !deleted.has(Number(id)))));
+      setOrder(prev => prev.filter(id => !deleted.has(id)));
+      setReplyCounts(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => !deleted.has(Number(id)))));
+      return;
+    }
+    if (raw?.type === "reaction") {
+      setReactions(prev => ({
+        ...prev,
+        [raw.message_id]: [...(prev[raw.message_id] || []), { author: raw.author, emoji: raw.emoji }],
+      }));
+      return;
+    }
     const m = { reactions: [], ...raw };
-    setMessages((prev) => {
+    setMessages(prev => {
       if (prev[m.id]) return prev;
       return { ...prev, [m.id]: m };
     });
     if (m.id && m.id > lastSeenId.current) lastSeenId.current = m.id;
-    setReactions((prev) => (prev[m.id] ? prev : { ...prev, [m.id]: m.reactions || [] }));
+    setReactions(prev => (prev[m.id] ? prev : { ...prev, [m.id]: m.reactions || [] }));
     if (m.parent_id) {
-      setReplyCounts((prev) => ({ ...prev, [m.parent_id]: (prev[m.parent_id] || 0) + 1 }));
-      setThreadId((tid) => {
-        if (tid === m.parent_id) setThreadReplies((list) => list.some((x) => x.id === m.id) ? list : [...list, m]);
+      setReplyCounts(prev => ({ ...prev, [m.parent_id]: (prev[m.parent_id] || 0) + 1 }));
+      setThreadId(tid => {
+        if (tid === m.parent_id) setThreadReplies(list => list.some(x => x.id === m.id) ? list : [...list, m]);
         return tid;
       });
       return;
     }
-    if (m.author_kind === "agent") {
-      setStreams((prev) => {
-        const next = { ...prev };
-        delete next[m.author];
-        return next;
-      });
-      setTyping("");
-    }
-    setOrder((prev) => (prev.includes(m.id) ? prev : [...prev, m.id]));
+    if (m.author_kind === "agent") { setTyping(""); }
+    setOrder(prev => (prev.includes(m.id) ? prev : [...prev, m.id]));
     if (m.author_kind === "system") loadComputer();
   }, []);
 
+  // ── Data Loaders ──
   async function loadChannels() {
     if (!tokenRef.current) return [];
     const res = await apiJson("/api/channels", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
@@ -361,9 +144,7 @@ export default function App() {
     try {
       const res = await apiJson("/api/agents", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
       setAllAgents(res.ok ? res.data : []);
-    } catch {
-      setAllAgents([]);
-    }
+    } catch { setAllAgents([]); }
   }
 
   async function loadAgents(channelId) {
@@ -372,68 +153,17 @@ export default function App() {
       const path = `/api/agents?channel_id=${encodeURIComponent(channelId)}`;
       const res = await apiJson(path, { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
       setAgents(res.ok ? res.data : []);
-    } catch {
-      setAgents([]);
-    }
+    } catch { setAgents([]); }
   }
 
   async function loadGroqStatus() {
     try {
       const pub = await apiJson("/api/status", { cacheTtl: CACHE_TTL.status });
-      const authed = tokenRef.current
-        ? await apiJson("/api/status", { token: tokenRef.current, cacheTtl: CACHE_TTL.status })
-        : pub;
+      const authed = tokenRef.current ? await apiJson("/api/status", { token: tokenRef.current, cacheTtl: CACHE_TTL.status }) : pub;
       const data = authed.ok ? authed.data : (pub.data || {});
       setDemoMode(!!data.demo);
-      setAgentsReady(!!(data.llm_ready || data.groq || data.openrouter || data.demo));
       if (data.me?.role) setMeRole(data.me.role);
-    } catch {
-      setDemoMode(false);
-      setAgentsReady(false);
-    }
-  }
-
-  async function loadToolCatalog() {
-    if (!tokenRef.current) return;
-    try {
-      const res = await apiJson("/api/tools", { token: tokenRef.current, cacheTtl: CACHE_TTL.catalog });
-      if (!res.ok) return;
-      setToolCatalog(res.data.tools || []);
-      setPluginList(res.data.plugins || []);
-    } catch {
-      setToolCatalog([]);
-      setPluginList([]);
-    }
-  }
-
-  async function loadJobs() {
-    if (!tokenRef.current) return;
-    try {
-      const res = await apiJson("/api/jobs", { token: tokenRef.current, cacheTtl: CACHE_TTL.catalog });
-      setJobs(res.ok ? res.data : []);
-    } catch {
-      setJobs([]);
-    }
-  }
-
-  async function loadSkills() {
-    if (!tokenRef.current) return;
-    try {
-      const res = await apiJson("/api/skills", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
-      setSkills(res.ok ? res.data : []);
-    } catch {
-      setSkills([]);
-    }
-  }
-
-  async function loadRoutines() {
-    if (!tokenRef.current) return;
-    try {
-      const res = await apiJson("/api/routines", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
-      setRoutines(res.ok ? res.data : []);
-    } catch {
-      setRoutines([]);
-    }
+    } catch { setDemoMode(false); }
   }
 
   async function loadApprovals() {
@@ -441,9 +171,7 @@ export default function App() {
     try {
       const res = await apiJson("/api/approvals?status=pending", { token: tokenRef.current, cacheTtl: 10_000 });
       setApprovals(res.ok ? res.data : []);
-    } catch {
-      setApprovals([]);
-    }
+    } catch { setApprovals([]); }
   }
 
   async function loadComputer() {
@@ -451,19 +179,7 @@ export default function App() {
     try {
       const res = await apiJson("/api/computer", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
       setComputer(res.ok ? res.data : null);
-    } catch {
-      setComputer(null);
-    }
-  }
-
-  async function loadPeople() {
-    if (!tokenRef.current) return;
-    try {
-      const res = await apiJson("/api/people", { token: tokenRef.current, cacheTtl: 8_000 });
-      setPeople(res.ok ? res.data : []);
-    } catch {
-      setPeople([]);
-    }
+    } catch { setComputer(null); }
   }
 
   async function loadTeams() {
@@ -471,1827 +187,460 @@ export default function App() {
     try {
       const res = await apiJson("/api/teams", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
       setTeams(res.ok ? res.data : []);
-    } catch {
-      setTeams([]);
-    }
+    } catch { setTeams([]); }
   }
 
   async function loadHistory(channelId, beforeId) {
     if (!tokenRef.current) throw new Error("auth");
     const params = new URLSearchParams({ limit: String(HISTORY_LIMIT) });
     if (beforeId) params.set("before_id", String(beforeId));
-    const res = await apiJson(`/api/channels/${channelId}/messages?${params}`, {
-      token: tokenRef.current,
-    });
+    const res = await apiJson(`/api/channels/${channelId}/messages?${params}`, { token: tokenRef.current });
     if (!res.ok) throw new Error("history");
     return res.data;
   }
 
   function applyHistory(history, prepend = false) {
     setHasMore(history.length === HISTORY_LIMIT);
-    const nextMsgs = {};
-    const nextReact = {};
-    const counts = {};
+    const nextMsgs = {}, nextReact = {}, counts = {};
     for (const m of history) {
       nextMsgs[m.id] = m;
       nextReact[m.id] = m.reactions ? m.reactions.slice() : [];
       if (m.parent_id) counts[m.parent_id] = (counts[m.parent_id] || 0) + 1;
       if (m.id > lastSeenId.current) lastSeenId.current = m.id;
     }
-    const rootsPage = history.filter((m) => !m.parent_id).map((m) => m.id);
-    if (!prepend) {
-      setMessages(nextMsgs);
-      setReactions(nextReact);
-      setReplyCounts(counts);
-      setStreams({});
-      setOrder(rootsPage);
-      return;
-    }
-    setMessages((prev) => ({ ...nextMsgs, ...prev }));
-    setReactions((prev) => ({ ...nextReact, ...prev }));
-    setReplyCounts((prev) => {
-      const merged = { ...prev };
-      for (const [k, v] of Object.entries(counts)) merged[k] = (merged[k] || 0) + v;
-      return merged;
+    setMessages(prev => ({ ...prev, ...nextMsgs }));
+    setReactions(prev => ({ ...prev, ...nextReact }));
+    setReplyCounts(prev => ({ ...prev, ...counts }));
+    setOrder(prev => {
+      const ids = history.map(m => m.id);
+      return prepend ? [...ids, ...prev] : [...prev, ...ids.filter(id => !prev.includes(id))];
     });
-    setOrder((prev) => [...rootsPage.filter((id) => !prev.includes(id)), ...prev]);
   }
 
-  async function switchChannel(id) {
-    setChannel(id);
-    setThreadId(null);
-    setThreadParent(null);
-    setThreadReplies([]);
-    lastSeenId.current = 0;
-    setMessages({});
-    setReactions({});
-    setReplyCounts({});
-    setStreams({});
-    setOrder([]);
-    setSidebarOpen(false);
-    setMainView("talk");
+  async function loadChannelMessages(channelId) {
     setLoadingLog(true);
-    setLogError("");
-    setHasMore(false);
+    setMessages({});
+    setOrder([]);
+    setReplyCounts({});
+    setReactions({});
+    setThreadId(null);
+    setThreadReplies([]);
     try {
-      const history = await loadHistory(id);
+      const history = await loadHistory(channelId);
       applyHistory(history);
-    } catch {
-      setLogError("Couldn't load messages.");
-      flash("Couldn't load channel history", true);
-    }
-    setLoadingLog(false);
-    await Promise.all([loadAgents(id), loadGroqStatus(), loadApprovals(), loadComputer()]);
+      await Promise.all([loadAgents(channelId), loadComputer(), loadApprovals()]);
+    } catch (e) {
+      flash("Failed to load messages", "error");
+    } finally { setLoadingLog(false); }
   }
 
-  function connectWs(channelId, tok) {
-    if (reconnectTimer.current) {
-      clearTimeout(reconnectTimer.current);
-      reconnectTimer.current = null;
-    }
-    if (wsRef.current) {
-      intentionalClose.current = true;
-      wsRef.current.close();
-    }
-    const gen = ++wsGen.current;
+  // ── WebSocket ──
+  function connectWs() {
+    if (!tokenRef.current) return;
+    const t = tokenRef.current;
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const url = `${proto}://${location.host}/ws/${encodeURIComponent(channelRef.current)}`;
     intentionalClose.current = false;
     setWsStatus("connecting");
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws/${channelId}`);
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
     ws.onopen = () => {
-      if (gen !== wsGen.current) {
-        ws.close();
-        return;
-      }
-      const payload = { token: tok };
-      if (lastSeenId.current) payload.last_seen_id = lastSeenId.current;
-      ws.send(JSON.stringify(payload));
-      setWsStatus("online");
       reconnectAttempt.current = 0;
+      setWsStatus("connected");
+      ws.send(JSON.stringify({ token: t, last_seen_id: lastSeenId.current || null }));
     };
     ws.onmessage = (ev) => {
-      if (gen !== wsGen.current) return;
-      let data;
-      try { data = JSON.parse(ev.data); } catch { return; }
-      if (data.type === "message") ingestLive(data.message);
-      else if (data.type === "typing") {
-        setTyping(`${data.author} is typing…`);
-        clearTimeout(typingTimer.current);
-        typingTimer.current = setTimeout(() => setTyping((t) => (t.startsWith(data.author) ? "" : t)), 15000);
-      } else if (data.type === "reaction") {
-        setReactions((prev) => {
-          const list = (prev[data.message_id] || []).slice();
-          if (!list.some((r) => r.author === data.author && r.emoji === data.emoji)) {
-            list.push({ author: data.author, emoji: data.emoji });
-          }
-          return { ...prev, [data.message_id]: list };
-        });
-      } else if (data.type === "message_deleted") {
-        const ids = new Set(data.ids || [data.message_id]);
-        setMessages((prev) => {
-          const next = { ...prev };
-          for (const id of ids) delete next[id];
-          return next;
-        });
-        setOrder((prev) => prev.filter((id) => !ids.has(id)));
-        setReactions((prev) => {
-          const next = { ...prev };
-          for (const id of ids) delete next[id];
-          return next;
-        });
-        setThreadId((tid) => {
-          if (tid && ids.has(tid)) {
-            setThreadParent(null);
-            setThreadReplies([]);
-            return null;
-          }
-          setThreadReplies((list) => list.filter((m) => !ids.has(m.id)));
-          return tid;
-        });
-      } else if (data.type === "channel_deleted") {
-        loadChannels().then((chs) => {
-          if (channelRef.current === data.channel_id) {
-            const roomsLeft = (chs || []).filter((c) => c.kind !== "dm");
-            switchChannel(roomsLeft[0]?.id || chs?.[0]?.id || "general");
-          }
-        });
-      } else if (data.type === "error") flash(data.detail || "Something went wrong", true);
-      else if (data.type === "agent_stream_start") {
-        setStreams((prev) => ({
-          ...prev,
-          [data.author]: { author: data.author, author_kind: "agent", body: "", streaming: true, created_at: Date.now() / 1000 },
-        }));
-      } else if (data.type === "agent_token") {
-        setStreams((prev) => {
-          const cur = prev[data.author] || {
-            author: data.author, author_kind: "agent", body: "", streaming: true, created_at: Date.now() / 1000,
-          };
-          return { ...prev, [data.author]: { ...cur, body: (cur.body || "") + (data.delta || "") } };
-        });
-      } else if (data.type === "bot_status") {
-        setAllAgents((list) => list.map((a) => (a.name === data.name ? { ...a, status: data.status } : a)));
-      } else if (data.type === "bot_archived") {
-        loadAllAgents();
-      } else if (data.type === "presence") {
-        setPeople((list) => list.map((p) => (p.handle === data.handle ? { ...p, online: !!data.online } : p)));
-      } else if (data.type === "approval") {
-        setApprovals((list) => {
-          const i = list.findIndex((a) => a.id === data.approval?.id);
-          if (i >= 0) {
-            const next = list.slice();
-            next[i] = data.approval;
-            return next;
-          }
-          return data.approval ? [data.approval, ...list] : list;
-        });
-      }
+      let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === "message" || msg.type === "live") ingestLive(msg.message || msg.data || msg);
+      else if (msg.type === "message_deleted" || msg.type === "reaction") ingestLive(msg);
+      else if (msg.type === "typing") setTyping(msg.author);
+      else if (msg.type === "status") { /* agent status updates */ }
+      else if (msg.type === "error") flash(msg.detail || "Error", "error");
     };
     ws.onclose = (ev) => {
-      if (gen !== wsGen.current) return;
+      if (intentionalClose.current || ev.code === 4001) { setWsStatus("offline"); return; }
       setWsStatus("offline");
-      if (ev.code === 4001) {
-        flash("Session expired — pick a handle again", true);
-        logout({ skipClose: true });
-        return;
-      }
-      if (!intentionalClose.current && tokenRef.current && channelRef.current === channelId) {
-        const delay = Math.min(15000, 1000 * (2 ** reconnectAttempt.current));
-        reconnectAttempt.current += 1;
-        flash("Disconnected, reconnecting…");
-        reconnectTimer.current = setTimeout(() => connectWs(channelId, tokenRef.current), delay);
-      }
+      const delay = Math.min(1000 * 2 ** reconnectAttempt.current, 15000);
+      reconnectAttempt.current++;
+      reconnectTimer.current = setTimeout(connectWs, delay);
     };
-    ws.onerror = () => {};
-    wsRef.current = ws;
+    ws.onerror = () => { ws.close(); };
   }
 
-  useEffect(() => {
-    if (!token || !channel) return;
-    connectWs(channel, token);
-    return () => {
-      intentionalClose.current = true;
-      wsRef.current?.close();
-    };
-  }, [token, channel]);
-
-  useEffect(() => {
-    const node = logRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [order, streams, loadingLog]);
-
-  useEffect(() => {
-    const node = threadLogRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [threadReplies, threadParent]);
-
-  useEffect(() => {
-    localStorage.setItem("swarm_computer", computerOpen ? "1" : "0");
-  }, [computerOpen]);
-
-  useEffect(() => {
-    localStorage.setItem("swarm_show_tools", showTools ? "1" : "0");
-  }, [showTools]);
-
-  useEffect(() => {
-    function closeMore(ev) {
-      const open = document.querySelector("details.topbar-more[open]");
-      if (open && !open.contains(ev.target)) open.open = false;
-    }
-    document.addEventListener("click", closeMore);
-    return () => document.removeEventListener("click", closeMore);
-  }, []);
-
-  async function enterWorkspace(handle, tok, preferred, { suggestedDraft } = {}) {
-    const me = await apiJson("/api/me", { token: tok });
-    if (!me.ok) throw new Error("auth");
-    setToken(tok);
-    tokenRef.current = tok;
-    setUser(handle);
-    setMeRole(me.data.role || "member");
-    localStorage.setItem(`swarm_token_${handle}`, tok);
-    localStorage.setItem("swarm_last_handle", handle);
-    const [chs] = await Promise.all([
-      loadChannels(), loadAllAgents(), loadJobs(), loadSkills(), loadRoutines(),
-      loadToolCatalog(), loadPeople(), loadTeams(), loadGroqStatus(),
-    ]);
-    const next = (chs || []).some((c) => c.id === (preferred || "dm-swarm"))
-      ? (preferred || "dm-swarm")
-      : (chs[0]?.id || "general");
-    await switchChannel(next);
-    if (suggestedDraft) setDraft(suggestedDraft);
-  }
-
-  async function loadLoginGate() {
-    try {
-      const res = await apiJson("/api/status", { cacheTtl: 0 });
-      const list = res.ok ? (res.data.admins || []) : [];
-      setAdmins(list);
-      setLoginKind(list.length ? "choose" : "setup");
-      if (list.length === 1) setHandleDraft(list[0]);
-    } catch {
-      setAdmins([]);
-      setLoginKind("setup");
-    }
-  }
-
-  useEffect(() => {
-    const saved = localStorage.getItem("swarm_last_handle");
-    const tok = saved && localStorage.getItem(`swarm_token_${saved}`);
-    if (saved && tok) {
-      enterWorkspace(saved, tok).catch(() => {
-        localStorage.removeItem(`swarm_token_${saved}`);
-        loadLoginGate();
-      });
-    } else {
-      loadLoginGate();
-    }
-  }, []);
-
-  useEffect(() => {
-    const onDoc = (ev) => {
-      if (!ev.target.closest("#emoji-pop") && !ev.target.closest(".row-actions")) {
-        setEmoji(null);
-      }
-    };
-    document.addEventListener("click", onDoc);
-    return () => document.removeEventListener("click", onDoc);
-  }, []);
-
-  function logout({ skipClose } = {}) {
-    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+  function disconnectWs() {
     intentionalClose.current = true;
-    if (!skipClose) wsRef.current?.close();
-    wsRef.current = null;
-    setToken(null);
-    setUser(null);
-    setOnboarding(null);
-    setMeRole("member");
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    if (wsRef.current) wsRef.current.close();
+  }
+
+  // ── Auth ──
+  // The backend has a single unified auth endpoint: POST /api/register.
+  // For an existing handle it returns a fresh token (login); for a new
+  // handle it creates the user (first user becomes admin). There is no
+  // separate /api/login route.
+  async function handleLogin(handle, password) {
+    const res = await apiJson("/api/register", { method: "POST", body: { handle, password } });
+    if (!res.ok) throw new Error(res.data.detail || "Login failed");
+    setUser({ handle }); setToken(res.data.token);
+    localStorage.setItem("swarm_token", res.data.token);
+    localStorage.setItem("swarm_handle", handle);
+  }
+
+  async function handleSetup(handle, password) {
+    const res = await apiJson("/api/register", { method: "POST", body: { handle, password } });
+    if (!res.ok) throw new Error(res.data.detail || "Setup failed");
+    setUser({ handle }); setToken(res.data.token);
+    localStorage.setItem("swarm_token", res.data.token);
+    localStorage.setItem("swarm_handle", handle);
+  }
+
+  function handleLogout() {
+    disconnectWs();
+    localStorage.removeItem("swarm_token");
+    localStorage.removeItem("swarm_handle");
+    setUser(null); setToken(null); setChannels([]); setAllAgents([]); setMessages({}); setOrder([]);
     setWsStatus("offline");
-    setPasswordDraft("");
-    setPasswordConfirm("");
-    loadLoginGate();
   }
 
-  async function onLogin(ev) {
-    ev.preventDefault();
-    if (loginKind === "choose") return;
-    const handle = handleDraft.trim();
-    if (!handle) return;
-    if (loginKind === "setup") {
-      if (passwordDraft.length < 4) {
-        setLoginErr("admin password must be at least 4 characters");
-        return;
-      }
-      if (passwordDraft !== passwordConfirm) {
-        setLoginErr("passwords don't match");
-        return;
-      }
-    }
-    if (loginKind === "admin" && !passwordDraft) {
-      setLoginErr("admin password required");
-      return;
-    }
-    setLoginErr("");
-    setLoginBusy(true);
-    try {
-      const payload = { handle };
-      if (loginKind === "setup" || loginKind === "admin") payload.password = passwordDraft;
-      const res = await fetch("/api/register", {
-        method: "POST",
-        headers: authHeaders(null),
-        body: JSON.stringify(payload),
-      });
-      let tok = null;
-      if (res.ok) {
-        const body = await res.json();
-        tok = body.token;
-        setToken(tok);
-        tokenRef.current = tok;
-        setUser(handle);
-        setMeRole(body.role || "member");
-        localStorage.setItem(`swarm_token_${handle}`, tok);
-        localStorage.setItem("swarm_last_handle", handle);
-        setPasswordDraft("");
-        setPasswordConfirm("");
-        if (body.created && body.role === "admin" && !body.onboarded) {
-          await Promise.all([loadChannels(), loadAllAgents(), loadGroqStatus()]);
-          const templatesRes = await apiJson("/api/jobs", { token: tok, cacheTtl: CACHE_TTL.catalog });
-          const templates = templatesRes.ok ? templatesRes.data : [];
-          setJobs(templates);
-          const pick = templates.find((j) => j.id === "chief-of-staff") || templates[0] || null;
-          setOnboarding({
-            step: 1,
-            template: pick,
-            name: pick?.suggested_name || "",
-            displayName: pick?.suggested_name
-              ? pick.suggested_name.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-              : "",
-            err: "",
-            busy: false,
-          });
-        } else {
-          await enterWorkspace(handle, tok);
-        }
-      } else if (res.status === 403) {
-        setLoginErr("wrong admin password");
-      } else if (res.status === 409) {
-        tok = localStorage.getItem(`swarm_token_${handle}`);
-        if (!tok) setLoginErr("handle taken — pick another, or sign in as admin with the password");
-        else await enterWorkspace(handle, tok);
-      } else if (res.status === 400) {
-        setLoginErr("admin password must be at least 4 characters");
-      } else setLoginErr("registration failed");
-    } catch {
-      setLoginErr("couldn't reach the relay");
-    }
-    setLoginBusy(false);
-  }
+  // ── Effects ──
+  useEffect(() => {
+    const savedToken = localStorage.getItem("swarm_token");
+    const savedHandle = localStorage.getItem("swarm_handle");
+    if (savedToken && savedHandle) { setToken(savedToken); setUser({ handle: savedHandle }); }
+    loadGroqStatus();
+  }, []);
 
-  async function skipOnboarding() {
-    if (!user || !token) return;
-    await api("/api/workspace/onboarded", { token, method: "POST", body: {} }).catch(() => {});
-    setOnboarding(null);
-    await enterWorkspace(user, token);
-  }
+  useEffect(() => {
+    if (token) {
+      (async () => {
+        try {
+          await Promise.all([loadChannels(), loadAllAgents(), loadTeams()]);
+          await loadChannelMessages(channelRef.current);
+          connectWs();
+        } catch (e) { flash("Failed to initialize", "error"); }
+      })();
+    }
+    return () => disconnectWs();
+  }, [token]);
 
-  async function createOnboardingBot(ev) {
-    ev.preventDefault();
-    if (!onboarding?.template || !token) return;
-    const displayName = (onboarding.displayName || onboarding.name || "").trim();
-    const name = onboarding.name.trim() || slugFromName(displayName);
-    const tpl = onboarding.template;
-    if (!displayName) {
-      setOnboarding((o) => ({ ...o, err: "give them a name" }));
-      return;
+  useEffect(() => {
+    if (token && channel) {
+      loadChannelMessages(channel);
+      disconnectWs();
+      connectWs();
     }
-    if (!name || !/^[A-Za-z0-9_\-]+$/.test(name)) {
-      setOnboarding((o) => ({ ...o, err: "mention handle — letters, numbers, _ or -" }));
-      return;
-    }
-    setOnboarding((o) => ({ ...o, busy: true, err: "" }));
-    try {
-      const res = await api("/api/agents", {
-        token,
-        method: "POST",
-        body: {
-          name,
-          display_name: displayName,
-          system_prompt: tpl.prompt,
-          job: tpl.job,
-          model: DEFAULT_MODEL,
-          channel_scope: null,
-          history_window: 12,
-          max_tool_calls: 3,
-          tools: ALL_TOOLS,
-        },
-      });
-      if (!res.ok) {
-        const msg = res.status === 409
-          ? "that name is taken — try another"
-          : res.status === 403
-            ? "only the workspace admin can create bots"
-            : "couldn't create bot";
-        setOnboarding((o) => ({ ...o, busy: false, err: msg }));
-        return;
-      }
-      const created = await res.json();
-      setOnboarding(null);
-      await enterWorkspace(user, token, created.dm_channel_id, {
-        suggestedDraft: tpl.suggested_prompt || "",
-      });
-      flash(`${displayName} is ready — say hi in their 1:1`);
-    } catch {
-      setOnboarding((o) => ({ ...o, busy: false, err: "couldn't create bot" }));
-    }
-  }
+  }, [channel]);
 
-  function sendFrom(body, parentId) {
-    const text = body.trim();
-    if (!text) return;
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      flash("Not connected — wait a moment and try again", true);
-      return;
+  // ── Keyboard shortcuts ──
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdOpen(true); }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c" && user) { e.preventDefault(); setComputerOpen(o => !o); }
+      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); }
     }
-    if (!agentsReady && /@[a-zA-Z0-9_\-]+/.test(text)) {
-      flash("Bots can't reply until GROQ_API_KEY is set (or SWARM_DEMO=1)", true);
-    }
-    const payload = { body: text };
-    if (parentId) payload.parent_id = parentId;
-    ws.send(JSON.stringify(payload));
-    setMention({ open: false, index: 0, items: [] });
-  }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [user]);
 
-  function onComposerInput(value, caret) {
-    setDraft(value);
-    const q = mentionQuery(value, caret);
-    if (!q) {
-      setMention({ open: false, index: 0, items: [] });
-      return;
-    }
-    const pool = q.mode === "at"
-      ? [
-          ...(agents.length ? agents : allAgents)
-            .filter((a) => a.name.toLowerCase().startsWith(q.query))
-            .map((a) => ({
-              label: botLabel(a) !== a.name ? `@${a.name} · ${botLabel(a)}` : `@${a.name}`,
-              value: a.name,
-              kind: "at",
-            })),
-          ...teams
-            .filter((t) => t.id.toLowerCase().startsWith(q.query) || (t.name || "").toLowerCase().startsWith(q.query))
-            .map((t) => ({
-              label: `@${t.id} · team`,
-              value: t.id,
-              kind: "at",
-            })),
-        ]
-      : skills
-          .filter((s) => s.name.toLowerCase().startsWith(q.query))
-          .map((s) => ({ label: `/${s.name}`, value: s.name, kind: "slash" }));
-    setMention({ open: pool.length > 0, index: 0, items: pool });
-  }
-
-  function applyMention(item) {
-    const el = inputRef.current;
-    const start = el?.selectionStart ?? draft.length;
-    const end = el?.selectionEnd ?? draft.length;
-    const next = insertMention(draft, start, end, item.value, item.kind);
-    setDraft(next.value);
-    setMention({ open: false, index: 0, items: [] });
-    requestAnimationFrame(() => {
-      if (el) {
-        el.focus();
-        el.setSelectionRange(next.pos, next.pos);
-      }
+  // ── Send ──
+  async function sendMessage(text, parentId = null) {
+    if (!tokenRef.current) return;
+    const body = { author: user.handle, body: text, author_kind: "human", parent_id: parentId };
+    const res = await apiJson(`/api/channels/${channelRef.current}/messages`, {
+      token: tokenRef.current, method: "POST", body,
     });
+    if (!res.ok) { flash("Failed to send", "error"); return; }
+    remember(res.data);
   }
 
-  function onComposerKey(ev) {
-    if (mention.open && mention.items.length) {
-      if (ev.key === "ArrowDown") {
-        ev.preventDefault();
-        setMention((m) => ({ ...m, index: (m.index + 1) % m.items.length }));
-        return;
-      }
-      if (ev.key === "ArrowUp") {
-        ev.preventDefault();
-        setMention((m) => ({ ...m, index: (m.index - 1 + m.items.length) % m.items.length }));
-        return;
-      }
-      if (ev.key === "Enter" || ev.key === "Tab") {
-        ev.preventDefault();
-        applyMention(mention.items[mention.index]);
-        return;
-      }
-      if (ev.key === "Escape") {
-        ev.preventDefault();
-        setMention({ open: false, index: 0, items: [] });
-        return;
-      }
-    }
-    if (ev.key === "Enter" && !ev.shiftKey) {
-      ev.preventDefault();
-      sendFrom(draft, null);
-      setDraft("");
-    }
-  }
-
-  async function sendReaction(messageId, emojiChar) {
-    setEmoji(null);
+  async function onReply(parentId) {
+    setThreadId(parentId);
     try {
-      const res = await api(`/api/messages/${messageId}/reactions`, {
-        token, method: "POST", body: { author: user, emoji: emojiChar },
-      });
-      if (!res.ok) flash("Couldn't add reaction", true);
-    } catch {
-      flash("Couldn't add reaction", true);
-    }
+      const res = await apiJson(`/api/messages/${parentId}/thread`, { token: tokenRef.current });
+      if (res.ok) setThreadReplies(res.data.replies || []);
+    } catch { setThreadReplies([]); }
   }
-
-  async function openThread(id) {
-    setThreadId(id);
-    try {
-      const res = await apiJson(`/api/messages/${id}/thread`, { token: tokenRef.current });
-      if (!res.ok) throw new Error("thread");
-      const data = res.data;
-      remember(data.parent);
-      data.replies.forEach(remember);
-      setThreadParent(data.parent);
-      setThreadReplies(data.replies);
-      requestAnimationFrame(() => threadInputRef.current?.focus());
-    } catch {
-      flash("Couldn't load thread", true);
-    }
-  }
-
-  async function createChannel(ev) {
-    ev.preventDefault();
-    const fd = new FormData(ev.target);
-    const name = String(fd.get("name") || "").trim();
-    const topic = String(fd.get("topic") || "").trim();
-    const kind = channelModal === "group" ? "group" : "room";
-    setChannelErr("");
-    if (!name) return;
-    if (kind === "group" && groupMembers.length < 1) {
-      setChannelErr("pick at least one bot");
-      return;
-    }
-    try {
-      const res = await api("/api/channels", {
-        token,
-        method: "POST",
-        body: { name, topic, kind, members: kind === "group" ? groupMembers : [] },
-      });
-      if (res.ok) {
-        const c = await res.json();
-        setChannelModal(null);
-        setGroupMembers([]);
-        await loadChannels();
-        switchChannel(c.id);
-      } else if (res.status === 409) setChannelErr("that name already exists");
-      else if (res.status === 400) setChannelErr("pick at least one bot");
-      else setChannelErr(kind === "group" ? "couldn't create group" : "couldn't create channel");
-    } catch {
-      setChannelErr(kind === "group" ? "couldn't create group" : "couldn't create channel");
-    }
-  }
-
-  async function deleteChannel(channelId) {
-    const res = await api(`/api/channels/${encodeURIComponent(channelId)}`, { token, method: "DELETE", json: false });
-    if (!res.ok) {
-      flash("Couldn't delete that channel", true);
-      return;
-    }
-    const chs = await loadChannels();
-    flash("Channel deleted");
-    if (channel === channelId) {
-      const roomsLeft = (chs || []).filter((c) => c.kind !== "dm");
-      await switchChannel(roomsLeft[0]?.id || chs?.[0]?.id || "general");
-    }
-  }
-
-  async function deleteMessage(m) {
-    if (!m?.id) return;
-    const res = await api(`/api/messages/${m.id}`, { token, method: "DELETE", json: false });
-    if (!res.ok) {
-      flash("Couldn't delete that message", true);
-      return;
-    }
-    const data = await res.json();
-    const ids = new Set(data.ids || [m.id]);
-    setMessages((prev) => {
-      const next = { ...prev };
-      for (const id of ids) delete next[id];
-      return next;
-    });
-    setOrder((prev) => prev.filter((id) => !ids.has(id)));
-    setReactions((prev) => {
-      const next = { ...prev };
-      for (const id of ids) delete next[id];
-      return next;
-    });
-    if (threadId && ids.has(threadId)) {
-      setThreadId(null);
-      setThreadParent(null);
-      setThreadReplies([]);
-    } else {
-      setThreadReplies((list) => list.filter((row) => !ids.has(row.id)));
-    }
-  }
-
-  function openCreateAgent() {
-    if (!isAdmin) {
-      flash("Only admins can create bots", true);
-      return;
-    }
-    setAgentErr("");
-    setHandleTouched(false);
-    setAgentForm({ name: "", display_name: "", job: "", prompt: "", model: DEFAULT_MODEL, scope: "", window: 12, tools: ALL_TOOLS, memories: [] });
-    setAgentModal("create");
-  }
-
-  async function openAgentPanel(name) {
-    setAgentErr("");
-    try {
-      const res = await apiJson(`/api/agents/${encodeURIComponent(name)}`, { token: tokenRef.current });
-      if (!res.ok) throw new Error("agent");
-      const a = res.data;
-      setAgentForm({
-        name: a.name, display_name: a.display_name || a.name, job: a.job || "", prompt: a.system_prompt || "", model: a.model || DEFAULT_MODEL,
-        scope: a.channel_scope || "", window: a.history_window || 12, tools: a.tools || ALL_TOOLS, memories: a.memories || [],
-      });
-      setAgentModal("edit");
-    } catch {
-      flash("Couldn't load that agent", true);
-    }
-  }
-
-  async function saveAgent(ev) {
-    ev.preventDefault();
-    setAgentErr("");
-    const display_name = (agentForm.display_name || "").trim();
-    const name = (agentForm.name || slugFromName(display_name)).trim();
-    const system_prompt = agentForm.prompt.trim();
-    if (!display_name || !system_prompt) {
-      setAgentErr("name and prompt are required");
-      return;
-    }
-    if (!name || !/^[A-Za-z0-9_\-]+$/.test(name)) {
-      setAgentErr("mention handle — letters, numbers, _ or -");
-      return;
-    }
-    const payload = {
-      display_name,
-      system_prompt,
-      model: agentForm.model.trim() || DEFAULT_MODEL,
-      channel_scope: agentForm.scope || null,
-      history_window: Number(agentForm.window) || 12,
-      max_tool_calls: 3,
-      tools: agentForm.tools,
-      job: agentForm.job.trim() || "Teammate",
-    };
-    try {
-      const editing = agentModal === "edit";
-      const res = editing
-        ? await api(`/api/agents/${encodeURIComponent(name)}`, { token, method: "PATCH", body: payload })
-        : await api("/api/agents", { token, method: "POST", body: { name, ...payload } });
-      if (res.ok) {
-        const created = editing ? null : await res.json();
-        setAgentModal(null);
-        await Promise.all([loadAllAgents(), loadChannels()]);
-        flash(editing ? `Updated ${display_name}` : `Created ${display_name}`);
-        if (!editing && created?.dm_channel_id) switchChannel(created.dm_channel_id);
-        return;
-      }
-      if (res.status === 409) setAgentErr("that agent name is taken");
-      else if (res.status === 403) setAgentErr("only admins can manage bots");
-      else if (res.status === 404) setAgentErr("channel or agent not found");
-      else setAgentErr("couldn't save agent");
-    } catch {
-      setAgentErr("couldn't save agent");
-    }
-  }
-
-  function peopleLabel(c) {
-    const roster = c.people || [];
-    return roster.find((h) => h !== user) || roster[0] || c.name;
-  }
-
-  async function openHumanDm(handle) {
-    const res = await api("/api/dms", { token, method: "POST", body: { handle } });
-    if (!res.ok) {
-      flash(res.status === 404 ? "No such person" : "Couldn't open that DM", true);
-      return;
-    }
-    const created = await res.json();
-    setPeopleModal(false);
-    await loadChannels();
-    switchChannel(created.id);
-  }
-
-  async function archiveAgent() {
-    if (!isAdmin || !agentForm.name) return;
-    if (!window.confirm(`Archive @${agentForm.name}? Old messages stay; they will stop answering.`)) return;
-    const res = await api(`/api/agents/${encodeURIComponent(agentForm.name)}`, { token, method: "DELETE", json: false });
-    if (!res.ok) {
-      setAgentErr("couldn't archive that bot");
-      return;
-    }
-    setAgentModal(null);
-    await Promise.all([loadAllAgents(), loadChannels(), loadTeams()]);
-    flash(`Archived ${agentForm.display_name || agentForm.name}`);
-    if (channel === `dm-${agentForm.name}`) switchChannel("general");
-  }
-
-  async function saveTeam(ev) {
-    ev.preventDefault();
-    setTeamErr("");
-    const name = (teamForm.name || "").trim();
-    const id = (teamForm.id || slugFromName(name)).trim();
-    if (!name || !id) {
-      setTeamErr("name is required");
-      return;
-    }
-    if (!teamForm.members.length) {
-      setTeamErr("pick at least one bot");
-      return;
-    }
-    const res = await api("/api/teams", {
-      token,
+  async function onReact(messageId, target) {
+    const emoji = typeof target === "string" ? target : "👍";
+    const res = await apiJson(`/api/messages/${messageId}/reactions`, {
+      token: tokenRef.current,
       method: "POST",
-      body: { id, name, description: teamForm.description, members: teamForm.members },
+      body: { author: user.handle, emoji },
     });
-    if (!res.ok) {
-      setTeamErr(res.status === 409 ? "that team id is taken" : res.status === 403 ? "admin only" : "couldn't create team");
-      return;
-    }
-    setTeamModal(false);
-    await loadTeams();
-    flash(`@${id} is ready — mention the team in a room`);
+    if (res.ok) flash("Reaction added", "success");
+    else flash("Could not add reaction", "error");
+  }
+  async function onDelete(m) {
+    const res = await apiJson(`/api/messages/${m.id}`, { token: tokenRef.current, method: "DELETE" });
+    if (res.ok) flash("Message deleted", "info");
+    else flash("Could not delete message", "error");
   }
 
-  async function exportChannel(fmt) {
-    const res = await api(`/api/channels/${encodeURIComponent(channel)}/export?format=${fmt}`, { token, json: false });
-    if (!res.ok) {
-      flash("Couldn't export this channel", true);
-      return;
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${channel}-audit.${fmt}`;
-    a.click();
-    URL.revokeObjectURL(url);
+  async function onResolveApproval(id, decision) {
+    const res = await apiJson(`/api/approvals/${id}`, { token: tokenRef.current, method: "PATCH", body: { status: decision } });
+    if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); }
   }
 
-  async function runSearch(ev) {
-    ev?.preventDefault();
-    const q = searchQ.trim();
-    if (q.length < 2) {
-      setSearchHits(null);
-      return;
-    }
-    setSearchBusy(true);
-    try {
-      const res = await apiJson(`/api/search?q=${encodeURIComponent(q)}`, { token: tokenRef.current });
-      setSearchHits(res.ok ? res.data : []);
-    } catch {
-      setSearchHits([]);
-    }
-    setSearchBusy(false);
+  // ── Command palette commands ──
+  const commands = useMemo(() => [
+    { id: "cmd-new-channel", group: "Create", label: "New channel", icon: "#", hint: "room", shortcut: "⌘⇧C", keywords: ["channel", "room"], action: () => setQuickAction("channel") },
+    { id: "cmd-new-agent", group: "Create", label: "New agent", icon: "🤖", hint: "bot", keywords: ["agent", "bot", "teammate"], action: () => setQuickAction("agent") },
+    { id: "cmd-new-group", group: "Create", label: "New group", icon: "👥", hint: "pod", keywords: ["group", "team", "pod"], action: () => setQuickAction("group") },
+    { id: "cmd-new-dm", group: "Create", label: "New direct message", icon: "@", hint: "person", keywords: ["dm", "message", "person"], action: () => setQuickAction("dm") },
+    { id: "cmd-toggle-computer", group: "View", label: "Toggle computer panel", icon: "🖥", hint: "", keywords: ["computer", "sandbox", "screen"], action: () => setComputerOpen(o => !o) },
+    { id: "cmd-view-talk", group: "View", label: "Go to Talk", icon: "💬", keywords: ["chat", "message"], action: () => setMainView("talk") },
+    { id: "cmd-view-paper", group: "View", label: "Go to Paper", icon: "📄", keywords: ["paper", "latex", "doc"], action: () => setMainView("paper") },
+    { id: "cmd-view-files", group: "View", label: "Go to Files", icon: "📁", keywords: ["files", "sandbox"], action: () => setMainView("files") },
+    ...rooms.map(c => ({ id: `ch-${c.id}`, group: "Channels", label: `#${c.name}`, icon: "#", keywords: [c.name], action: () => setChannel(c.id) })),
+    ...allAgents.map(a => ({ id: `ag-${a.name}`, group: "Agents", label: `@${a.name}`, icon: "🤖", keywords: [a.name, a.job], action: () => setChannel(a.dm_channel_id) })),
+  ], [rooms, allAgents]);
+
+  // ── Render ──
+  if (!user || !token) {
+    return <LoginScreen onLogin={handleLogin} onSetup={handleSetup} status={wsStatus} demoMode={demoMode} />;
   }
-
-  async function resolveApproval(id, status) {
-    const res = await api(`/api/approvals/${id}/resolve`, { token, method: "POST", body: { status } });
-    if (!res.ok) {
-      flash("Couldn't resolve approval", true);
-      return;
-    }
-    const updated = await res.json();
-    setApprovals((list) => {
-      const i = list.findIndex((a) => a.id === updated.id);
-      if (i >= 0) {
-        const next = list.slice();
-        next[i] = updated;
-        return next;
-      }
-      return [updated, ...list];
-    });
-  }
-
-  async function previewFile(path) {
-    try {
-      const res = await apiJson(`/api/computer/file?path=${encodeURIComponent(path)}`, { token: tokenRef.current });
-      if (!res.ok) throw new Error("file");
-      setFilePreview(res.data.content);
-    } catch {
-      flash("Couldn't open that file", true);
-    }
-  }
-
-  async function loadEarlier() {
-    const ids = Object.keys(messages).map(Number).filter(Boolean);
-    const oldest = Math.min(...ids);
-    if (!Number.isFinite(oldest)) return;
-    try {
-      const page = await loadHistory(channel, oldest);
-      applyHistory(page, true);
-    } catch {
-      flash("Couldn't load earlier messages", true);
-    }
-  }
-
-  const placeholder = bot
-    ? (bot.name === "coder" ? `Ask ${botLabel(bot)} for a program, proof, or listing` : `Message ${botLabel(bot)} — they already hear you`)
-    : peopleChat
-      ? `Message ${peopleLabel(peopleChat)} — private, like Slack DMs`
-      : group
-        ? `Message ${current.name} — everyone in the group hears you`
-        : `Message #${current.name || current.id} — @name a bot, @core the pod`;
-
-  const layout = [
-    "app",
-    threadId ? "thread-open" : "",
-    computerOpen ? "computer-open" : "",
-    sidebarOpen ? "sidebar-open" : "",
-    showTools ? "" : "hide-tools",
-    mainView === "paper" ? "paper-open" : "",
-  ].filter(Boolean).join(" ");
-
-  const streamRows = Object.values(streams);
-  const catalogNames = useMemo(
-    () => (toolCatalog.length ? toolCatalog.map((t) => t.name) : ALL_TOOLS),
-    [toolCatalog],
-  );
-  const panelGroup = PANEL_GROUPS.find((g) => g.tabs.some((t) => t.id === panelTab)) || PANEL_GROUPS[0];
 
   return (
-    <div className={layout}>
-      <Toast toast={toast} />
-      {!user && (
-        <div id="login">
-          <form className="card" onSubmit={onLogin}>
-            <p className="kicker">Swarm command console</p>
-            <h1>Put the crew to work.</h1>
-            {loginKind === "choose" && (
-              <>
-                <p>This workspace already has an admin. Sign in with the password, or join as a member with just a handle.</p>
-                <div className="login-choices">
-                  <button
-                    type="button"
-                    className="login-choice"
-                    onClick={() => {
-                      setLoginKind("admin");
-                      setLoginErr("");
-                      if (admins[0] && !handleDraft) setHandleDraft(admins[0]);
-                    }}
-                  >
-                    <strong>Continue as admin</strong>
-                    <span>Password required{admins.length ? ` · ${admins.join(", ")}` : ""}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="login-choice"
-                    onClick={() => {
-                      setLoginKind("member");
-                      setLoginErr("");
-                      setPasswordDraft("");
-                      setHandleDraft("");
-                    }}
-                  >
-                    <strong>Join as member</strong>
-                    <span>No password — cannot create bots</span>
-                  </button>
-                </div>
-              </>
-            )}
-            {loginKind === "setup" && (
-              <>
-                <p>First handle becomes admin. Set a password so reload doesn't lock you out or re-run setup.</p>
-                <label htmlFor="login-input">Handle</label>
-                <input id="login-input" maxLength={24} autoComplete="username" placeholder="your handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
-                <label htmlFor="login-password">Admin password</label>
-                <input id="login-password" type="password" autoComplete="new-password" placeholder="at least 4 characters" value={passwordDraft} onChange={(e) => setPasswordDraft(e.target.value)} />
-                <label htmlFor="login-password-confirm">Confirm password</label>
-                <input id="login-password-confirm" type="password" autoComplete="new-password" placeholder="repeat password" value={passwordConfirm} onChange={(e) => setPasswordConfirm(e.target.value)} />
-                <button type="submit" className="btn primary" disabled={loginBusy}>Create workspace</button>
-              </>
-            )}
-            {loginKind === "admin" && (
-              <>
-                <p>Enter the admin handle and password. Setup wizard only runs once.</p>
-                {admins.length > 1 && (
-                  <div className="login-admins">
-                    {admins.map((h) => (
-                      <button
-                        key={h}
-                        type="button"
-                        className={handleDraft === h ? "active" : ""}
-                        onClick={() => setHandleDraft(h)}
-                      >
-                        {h}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <label htmlFor="login-input">Admin handle</label>
-                <input id="login-input" maxLength={24} autoComplete="username" placeholder="admin handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
-                <label htmlFor="login-password">Password</label>
-                <input id="login-password" type="password" autoComplete="current-password" placeholder="admin password" value={passwordDraft} onChange={(e) => setPasswordDraft(e.target.value)} />
-                <button type="submit" className="btn primary" disabled={loginBusy}>Sign in as admin</button>
-                <button type="button" className="btn ghost" onClick={() => { setLoginKind("choose"); setLoginErr(""); setPasswordDraft(""); }}>Back</button>
-              </>
-            )}
-            {loginKind === "member" && (
-              <>
-                <p>Members don't use a password. Pick a new handle, or reconnect one you've used here.</p>
-                <label htmlFor="login-input">Handle</label>
-                <input id="login-input" maxLength={24} autoComplete="username" placeholder="your handle" autoFocus value={handleDraft} onChange={(e) => setHandleDraft(e.target.value)} />
-                <button type="submit" className="btn primary" disabled={loginBusy}>Join as member</button>
-                <button type="button" className="btn ghost" onClick={() => { setLoginKind("choose"); setLoginErr(""); }}>Back</button>
-              </>
-            )}
-            <div className="err" role="alert">{loginErr}</div>
-          </form>
-        </div>
+    <div className={`app ${threadId ? "thread-open" : ""} ${computerOpen ? "computer-open" : ""}`}>
+      <Sidebar
+        user={user}
+        channels={channels}
+        agents={allAgents}
+        teams={teams}
+        onSelectChannel={setChannel}
+        activeChannel={channel}
+        wsStatus={wsStatus}
+        meRole={meRole}
+        onNewChannel={() => setQuickAction("channel")}
+        onNewDM={() => setQuickAction("dm")}
+        onNewGroup={() => setQuickAction("group")}
+        onNewTeam={() => setQuickAction("team")}
+        onNewAgent={() => setQuickAction("agent")}
+        onLogout={handleLogout}
+        onOpenSettings={() => setMainView("dashboard")}
+      />
+
+      <TopBar
+        channel={current}
+        agents={agents}
+        onToggleComputer={() => setComputerOpen(o => !o)}
+        computerOpen={computerOpen}
+        onOpenCommandPalette={() => setCmdOpen(true)}
+        onViewChange={setMainView}
+        currentView={mainView}
+        approvals={approvals}
+        onResolveApproval={onResolveApproval}
+      />
+
+      {["dashboard", "workflows", "runs"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
+      {mainView === "talk" && (
+        <MessageList
+          messages={messages}
+          order={order}
+          agents={agents}
+          allAgents={allAgents}
+          user={user}
+          onReply={onReply}
+          onReact={onReact}
+          onDelete={onDelete}
+          onOpenThread={onReply}
+          replyCounts={replyCounts}
+          reactions={reactions}
+          channelId={channel}
+          onLoadMore={async () => {
+            if (loadingLog || order.length === 0) return;
+            setLoadingLog(true);
+            try {
+              const history = await loadHistory(channelRef.current, order[0]);
+              applyHistory(history, true);
+            } catch { flash("Failed to load earlier messages", "error"); }
+            finally { setLoadingLog(false); }
+          }}
+          hasMore={hasMore}
+          loadingMore={loadingLog}
+          typing={typing}
+          groupedWith={(prev, m) => {
+            if (!prev) return false;
+            if (prev.author !== m.author) return false;
+            if (prev.author_kind !== m.author_kind) return false;
+            if (m.parent_id) return false;
+            const dt = (m.created_at - prev.created_at) * 1000;
+            return dt < 5 * 60 * 1000;
+          }}
+        />
       )}
 
-      {user && onboarding && (
-        <div id="onboarding">
-          <div className="card onboarding-card">
-            {onboarding.step === 1 && (
-              <ApiConfigStep
-                token={token}
-                flash={flash}
-                onSkip={() => setOnboarding((o) => ({ ...o, step: 2, err: "" }))}
-                onContinue={async () => {
-                  bustCache("/api/status");
-                  await loadGroqStatus();
-                  setOnboarding((o) => ({ ...o, step: 2, err: "" }));
-                }}
-              />
-            )}
-            {onboarding.step === 2 && (
-              <>
-                <p className="kicker">Step 2 of 3</p>
-                <h1>Pick your first Bot</h1>
-                <p>Each template is a named job with tools, memory, and a 1:1 channel. You can add more later.</p>
-                <div className="job-templates onboarding-jobs">
-                  {jobs.map((job) => (
-                    <button
-                      key={job.id}
-                      type="button"
-                      className={onboarding.template?.id === job.id ? "active" : ""}
-                      onClick={() => setOnboarding((o) => ({
-                        ...o,
-                        template: job,
-                        name: job.suggested_name || o.name,
-                        err: "",
-                      }))}
-                    >
-                      <span className="job-title">{job.job}</span>
-                      {job.id === "chief-of-staff" && <span className="job-badge">Recommended</span>}
-                    </button>
-                  ))}
-                </div>
-                <div className="modal-actions onboarding-actions">
-                  <button type="button" className="btn ghost" onClick={skipOnboarding}>Skip — use default teammates</button>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => setOnboarding((o) => ({ ...o, step: 1, err: "" }))}
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    className="btn primary"
-                    disabled={!onboarding.template}
-                    onClick={() => setOnboarding((o) => ({ ...o, step: 3, err: "" }))}
-                  >
-                    Continue
-                  </button>
-                </div>
-              </>
-            )}
-            {onboarding.step === 3 && onboarding.template && (
-              <form onSubmit={createOnboardingBot}>
-                <p className="kicker">Step 3 of 3</p>
-                <h1>Name them</h1>
-                <p>Primary job: <strong>{onboarding.template.job}</strong>. You'll land in their 1:1 with a suggested first message.</p>
-                <label htmlFor="onboard-display">Bot name</label>
-                <input
-                  id="onboard-display"
-                  required
-                  maxLength={40}
-                  placeholder="Maya"
-                  autoFocus
-                  value={onboarding.displayName || ""}
-                  onChange={(e) => {
-                    const displayName = e.target.value;
-                    setOnboarding((o) => ({
-                      ...o,
-                      displayName,
-                      name: slugFromName(displayName),
-                      err: "",
-                    }));
-                  }}
-                />
-                <label htmlFor="onboard-name">Mention handle</label>
-                <input
-                  id="onboard-name"
-                  required
-                  maxLength={32}
-                  pattern="[A-Za-z0-9_\-]+"
-                  placeholder="maya"
-                  value={onboarding.name}
-                  onChange={(e) => setOnboarding((o) => ({ ...o, name: e.target.value, err: "" }))}
-                />
-                <div className="hint">Shown as {onboarding.displayName || "Maya"}. Mention as @{onboarding.name || "maya"} in rooms, or talk in their 1:1 without @.</div>
-                <div className="err" role="alert">{onboarding.err}</div>
-                <div className="modal-actions onboarding-actions">
-                  <button type="button" className="btn" onClick={() => setOnboarding((o) => ({ ...o, step: 2, err: "" }))}>Back</button>
-                  <button type="submit" className="btn primary" disabled={onboarding.busy}>
-                    {onboarding.busy ? "Creating…" : "Create & open 1:1"}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
+      {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
+      {mainView === "files" && <FilesView computer={computer} />}
+      {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => setChannel(id)} />}
 
-      {user && !onboarding && (
-      <>
-      {channelModal && (
-        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setChannelModal(null)}>
-          <div className="modal-card" role="dialog" aria-modal="true">
-            <h2>{channelModal === "group" ? "New group chat" : "New channel"}</h2>
-            <form onSubmit={createChannel}>
-              <label htmlFor="channel-name">Name</label>
-              <input id="channel-name" name="name" maxLength={64} required placeholder={channelModal === "group" ? "launch team" : "release-planning"} autoFocus />
-              <label htmlFor="channel-topic">Topic <span className="optional">(optional)</span></label>
-              <input id="channel-topic" name="topic" maxLength={200} placeholder={channelModal === "group" ? "what this group is working on" : "what this channel is for"} />
-              {channelModal === "group" && (
-                <>
-                  <label>Bots in this group</label>
-                  <div className="member-picks">
-                    {allAgents.map((a) => {
-                      const on = groupMembers.includes(a.name);
-                      return (
-                        <button
-                          key={a.name}
-                          type="button"
-                          className={`member-pick${on ? " active" : ""}`}
-                          onClick={() => setGroupMembers((list) => on ? list.filter((n) => n !== a.name) : [...list, a.name])}
-                        >
-                          <span className={`dot ${a.status || "idle"}`} />
-                          <span className="bot-name">{botLabel(a)}</span>
-                          <span className="bot-job">{a.job || `@${a.name}`}</span>
-                        </button>
-                      );
-                    })}
-                    {!allAgents.length && <p className="empty-state">Create a bot first.</p>}
-                  </div>
-                </>
-              )}
-              <div className="err" role="alert">{channelErr}</div>
-              <div className="modal-actions">
-                <button type="button" className="btn" onClick={() => setChannelModal(null)}>Cancel</button>
-                <button type="submit" className="btn primary">{channelModal === "group" ? "Create group" : "Create"}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {selectedRun && <RunMonitor token={token} run={selectedRun} onClose={() => setSelectedRun(null)} />}
+      {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) setChannel(id); flash("Created", "success"); }} />}
 
-      {peopleModal && (
-        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setPeopleModal(false)}>
-          <div className="modal-card" role="dialog" aria-modal="true">
-            <h2>Message a person</h2>
-            <p className="hint">Private 1:1 — only the two of you see it. @mention a bot to pull them in.</p>
-            <div className="member-picks">
-              {people.filter((p) => p.handle !== user).map((p) => (
-                <button key={p.handle} type="button" className="member-pick" onClick={() => openHumanDm(p.handle)}>
-                  <span className={`dot ${p.online ? "working" : "idle"}`} />
-                  <span className="bot-name">{p.handle}</span>
-                  <span className="bot-job">{p.online ? "online" : p.role}</span>
-                </button>
-              ))}
-              {!people.filter((p) => p.handle !== user).length && <p className="empty-state">No other people yet. Have a teammate register.</p>}
-            </div>
-            <div className="modal-actions">
-              <button type="button" className="btn" onClick={() => setPeopleModal(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {mainView === "talk" && <Composer
+        onSend={(text) => sendMessage(text)}
+        channelName={current.name}
+        agents={agents}
+        placeholder={`Message ${current.name}…`}
+      />}
 
-      {teamModal && (
-        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setTeamModal(false)}>
-          <div className="modal-card" role="dialog" aria-modal="true">
-            <h2>New team</h2>
-            <form onSubmit={saveTeam}>
-              <p className="hint">@team-id in any room runs these bots in order — Buzz-style pods without leaving chat.</p>
-              <label htmlFor="team-name">Name</label>
-              <input
-                id="team-name"
-                required
-                maxLength={64}
-                placeholder="Launch"
-                value={teamForm.name}
-                onChange={(e) => setTeamForm((f) => ({ ...f, name: e.target.value, id: f.id || slugFromName(e.target.value) }))}
-              />
-              <label htmlFor="team-id">Mention handle</label>
-              <input
-                id="team-id"
-                required
-                maxLength={32}
-                pattern="[A-Za-z0-9_\-]+"
-                placeholder="launch"
-                value={teamForm.id}
-                onChange={(e) => setTeamForm((f) => ({ ...f, id: e.target.value }))}
-              />
-              <label htmlFor="team-desc">Description <span className="optional">(optional)</span></label>
-              <input id="team-desc" maxLength={200} value={teamForm.description} onChange={(e) => setTeamForm((f) => ({ ...f, description: e.target.value }))} />
-              <label>Bots</label>
-              <div className="member-picks">
-                {allAgents.map((a) => {
-                  const on = teamForm.members.includes(a.name);
-                  return (
-                    <button
-                      key={a.name}
-                      type="button"
-                      className={`member-pick${on ? " active" : ""}`}
-                      onClick={() => setTeamForm((f) => ({
-                        ...f,
-                        members: on ? f.members.filter((n) => n !== a.name) : [...f.members, a.name],
-                      }))}
-                    >
-                      <span className={`dot ${a.status || "idle"}`} />
-                      <span className="bot-name">{botLabel(a)}</span>
-                      <span className="bot-job">@{a.name}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="err" role="alert">{teamErr}</div>
-              <div className="modal-actions">
-                <button type="button" className="btn" onClick={() => setTeamModal(false)}>Cancel</button>
-                <button type="submit" className="btn primary">Create team</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {agentModal && (
-        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setAgentModal(null)}>
-          <div className="modal-card agent-card" role="dialog" aria-modal="true">
-            <h2>{agentModal === "edit" ? (agentForm.display_name || `@${agentForm.name}`) : "New Bot"}</h2>
-            <form onSubmit={saveAgent}>
-              {agentModal === "create" && (
-                <div className="job-templates">
-                  {jobs.map((job) => (
-                    <button
-                      key={job.job}
-                      type="button"
-                      className={agentForm.job === job.job ? "active" : ""}
-                      onClick={() => setAgentForm((f) => {
-                        const suggested = job.suggested_name || "";
-                        const pretty = suggested.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-                        return {
-                          ...f,
-                          job: job.job,
-                          prompt: job.prompt,
-                          display_name: f.display_name && handleTouched ? f.display_name : pretty,
-                          name: handleTouched && f.name ? f.name : suggested,
-                        };
-                      })}
-                    >
-                      {job.job}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <label htmlFor="agent-display">Bot name</label>
-              <input
-                id="agent-display"
-                required
-                maxLength={40}
-                placeholder="Maya"
-                value={agentForm.display_name}
-                onChange={(e) => {
-                  const display_name = e.target.value;
-                  setAgentForm((f) => ({
-                    ...f,
-                    display_name,
-                    name: agentModal === "edit" || handleTouched ? f.name : slugFromName(display_name),
-                  }));
-                }}
-              />
-              <label htmlFor="agent-name">Mention handle</label>
-              <input
-                id="agent-name"
-                required
-                maxLength={32}
-                pattern="[A-Za-z0-9_\-]+"
-                placeholder="maya"
-                disabled={agentModal === "edit"}
-                value={agentForm.name}
-                onChange={(e) => {
-                  setHandleTouched(true);
-                  setAgentForm((f) => ({ ...f, name: e.target.value }));
-                }}
-              />
-              <div className="hint">People see {agentForm.display_name || "Maya"}. Rooms mention @{agentForm.name || "maya"}.</div>
-              <label htmlFor="agent-job">Primary job</label>
-              <input id="agent-job" maxLength={64} placeholder="Product Performance" value={agentForm.job} onChange={(e) => setAgentForm((f) => ({ ...f, job: e.target.value }))} />
-              <label htmlFor="agent-prompt">How they should work</label>
-              <textarea id="agent-prompt" required maxLength={4000} rows={5} placeholder="One job, sources, deliverable, and what needs approval." value={agentForm.prompt} onChange={(e) => setAgentForm((f) => ({ ...f, prompt: e.target.value }))} />
-              <label htmlFor="agent-model">Model</label>
-              <ModelPicker
-                id="agent-model"
-                token={token}
-                value={agentForm.model}
-                onChange={(model) => setAgentForm((f) => ({ ...f, model }))}
-                placeholder={DEFAULT_MODEL}
-              />
-              <label htmlFor="agent-scope">Channel scope</label>
-              <select id="agent-scope" value={agentForm.scope} onChange={(e) => setAgentForm((f) => ({ ...f, scope: e.target.value }))}>
-                <option value="">Every channel (plus their 1:1)</option>
-                {rooms.map((c) => <option key={c.id} value={c.id}>#{c.name}</option>)}
-              </select>
-              <label htmlFor="agent-window">History window</label>
-              <input id="agent-window" type="number" min={1} max={50} value={agentForm.window} onChange={(e) => setAgentForm((f) => ({ ...f, window: e.target.value }))} />
-              <fieldset className="tool-toggles">
-                <legend>Tools</legend>
-                {catalogNames.map((t) => {
-                  const meta = toolCatalog.find((x) => x.name === t);
-                  return (
-                    <label key={t} className="check">
-                      <input type="checkbox" checked={agentForm.tools.includes(t)} onChange={(e) => setAgentForm((f) => ({
-                        ...f,
-                        tools: e.target.checked ? [...f.tools, t] : f.tools.filter((x) => x !== t),
-                      }))} />
-                      {t}
-                      {meta?.kind && meta.kind !== "builtin" && (
-                        <span className="tool-kind">{meta.kind}</span>
-                      )}
-                    </label>
-                  );
-                })}
-              </fieldset>
-              {agentForm.memories?.length > 0 && (
-                <div id="agent-memories">
-                  <div className="mem-title">Recent notes</div>
-                  <ul>
-                    {agentForm.memories.map((m) => (
-                      <li key={m.id}>{m.kind} · {m.channel_id ? `#${m.channel_id}` : "global"}: {m.body}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <div className="err" role="alert">{agentErr}</div>
-              <div className="modal-actions">
-                <button type="button" className="btn" onClick={() => setAgentModal(null)}>Cancel</button>
-                {agentModal === "edit" && (
-                  <button type="button" className="btn" onClick={() => {
-                    const found = allAgents.find((a) => a.name === agentForm.name);
-                    setAgentModal(null);
-                    if (found) switchChannel(found.dm_channel_id);
-                  }}>Open 1:1</button>
-                )}
-                {agentModal === "edit" && isAdmin && (
-                  <button type="button" className="btn danger" onClick={archiveAgent}>Archive</button>
-                )}
-                <button type="submit" className="btn primary">{agentModal === "edit" ? "Save" : "Create"}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {emoji && (
-        <div id="emoji-pop" role="dialog" aria-label="Pick a reaction" style={{ top: emoji.top, left: emoji.left }}>
-          {EMOJI.map((e) => (
-            <button key={e} type="button" className="emoji-chip" onClick={() => sendReaction(emoji.id, e)}>{e}</button>
-          ))}
-        </div>
-      )}
-
-      <div id="sidebar-backdrop" hidden={!sidebarOpen} onClick={() => setSidebarOpen(false)} />
-
-      <nav id="sidebar" aria-label="Workspace">
-        <div className="brand">swarm<small>operator console · crew status live</small></div>
-        <div className="sidebar-scroll">
-        <form className="sidebar-search" onSubmit={runSearch}>
-          <label className="sr-only" htmlFor="workspace-search">Search messages</label>
-          <input
-            id="workspace-search"
-            value={searchQ}
-            onChange={(e) => { setSearchQ(e.target.value); if (!e.target.value) setSearchHits(null); }}
-            placeholder="Search"
-            autoComplete="off"
-          />
-        </form>
-        {searchHits && (
-          <div className="search-hits" role="listbox" aria-label="Search results">
-            {searchBusy && <div className="empty">Searching…</div>}
-            {!searchBusy && !searchHits.length && <div className="empty">No matches</div>}
-            {!searchBusy && searchHits.map((hit) => (
-              <button
-                key={hit.id}
-                type="button"
-                className="search-hit"
-                onClick={() => { switchChannel(hit.channel_id); setSearchHits(null); setSearchQ(""); }}
-              >
-                <span className="ch-name plain">
-                  {hit.channel_kind === "people" || hit.channel_kind === "dm" ? hit.channel_name : `#${hit.channel_name}`}
-                </span>
-                <span className="hit-body">{hit.author}: {String(hit.body || "").slice(0, 80)}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="section-label">Direct messages</div>
-        <div id="bots-list">
-          {peopleDms.map((c) => {
-            const other = peopleLabel(c);
-            const person = people.find((p) => p.handle === other);
-            return (
-              <button key={c.id} type="button" className={`bot-item${c.id === channel ? " active" : ""}`} onClick={() => switchChannel(c.id)}>
-                <span className={`dot ${person?.online ? "working" : "idle"}`} />
-                <span className="bot-meta">
-                  <span className="bot-name">{other}</span>
-                  <span className="bot-job">{person?.online ? "online" : "person"}</span>
-                </span>
-              </button>
-            );
-          })}
-          {allAgents.map((a) => (
-            <button key={a.name} type="button" className={`bot-item${a.dm_channel_id === channel ? " active" : ""}`} onClick={() => switchChannel(a.dm_channel_id)}>
-              <span className={`dot ${a.status || "idle"}`} />
-              <span className="bot-meta">
-                <span className="bot-name">{botLabel(a)}</span>
-                <span className="bot-job">{a.job || `@${a.name}`}</span>
-              </span>
-            </button>
-          ))}
-          {!allAgents.length && !peopleDms.length && <div className="empty">No conversations yet</div>}
-        </div>
-        <button type="button" id="new-dm" onClick={() => setPeopleModal(true)}>+ Message a person</button>
-        {isAdmin && <button type="button" id="new-agent" onClick={openCreateAgent}>+ New Bot</button>}
-        <div className="section-label">Teams</div>
-        <ul id="team-list">
-          {!teams.length && <li className="empty-state">No teams yet</li>}
-          {teams.map((t) => (
-            <li key={t.id} className="channel-item">
-              <button type="button" className="team-item" onClick={() => { setDraft((d) => (d ? `${d} @${t.id} ` : `@${t.id} `)); inputRef.current?.focus(); }}>
-                <span className="ch-name plain">@{t.id}</span>
-                <span className="ch-topic">{(t.members || []).map(labelFor).join(", ") || t.name}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-        {isAdmin && (
-          <button
-            type="button"
-            id="new-team"
-            onClick={() => {
-              setTeamErr("");
-              setTeamForm({ id: "", name: "", description: "", members: allAgents.slice(0, 2).map((a) => a.name) });
-              setTeamModal(true);
-            }}
-          >
-            + New team
-          </button>
-        )}
-        <div className="section-label">Groups</div>
-        <ul id="group-list">
-          {!groups.length && <li className="empty-state">No groups yet</li>}
-          {groups.map((c) => (
-            <li key={c.id} className="channel-item group-item">
-              <button type="button" className={c.id === channel ? "active" : ""} onClick={() => switchChannel(c.id)}>
-                <span className="ch-name">{c.name}</span>
-                <span className="member-chips">
-                  {(c.members || []).slice(0, 4).map((n) => (
-                    <span key={n} className="member-chip">{labelFor(n)}</span>
-                  ))}
-                </span>
-              </button>
-              <button type="button" className="ch-delete" aria-label={`Delete ${c.name}`} onClick={() => deleteChannel(c.id)}>×</button>
-            </li>
-          ))}
-        </ul>
-        <button type="button" id="new-group" onClick={() => { setChannelErr(""); setGroupMembers(allAgents.slice(0, 2).map((a) => a.name)); setChannelModal("group"); }}>+ New group</button>
-        <div className="section-label">Channels</div>
-        <ul id="channel-list">
-          {!rooms.length && <li className="empty-state">No channels yet</li>}
-          {rooms.map((c) => (
-            <li key={c.id} className="channel-item">
-              <button type="button" className={c.id === channel ? "active" : ""} onClick={() => switchChannel(c.id)}>
-                <span className="ch-name">{c.name}</span>
-                {c.topic ? <span className="ch-topic">{c.topic}</span> : null}
-              </button>
-              <button type="button" className="ch-delete" aria-label={`Delete #${c.name}`} onClick={() => deleteChannel(c.id)}>×</button>
-            </li>
-          ))}
-        </ul>
-        <button type="button" id="new-channel" onClick={() => { setChannelErr(""); setChannelModal("room"); }}>+ New channel</button>
-        <div id="agents-box">
-          <div id="groq-status" className={agentsReady ? "ready" : "missing"}>
-            {demoMode ? "Demo mode — mock replies" : agentsReady ? "Bots ready" : "Connect AI in Computer"}
-          </div>
-        </div>
-        </div>
-        <div id="me">
-          <div className="avatar">{initials(user || "?")}</div>
-          <div className="me-meta">
-            <div className="handle">{user || "anon"}{isAdmin ? <span className="role-pill">admin</span> : null}</div>
-            <div className={`sub ${wsStatus}`}>{wsStatus}</div>
-          </div>
-          <button type="button" className="btn ghost" onClick={() => { if (user) localStorage.removeItem(`swarm_token_${user}`); logout(); }}>Log out</button>
-        </div>
-      </nav>
-
-      <main id="main">
-        <div id="topbar">
-          <button type="button" id="menu-btn" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}>☰</button>
-          <div className="channel-meta">
-            <div className="name">{bot ? botLabel(bot) : peopleChat ? peopleLabel(peopleChat) : group ? current.name : `#${current.name || current.id}`}</div>
-            <div className="topic">
-              {bot
-                ? (bot.job || current.topic || "Teammate")
-                : peopleChat
-                  ? "Private conversation — only you two see this"
-                  : group
-                    ? ((current.members || []).map(labelFor).join(", ") || current.topic || "Group chat")
-                    : (current.topic || "No topic set")}
-            </div>
-          </div>
-          <div className="view-tabs" role="tablist" aria-label="Channel view">
-            <button type="button" className={`tab${mainView === "talk" ? " active" : ""}`} onClick={() => setMainView("talk")}>Talk</button>
-            <button type="button" className={`tab${mainView === "paper" ? " active" : ""}`} onClick={() => setMainView("paper")}>Paper</button>
-          </div>
-          {bot && <span className={`status-chip ${bot.status || "idle"}`}>{statusLabel(bot.status)}</span>}
-          <span className="who">you're <span>{user || "anon"}</span></span>
-          <div className="topbar-actions">
-            {bot && isAdmin && <button type="button" className="btn ghost" onClick={() => openAgentPanel(bot.name)}>Configure</button>}
-            <button type="button" className="btn ghost" onClick={() => setShowTools((v) => !v)}>{showTools ? "Hide tools" : "Tool log"}</button>
-            <button
-              type="button"
-              className={`btn ${computerOpen ? "ghost on" : "ghost"}`}
-              aria-pressed={computerOpen}
-              onClick={() => setComputerOpen((v) => !v)}
-            >
-              Computer
-            </button>
-            <details className="topbar-more">
-              <summary>More</summary>
-              <div className="topbar-menu" role="menu">
-                <button type="button" role="menuitem" onClick={(e) => { exportChannel("json"); e.currentTarget.closest("details").open = false; }}>Export JSON</button>
-                <button type="button" role="menuitem" onClick={(e) => { exportChannel("csv"); e.currentTarget.closest("details").open = false; }}>Export CSV</button>
-              </div>
-            </details>
-          </div>
-        </div>
-        <WorkspacePulse agents={allAgents} approvals={approvals} messages={roots.length} wsStatus={wsStatus} computerOpen={computerOpen} />
-        {mainView === "paper" ? (
-          <div id="log" ref={logRef} className="paper-log" role="document">
-            <PaperView title={bot ? bot.name : (current.name || current.id)} messages={[...roots, ...Object.values(messages).filter((m) => m.parent_id)]} />
-          </div>
-        ) : (
-        <>
-        {hasMore && <button type="button" id="load-earlier" onClick={loadEarlier}>Load earlier messages</button>}
-        <div id="log" ref={logRef} role="log" aria-live="polite">
-          {loadingLog && <div className="loading-state">Loading messages…</div>}
-          {!loadingLog && logError && <div className="empty-state">{logError}</div>}
-          {!loadingLog && !logError && !roots.length && !streamRows.length && (
-            <div className="empty-state editorial">
-              {bot?.name === "coder"
-                ? "Empty page. Ask for a function, a proof, or a listing — code and TeX compile into Paper."
-                : bot
-                  ? `A blank channel. Give ${botLabel(bot)} a real task.`
-                  : peopleChat
-                    ? `Private 1:1 with ${peopleLabel(peopleChat)}. Bots only join if you @mention them.`
-                    : group
-                    ? "A group chat. Message the room and every member hears you — or @mention one."
-                    : "A blank channel. Talk here, @coder for a listing, or @core to run the pod."}
-            </div>
-          )}
-          {roots.map((m, i) => (
-            <MessageRow
-              key={m.id}
-              m={m}
-              grouped={groupedWith(roots[i - 1], m)}
-              reactions={reactions[m.id]}
-              replyCount={replyCounts[m.id] || 0}
-              onReply={openThread}
-              onReact={sendReaction}
-              onOpenThread={openThread}
-              onDelete={deleteMessage}
-              onToggleEmoji={(id, el) => {
-                const r = el.getBoundingClientRect();
-                setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) });
-              }}
-              label={labelFor(m.author)}
-            />
-          ))}
-          {streamRows.map((m) => (
-            <MessageRow key={`stream-${m.author}`} m={m} grouped={false} reactions={[]} replyCount={0} onReply={() => {}} onReact={() => {}} onOpenThread={() => {}} onToggleEmoji={() => {}} label={labelFor(m.author)} />
-          ))}
-        </div>
-        </>
-        )}
-        <div id="approval-dock">
-          {pendingHere.map((a) => <ApprovalCard key={a.id} a={a} onResolve={resolveApproval} />)}
-        </div>
-        <div id="typing" aria-live="polite">{typing}</div>
-        <div id="composer">
-          <div id="inputbar">
-            {mention.open && (
-              <ul id="mention-menu" role="listbox" aria-label="Mention a bot or skill">
-                {mention.items.map((item, i) => (
-                  <li key={item.label}>
-                    <button type="button" className={i === mention.index ? "active" : ""} onMouseDown={(e) => { e.preventDefault(); applyMention(item); }}>
-                      {item.label}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <textarea
-              ref={inputRef}
-              id="msg-input"
-              rows={1}
-              autoComplete="off"
-              placeholder={placeholder}
-              value={draft}
-              onChange={(e) => onComposerInput(e.target.value, e.target.selectionStart)}
-              onKeyDown={onComposerKey}
-            />
-            <button type="button" className="btn primary send" onClick={() => { sendFrom(draft, null); setDraft(""); }}>Send</button>
-          </div>
-          <div className="composer-hint">@bot · @core · /standup /digest · Computer → System to work outside the project</div>
-        </div>
-      </main>
-
-      {computerOpen && (
-        <aside id="computer-panel">
-          <div className="computer-head">
-            <div>
-              <div className="thread-title">Computer</div>
-              <div className="thread-sub">
-                {panelTab === "system"
-                  ? "This machine — any folder"
-                  : panelTab === "ai"
-                    ? "Live models from your providers"
-                    : computer
-                      ? `Sandbox · ${computer.files.length} file${computer.files.length === 1 ? "" : "s"}`
-                      : "Sandbox"}
-              </div>
-            </div>
-            <button type="button" className="btn ghost" onClick={() => setComputerOpen(false)}>Close</button>
-          </div>
-          <div className="panel-groups" role="tablist" aria-label="Computer sections">
-            {PANEL_GROUPS.map((group) => (
-              <button
-                key={group.id}
-                type="button"
-                className={`panel-group${panelGroup.id === group.id ? " active" : ""}`}
-                onClick={() => {
-                  if (panelGroup.id !== group.id) setPanelTab(group.tabs[0].id);
-                }}
-              >
-                {group.label}
-              </button>
-            ))}
-          </div>
-          <div className="panel-tabs" role="tablist">
-            {panelGroup.tabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={panelTab === tab.id}
-                className={`tab${panelTab === tab.id ? " active" : ""}`}
-                onClick={() => setPanelTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          {panelTab === "system" && (
-            <SystemPanel token={token} flash={flash} onRootChange={loadComputer} />
-          )}
-          {panelTab === "browser" && (
-            <BrowserPanel token={token} flash={flash} />
-          )}
-          {panelTab === "apps" && (
-            <AppsPanel token={token} flash={flash} />
-          )}
-          {panelTab === "tools" && (
-            <ToolsPanel
-              token={token}
-              toolCatalog={toolCatalog}
-              plugins={pluginList}
-              flash={flash}
-              onReload={loadToolCatalog}
-            />
-          )}
-          {panelTab === "plugins" && (
-            <div className="panel-body">
-              <p className="panel-note">
-                Drop folders with <code>manifest.json</code> into <code>plugins/</code>, then reload.
-              </p>
-              <button type="button" className="btn primary" onClick={async () => {
-                const res = await api("/api/plugins/reload", { token, method: "POST", body: {} });
-                if (res.ok) {
-                  const data = await res.json();
-                  setPluginList(data.plugins || []);
-                  await loadToolCatalog();
-                  flash(`Reloaded — ${data.tool_count} tools`);
-                } else flash("Couldn't reload plugins", true);
-              }}>Reload plugins</button>
-              <ul className="panel-list">
-                {!pluginList.length && <li className="empty-state">No plugins loaded.</li>}
-                {pluginList.map((p) => (
-                  <li key={p.id}>
-                    <strong>{p.name}</strong> v{p.version}
-                    <div className="bot-job">{p.description}</div>
-                    <div className="hint">{p.path}</div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {panelTab === "ai" && (
-            <div className="panel-body">
-              <ProviderPanel token={token} flash={flash} onStatusChange={loadGroqStatus} />
-            </div>
-          )}
-          {panelTab === "files" && (
-            <div className="panel-body">
-              <p className="panel-note">
-                Isolated sandbox for throwaway files and <code>computer_run</code>.
-                Live repo work belongs on the <strong>System</strong> tab.
-              </p>
-              <div className="place-chips">
-                <span className="place-chip">Sandbox</span>
-                <span className="place-chip path" title={computer?.workspace || ""}>
-                  {computer?.workspace || "…"}
-                </span>
-              </div>
-              <ul className="file-list">
-                {!computer?.files?.length && (
-                  <li className="empty-state">Empty sandbox. Ask a Bot to <code>write_workspace</code> a file.</li>
-                )}
-                {computer?.files?.map((f) => (
-                  <li key={f.path}>
-                    <button type="button" className="file-row" onClick={() => previewFile(f.path)}>
-                      <span className="file-kind">file</span>
-                      <span className="file-name">{f.path}</span>
-                      <span className="file-size">{fmtBytes(f.size)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              {filePreview && <pre id="file-preview">{filePreview}</pre>}
-              <div className="mem-title">Recent actions</div>
-              <ul className="panel-list dim">
-                {!(computer?.activity || []).length && <li className="empty-state">No tool calls yet.</li>}
-                {(computer?.activity || []).slice(0, 12).map((m) => <li key={m.id}>{m.body}</li>)}
-              </ul>
-            </div>
-          )}
-          {panelTab === "skills" && (
-            <div className="panel-body">
-              <form className="mini-form" onSubmit={async (ev) => {
-                ev.preventDefault();
-                const fd = new FormData(ev.target);
-                const name = String(fd.get("name") || "").trim();
-                const body = String(fd.get("body") || "").trim();
-                if (!name || !body) return;
-                const res = await api("/api/skills", { token, method: "POST", body: { name, body } });
-                if (res.ok) { ev.target.reset(); loadSkills(); flash(`Saved /${name}`); }
-                else flash("Couldn't save skill", true);
-              }}>
-                <input name="name" maxLength={64} required placeholder="weekly-health" />
-                <textarea name="body" maxLength={8000} rows={4} required placeholder="When to use it, inputs, steps, validation, output, approval boundary." />
-                <button type="submit" className="btn primary">Save skill</button>
-              </form>
-              <ul className="panel-list">
-                {!skills.length && <li className="empty-state">No skills yet. Save a process that worked.</li>}
-                {skills.map((s) => (
-                  <li key={s.id}>
-                    <button type="button" className="linkish" onClick={() => {
-                      const next = insertMention(draft, draft.length, draft.length, s.name, "slash");
-                      setDraft(next.value);
-                    }}>/{s.name}</button>{" "}
-                    <button type="button" className="btn ghost" onClick={async () => {
-                      const res = await api(`/api/skills/${s.id}`, { token, method: "DELETE", json: false });
-                      if (res.ok) loadSkills();
-                    }}>Delete</button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {panelTab === "routines" && (
-            <div className="panel-body">
-              <form className="mini-form" onSubmit={async (ev) => {
-                ev.preventDefault();
-                const fd = new FormData(ev.target);
-                const payload = {
-                  agent_name: String(fd.get("agent") || ""),
-                  title: String(fd.get("title") || "").trim(),
-                  instructions: String(fd.get("instructions") || "").trim(),
-                  interval_minutes: Number(fd.get("interval")) || 60,
-                  enabled: true,
-                };
-                if (!payload.agent_name || !payload.title || !payload.instructions) return;
-                const res = await api("/api/routines", { token, method: "POST", body: payload });
-                if (res.ok) { ev.target.reset(); loadRoutines(); flash("Routine created"); }
-                else flash("Couldn't create routine", true);
-              }}>
-                <input name="title" maxLength={80} required placeholder="Morning digest" />
-                <textarea name="instructions" maxLength={4000} rows={3} required placeholder="Every run: what to do, where to post, what needs approval." />
-                <div className="row-fields">
-                  <select name="agent" defaultValue={bot?.name || allAgents[0]?.name || ""}>
-                    {allAgents.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
-                  </select>
-                  <input name="interval" type="number" min={1} max={10080} defaultValue={60} title="Minutes" />
-                </div>
-                <button type="submit" className="btn primary">Create routine</button>
-              </form>
-              <ul className="panel-list">
-                {!routines.length && <li className="empty-state">No routines. Automate a skill after it is reliable.</li>}
-                {routines.map((r) => (
-                  <li key={r.id}>
-                    <div>{r.title} · @{r.agent_name} · every {r.interval_minutes}m</div>
-                    <div className="bot-job">{r.enabled ? "enabled" : "paused"}</div>
-                    <button type="button" className="btn ghost" onClick={async () => {
-                      const res = await api(`/api/routines/${r.id}/run`, { token, method: "POST", body: {} });
-                      flash(res.ok ? "Routine started" : "Couldn't start routine", !res.ok);
-                    }}>Test run</button>
-                    <button type="button" className="btn ghost" onClick={async () => {
-                      await api(`/api/routines/${r.id}`, { token, method: "PATCH", body: { enabled: !r.enabled } });
-                      loadRoutines();
-                    }}>{r.enabled ? "Pause" : "Enable"}</button>
-                    <button type="button" className="btn ghost" onClick={async () => {
-                      await api(`/api/routines/${r.id}`, { token, method: "DELETE", json: false });
-                      loadRoutines();
-                    }}>Delete</button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {panelTab === "approvals" && (
-            <div className="panel-body">
-              <ul className="panel-list">
-                {!pendingAll.length && <li className="empty-state">Nothing waiting. Consequential actions pause here.</li>}
-                {pendingAll.map((a) => <li key={a.id}><ApprovalCard a={a} onResolve={resolveApproval} /></li>)}
-              </ul>
-            </div>
-          )}
-        </aside>
-      )}
+      {computerOpen && <ComputerPanel computer={computer} onClose={() => setComputerOpen(false)} onRefresh={loadComputer} />}
 
       {threadId && (
-        <aside id="thread-panel">
-          <div className="thread-head">
-            <div>
-              <div className="thread-title">Thread</div>
-              <div className="thread-sub">{threadParent ? `with ${threadParent.author}` : ""}</div>
-            </div>
-            <button type="button" className="btn ghost" onClick={() => { setThreadId(null); setThreadParent(null); setThreadReplies([]); }}>Close</button>
-          </div>
-          <div id="thread-log" ref={threadLogRef} role="log">
-            {threadParent && <MessageRow m={threadParent} inThread reactions={reactions[threadParent.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onDelete={deleteMessage} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} label={labelFor(threadParent.author)} />}
-            {threadReplies.map((m, i) => (
-              <MessageRow key={m.id} m={m} inThread grouped={groupedWith(i ? threadReplies[i - 1] : threadParent, m)} reactions={reactions[m.id]} replyCount={0} onReply={() => {}} onReact={sendReaction} onOpenThread={() => {}} onDelete={deleteMessage} onToggleEmoji={(id, el) => { const r = el.getBoundingClientRect(); setEmoji({ id, top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 220) }); }} label={labelFor(m.author)} />
-            ))}
-          </div>
-          <div className="thread-composer">
-            <div id="inputbar-thread">
-              <textarea ref={threadInputRef} id="thread-input" rows={1} autoComplete="off" placeholder="Reply in thread" value={threadDraft} onChange={(e) => setThreadDraft(e.target.value)} onKeyDown={(ev) => {
-                if (ev.key === "Enter" && !ev.shiftKey) {
-                  ev.preventDefault();
-                  sendFrom(threadDraft, threadId);
-                  setThreadDraft("");
-                }
-              }} />
-              <button type="button" className="btn primary send" onClick={() => { sendFrom(threadDraft, threadId); setThreadDraft(""); }}>Send</button>
-            </div>
-          </div>
-        </aside>
+        <ThreadPanel
+          parentId={threadId}
+          messages={messages}
+          threadReplies={threadReplies}
+          allAgents={allAgents}
+          onClose={() => setThreadId(null)}
+          onSend={(text) => sendMessage(text, threadId)}
+          onReact={onReact}
+          reactions={reactions}
+        />
       )}
-      </>
+
+      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} commands={commands} onCommand={(c) => c.action?.()} />
+
+      {toast && (
+        <div className={`toast-container ${toast.type === "error" ? "error" : ""}`}>
+          <div className={`toast ${toast.type}`}>
+            {toast.title && <div className="toast-title">{toast.title}</div>}
+            <div className="toast-message">{toast.msg}</div>
+          </div>
+        </div>
       )}
     </div>
   );
+}
+
+// ── Views ──
+
+function PaperView({ messages, title }) {
+  return (
+    <div id="log" className="paper-log">
+      <article className="paper-doc">
+        <p className="paper-kicker">swarm preprint</p>
+        <h1>{title}</h1>
+        <p className="paper-meta">A compiled view of this channel · talk stays in Talk</p>
+        <section>
+          <h2>Code</h2>
+          {messages.filter(m => m.body?.includes("```")).length === 0 && <p className="paper-empty">No code listings yet.</p>}
+        </section>
+        <section>
+          <h2>Mathematics</h2>
+          {messages.filter(m => m.body?.includes("$")).length === 0 && <p className="paper-empty">No TeX yet.</p>}
+        </section>
+      </article>
+    </div>
+  );
+}
+
+function FilesView({ computer }) {
+  if (!computer) return <EmptyState icon="📁" title="No sandbox" message="Computer panel is off. Toggle it from the top bar." />;
+  const files = computer.files || [];
+  return (
+    <div id="log" className="files-view">
+      <div className="files-header">
+        <span className="text-mono-xs text-subtle">{computer.cwd}</span>
+      </div>
+      <ScrollArea className="files-list">
+        {files.map(f => (
+          <div key={f.name} className="file-row">
+            <span className="file-icon">{f.is_dir ? "📁" : "📄"}</span>
+            <span className="file-name">{f.name}</span>
+          </div>
+        ))}
+      </ScrollArea>
+    </div>
+  );
+}
+
+function AgentsView({ agents, onOpenChannel }) {
+  return (
+    <div id="log" className="agents-view">
+      <ScrollArea className="agents-grid">
+        {agents.map(a => (
+          <Card key={a.name} interactive padded onClick={() => onOpenChannel(a.dm_channel_id)}>
+            <div className="agent-card-head">
+              <Avatar name={a.display_name || a.name} kind="agent" size="lg" />
+              <div className="agent-card-meta">
+                <span className="agent-card-name">{a.display_name || a.name}</span>
+                <span className="agent-card-handle text-mono-xs text-subtle">@{a.name}</span>
+              </div>
+              <Badge variant={a.status === "working" ? "success" : a.status === "needs_approval" ? "warning" : "subtle"}>
+                {statusLabel(a.status)}
+              </Badge>
+            </div>
+            <p className="agent-card-job text-sm text-secondary">{a.job}</p>
+            <p className="agent-card-model text-mono-xs text-subtle">{a.model}</p>
+          </Card>
+        ))}
+      </ScrollArea>
+    </div>
+  );
+}
+
+function ThreadPanel({ parentId, messages, threadReplies, allAgents, onClose, onSend, onReact, reactions }) {
+  const parent = messages[parentId];
+  const replies = threadReplies.length > 0 ? threadReplies : Object.values(messages).filter(m => m.parent_id === parentId);
+  return (
+    <aside id="thread-panel">
+      <div className="panel-header">
+        <div className="panel-header-main">
+          <span className="panel-icon">💬</span>
+          <div>
+            <h2 className="panel-title">Thread</h2>
+            <span className="panel-subtitle text-mono-xs text-subtle">{replies.length} repl{replies.length === 1 ? "y" : "ies"}</span>
+          </div>
+        </div>
+        <button className="panel-close" onClick={onClose} aria-label="Close">×</button>
+      </div>
+      <ScrollArea className="thread-body">
+        {parent && (
+          <div className="thread-parent">
+            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={{ handle: "you" }} onReply={() => {}} onReact={onReact} onDelete={() => {}} onOpenThread={() => {}} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+          </div>
+        )}
+        <Divider />
+        {replies.map(r => (
+          <div key={r.id} className="thread-reply">
+            <Avatar name={r.author} kind={r.author_kind === "agent" ? "agent" : "human"} size="sm" />
+            <div className="thread-reply-body">
+              <div className="msg-meta"><span className="msg-author">{r.author}</span><span className="msg-time text-mono-xs text-subtle">{fmtTime(r.created_at)}</span></div>
+              <RichBody body={r.body || ""} />
+            </div>
+          </div>
+        ))}
+      </ScrollArea>
+      <Composer onSend={onSend} placeholder="Reply in thread…" compact threadParent />
+    </aside>
+  );
+}
+
+function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [detail, setDetail] = useState("");
+  const [members, setMembers] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const labels = { channel: "New channel", dm: "New direct message", group: "New group", team: "New agent team", agent: "New agent" };
+  const needsMembers = action === "group" || action === "team";
+  const needsDetail = action !== "dm";
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!name.trim() || (needsMembers && !members.length)) return;
+    setBusy(true);
+    let path = "/api/channels";
+    let body = { name: name.trim() };
+    if (action === "dm") { path = "/api/dms"; body = { handle: name.trim() }; }
+    if (action === "group") { body = { name: name.trim(), topic: detail.trim(), kind: "group", members }; }
+    if (action === "team") { path = "/api/teams"; body = { name: name.trim(), description: detail.trim(), members }; }
+    if (action === "agent") { path = "/api/agents"; body = { name: name.trim(), display_name: name.trim(), system_prompt: detail.trim() || `You are ${name.trim()}, a helpful specialist teammate.`, job: "Teammate" }; }
+    const response = await apiJson(path, { token, method: "POST", body });
+    setBusy(false);
+    if (response.ok) onCreated(response.data?.id || response.data?.dm_channel_id);
+  }
+
+  return <div className="quick-create-backdrop"><section className="quick-create"><header className="run-monitor-head"><div><span className="eyebrow">WORKSPACE</span><h2>{labels[action]}</h2></div><button className="panel-close" onClick={onClose}>×</button></header><form className="quick-create-form" onSubmit={submit}><Input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder={action === "dm" ? "Person handle" : action === "agent" ? "Agent handle" : "Name"} />{needsDetail && <Textarea value={detail} onChange={e => setDetail(e.target.value)} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}{needsMembers && <label className="quick-members">{agents.map(agent => <span key={agent.name}><input type="checkbox" checked={members.includes(agent.name)} onChange={e => setMembers(value => e.target.checked ? [...value, agent.name] : value.filter(item => item !== agent.name))} /> {agent.display_name || agent.name}</span>)}</label>}<footer className="workflow-editor-actions"><Button variant="ghost" type="button" onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" disabled={busy || !name.trim() || (needsMembers && !members.length)}>{busy ? "Creating…" : "Create"}</Button></footer></form></section></div>;
 }

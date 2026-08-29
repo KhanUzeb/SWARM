@@ -10,7 +10,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await apiJson("/api/ai-support/providers", { token, cacheTtl: CACHE_TTL.catalog });
+      const res = await apiJson("/api/v2/providers", { token, cacheTtl: CACHE_TTL.catalog });
       setProviders(res.ok ? res.data : []);
     } catch {
       setProviders([]);
@@ -54,6 +54,14 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
       flash?.(`Couldn't connect ${provider.name}`, true);
     }
     setBusy(null);
+  }
+
+  async function startOAuth(provider) {
+    try {
+      const res = await apiJson(`/api/v2/providers/${provider.id}/oauth/start`, { token });
+      if (res.ok && res.data?.authorization_url) window.open(res.data.authorization_url, "swarm-provider-oauth", "popup,width=520,height=720");
+      else flash?.(res.data?.detail || "OAuth is not configured for this provider", true);
+    } catch { flash?.("Could not start OAuth", true); }
   }
 
   async function saveModel(provider) {
@@ -112,6 +120,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
               <div className="provider-head">
                 <span className="provider-name">{p.name}</span>
                 <span className="provider-kind">{p.kind || "openai_compatible"}</span>
+                <span className="provider-kind">{(p.auth_methods || ["api_key"]).join(" / ")}</span>
                 <span className={`provider-badge${p.connected ? " on" : ""}`}>
                   {p.connected ? (p.via === "env" ? "Env" : "Connected") : "Not connected"}
                 </span>
@@ -145,6 +154,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
                     placeholder="Search this provider's models"
                   />
                   <div className="provider-actions">
+                    {p.auth_methods?.includes("oauth") && p.oauth_configured && <button type="button" className="btn ghost" onClick={() => startOAuth(p)}>Connect with OAuth</button>}
                     <a className="btn ghost" href={p.key_url} target="_blank" rel="noreferrer">Get key</a>
                     <button
                       type="button"
