@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import time
 from typing import Any
 
 from .. import db
@@ -31,6 +32,13 @@ async def connect(provider_id: str, api_key: str, *, model: str | None = None) -
     return await db.upsert_ai_provider(provider_id, sealed, model=model)
 
 
+async def connect_oauth(provider_id: str, access_token: str, refresh_token: str | None, expires_in: int | float | None, *, model: str | None = None) -> dict[str, Any]:
+    access = _seal(access_token.strip())
+    refresh = _seal(refresh_token.strip()) if refresh_token else None
+    expires_at = time.time() + float(expires_in) if expires_in else None
+    return await db.update_ai_provider_oauth(provider_id, access, refresh, expires_at, model=model)
+
+
 async def disconnect(provider_id: str) -> bool:
     return await db.delete_ai_provider(provider_id)
 
@@ -52,6 +60,10 @@ async def status() -> list[dict[str, Any]]:
 async def resolve_key(provider_id: str, *, env_fallback: str | None = None) -> str | None:
     row = await db.get_ai_provider(provider_id)
     if row and row.get("secret"):
+        if row.get("auth_method") == "oauth" and row.get("expires_at") and float(row["expires_at"]) <= time.time() + 60 and row.get("refresh_secret"):
+            refreshed = await _refresh_oauth(provider_id, row)
+            if refreshed:
+                return refreshed
         try:
             return _unseal(row["secret"])
         except Exception:  # noqa: BLE001
@@ -60,6 +72,30 @@ async def resolve_key(provider_id: str, *, env_fallback: str | None = None) -> s
         val = (os.environ.get(env_fallback) or "").strip().strip('"').strip("'")
         return val or None
     return None
+
+
+async def _refresh_oauth(provider_id: str, row: dict[str, Any]) -> str | None:
+    from .providers import get_provider
+    spec = get_provider(provider_id) or {}
+    token_url = (spec.get("oauth_token_url") or "").strip()
+    client_id = (os.environ.get(f"SWARM_{provider_id.upper()}_OAUTH_CLIENT_ID") or "").strip()
+    client_secret = (os.environ.get(f"SWARM_{provider_id.upper()}_OAUTH_CLIENT_SECRET") or "").strip()
+    if not token_url or not client_id or not row.get("refresh_secret"):
+        return None
+    try:
+        refresh = _unseal(row["refresh_secret"])
+        import httpx
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(token_url, data={"grant_type": "refresh_token", "refresh_token": refresh, "client_id": client_id, "client_secret": client_secret})
+            response.raise_for_status()
+            body = response.json()
+        access = str(body.get("access_token") or "").strip()
+        if len(access) < 8:
+            return None
+        await connect_oauth(provider_id, access, body.get("refresh_token") or refresh, body.get("expires_in"), model=row.get("model"))
+        return access
+    except Exception:  # noqa: BLE001
+        return None
 
 
 async def get_connection_model(provider_id: str) -> str | None:

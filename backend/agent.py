@@ -1,11 +1,11 @@
 """
-swarm.agent — the AI teammates in the room.
+swarm.agent contains the AI teammates that work in the room.
 
 Phase 0: one hardcoded persona, no tools.
 Phase 2: tool calling (read-only shell, channel history search).
 Phase 4: multiple personas, loaded from the `agents` table.
-Phase 5: every call traced through Langfuse if configured, silently
-         skipped if not — this module must work with zero env vars set
+Phase 5: every call traced through Langfuse when configured. Tracing is
+         skipped otherwise, and the module works with zero env vars set
          beyond GROQ_API_KEY.
 Phase 8: AsyncGroq; tool-call rounds non-streaming; final text streamed.
 Phase 9: per-agent harness, memory notes, classified retries, OpenRouter.
@@ -692,13 +692,15 @@ async def _run_with_client(
             reply = (content or "").strip() or "(empty reply)"
             return {"reply": reply, "tool_events": tool_events, "usage": usage_total}
 
-        if len(tool_events) >= cap:
+        remaining = cap - len(tool_events)
+        if remaining <= 0:
             await announce_tools()
             return {
                 "reply": f"hit the {cap}-tool-call cap for this reply, stopping here.",
                 "tool_events": tool_events, "usage": usage_total,
             }
 
+        selected_tool_calls = tool_calls[:remaining]
         messages.append({
             "role": "assistant",
             "content": content or "",
@@ -708,11 +710,11 @@ async def _run_with_client(
                     "type": "function",
                     "function": {"name": tc["name"], "arguments": tc["arguments"]},
                 }
-                for tc in tool_calls
+                for tc in selected_tool_calls
             ],
         })
 
-        for tc in tool_calls:
+        for tc in selected_tool_calls:
             try:
                 args = _json.loads(tc["arguments"] or "{}")
             except _json.JSONDecodeError:
@@ -727,6 +729,13 @@ async def _run_with_client(
             messages.append({
                 "role": "tool", "tool_call_id": tc["id"], "content": result,
             })
+
+        if len(selected_tool_calls) < len(tool_calls):
+            await announce_tools()
+            return {
+                "reply": f"hit the {cap}-tool-call cap for this reply, stopping here.",
+                "tool_events": tool_events, "usage": usage_total,
+            }
 
     await announce_tools()
     return {
@@ -852,6 +861,22 @@ async def generate_reply(
     )
     use_tools = should_offer_tools(history, channel_kind=channel_kind) and bool(allowed)
 
+    # A provider fallback must not announce a second visible stream if the
+    # first provider failed after opening one.
+    stream_announced = False
+
+    async def safe_stream_start() -> None:
+        nonlocal stream_announced
+        if stream_announced:
+            return
+        stream_announced = True
+        if on_stream_start is not None:
+            await on_stream_start()
+
+    async def safe_token(delta: str) -> None:
+        if on_token is not None:
+            await on_token(delta)
+
     langfuse = _langfuse_client()
     trace = None
     if langfuse is not None:
@@ -870,13 +895,13 @@ async def generate_reply(
             client, used_model, agent_row, channel_id, snapshot,
             use_tools=use_tools, allowed=allowed,
             on_tools_ready=on_tools_ready,
-            on_stream_start=on_stream_start,
-            on_token=on_token,
+            on_stream_start=safe_stream_start,
+            on_token=safe_token,
             trace=trace,
         )
 
     last_exc: BaseException | None = None
-    from .ai_support.resolver import any_provider_ready, iter_openai_compatible_attempts
+    from .ai_support.resolver import any_provider_ready, iter_provider_attempts
 
     if not await any_provider_ready():
         return {
@@ -885,7 +910,7 @@ async def generate_reply(
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
 
-    attempts = await iter_openai_compatible_attempts(model)
+    attempts = await iter_provider_attempts(model)
     if not attempts:
         return {
             "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect in Computer → AI]",

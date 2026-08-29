@@ -14,7 +14,7 @@ def _env_key(name: str) -> str:
 
 
 async def resolve_runtime_auth(provider_id: str) -> RuntimeProviderAuth | None:
-    """DB-stored key first, then env fallback — never returns raw key to callers outside server."""
+    """Resolve the stored key first, then the environment fallback."""
     spec = get_provider(provider_id)
     if spec is None:
         return None
@@ -85,6 +85,69 @@ async def iter_openai_compatible_attempts(agent_model: str) -> list[tuple[Any, s
         resolved = map_model_for_provider(agent_model, pid, stored_model=auth.default_model)
         out.append((client, resolved, pid))
     return out
+
+
+class _AnthropicDelta:
+    def __init__(self, content: str):
+        self.content = content
+        self.tool_calls = None
+
+
+class _AnthropicChoice:
+    def __init__(self, content: str):
+        self.delta = _AnthropicDelta(content)
+
+
+class _AnthropicChunk:
+    def __init__(self, content: str):
+        self.choices = [_AnthropicChoice(content)]
+        self.usage = None
+
+
+class _AnthropicStream:
+    def __init__(self, content: str):
+        self.content = content
+
+    def __aiter__(self):
+        return self._items()
+
+    async def _items(self):
+        yield _AnthropicChunk(self.content)
+
+
+class _AnthropicCompletions:
+    def __init__(self, auth: RuntimeProviderAuth):
+        self.auth = auth
+
+    async def create(self, *, model: str, messages: list[dict[str, Any]], max_tokens: int = 600, **_: Any) -> _AnthropicStream:
+        import httpx
+        system = "\n".join(str(message.get("content") or "") for message in messages if message.get("role") == "system")
+        converted = [{"role": "user" if message.get("role") != "assistant" else "assistant", "content": str(message.get("content") or "")} for message in messages if message.get("role") != "system"]
+        headers = {"x-api-key": self.auth.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json", **dict(self.auth.headers or {})}
+        payload: dict[str, Any] = {"model": model, "messages": converted, "max_tokens": max_tokens}
+        if system:
+            payload["system"] = system
+        base = (self.auth.base_url or "https://api.anthropic.com/v1").rstrip("/")
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(f"{base}/messages", headers=headers, json=payload)
+            response.raise_for_status()
+            body = response.json()
+        content = "\n".join(str(block.get("text") or "") for block in body.get("content") or [] if isinstance(block, dict)).strip()
+        return _AnthropicStream(content)
+
+
+class _AnthropicClient:
+    def __init__(self, auth: RuntimeProviderAuth):
+        self.chat = type("_Chat", (), {"completions": _AnthropicCompletions(auth)})()
+
+
+async def iter_provider_attempts(agent_model: str) -> list[tuple[Any, str, str]]:
+    attempts = await iter_openai_compatible_attempts(agent_model)
+    spec = get_provider("anthropic") or {}
+    auth = await resolve_runtime_auth("anthropic")
+    if auth is not None and spec.get("kind") == "anthropic":
+        attempts.append((_AnthropicClient(auth), map_model_for_provider(agent_model, "anthropic", stored_model=auth.default_model), "anthropic"))
+    return attempts
 
 
 async def any_provider_ready() -> bool:

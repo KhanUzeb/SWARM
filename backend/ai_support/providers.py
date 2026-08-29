@@ -98,6 +98,42 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "https://api.together.xyz/v1",
         "model_aliases": {},
     },
+    "google": {
+        "id": "google", "name": "Google Gemini", "kind": "openai_compatible", "auth": "api_key",
+        "auth_methods": ["api_key", "oauth"], "priority": 7,
+        "oauth_authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "oauth_token_url": "https://oauth2.googleapis.com/token",
+        "oauth_scope": "https://www.googleapis.com/auth/cloud-platform",
+        "key_url": "https://aistudio.google.com/app/apikey",
+        "models": ["gemini-2.5-flash", "gemini-2.5-pro"], "default_model": "gemini-2.5-flash",
+        "env_fallback": "GOOGLE_API_KEY", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model_aliases": {"openai/gpt-oss-120b": "gemini-2.5-flash", "openai/gpt-oss-20b": "gemini-2.5-flash"},
+    },
+    "mistral": {
+        "id": "mistral", "name": "Mistral", "kind": "openai_compatible", "auth": "api_key", "priority": 8,
+        "key_url": "https://console.mistral.ai/api-keys/", "models": ["mistral-large-latest", "mistral-small-latest"],
+        "default_model": "mistral-small-latest", "env_fallback": "MISTRAL_API_KEY", "base_url": "https://api.mistral.ai/v1", "model_aliases": {},
+    },
+    "deepseek": {
+        "id": "deepseek", "name": "DeepSeek", "kind": "openai_compatible", "auth": "api_key", "priority": 9,
+        "key_url": "https://platform.deepseek.com/api_keys", "models": ["deepseek-chat", "deepseek-reasoner"],
+        "default_model": "deepseek-chat", "env_fallback": "DEEPSEEK_API_KEY", "base_url": "https://api.deepseek.com/v1", "model_aliases": {},
+    },
+    "xai": {
+        "id": "xai", "name": "xAI", "kind": "openai_compatible", "auth": "api_key", "priority": 10,
+        "key_url": "https://console.x.ai/", "models": ["grok-3-mini", "grok-3"], "default_model": "grok-3-mini",
+        "env_fallback": "XAI_API_KEY", "base_url": "https://api.x.ai/v1", "model_aliases": {},
+    },
+    "fireworks": {
+        "id": "fireworks", "name": "Fireworks AI", "kind": "openai_compatible", "auth": "api_key", "priority": 11,
+        "key_url": "https://fireworks.ai/account/api-keys", "models": ["accounts/fireworks/models/llama-v3p1-70b-instruct", "accounts/fireworks/models/deepseek-v3"],
+        "default_model": "accounts/fireworks/models/llama-v3p1-70b-instruct", "env_fallback": "FIREWORKS_API_KEY", "base_url": "https://api.fireworks.ai/inference/v1", "model_aliases": {},
+    },
+    "perplexity": {
+        "id": "perplexity", "name": "Perplexity", "kind": "openai_compatible", "auth": "api_key", "priority": 12,
+        "key_url": "https://www.perplexity.ai/settings/api", "models": ["sonar", "sonar-pro"], "default_model": "sonar",
+        "env_fallback": "PERPLEXITY_API_KEY", "base_url": "https://api.perplexity.ai", "model_aliases": {},
+    },
     "anthropic": {
         "id": "anthropic",
         "name": "Anthropic",
@@ -105,6 +141,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "auth": "api_key",
         "priority": 6,
         "oauth_label": "Connect with API key",
+        "auth_methods": ["api_key"],
         "key_url": "https://console.anthropic.com/settings/keys",
         "models": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
         "default_model": "claude-3-5-haiku-latest",
@@ -120,7 +157,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 
 _PUBLIC_KEYS = frozenset({
     "id", "name", "kind", "auth", "priority", "key_url", "models",
-    "default_model", "oauth_label", "note",
+    "default_model", "oauth_label", "auth_methods", "note",
 })
 
 
