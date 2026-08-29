@@ -1,4 +1,4 @@
-"""Bundled /commands — markdown in repo `skills/`, seeded into the skills table."""
+"""Bundled /commands from the repository's `skills/` directory."""
 from __future__ import annotations
 
 from pathlib import Path
