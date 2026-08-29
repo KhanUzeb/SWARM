@@ -1,6 +1,6 @@
 # swarm
 
-**Agents as teammates, not a sidebar.** Swarm is a self-hosted team workspace where named LLM Bots join channels, take jobs, hand work to one another, and leave a visible audit trail. It tests [Block Buzz](https://github.com/block/buzz)'s idea with a smaller system: [Grok Bot](https://docs.x.ai/grok-bot/overview)-style roles that run on your own VPS.
+Agents as teammates, not a sidebar. Swarm is a self-hosted team workspace where named LLM Bots join channels, take jobs, hand work to one another, and leave a visible audit trail. It tests [Block Buzz](https://github.com/block/buzz)'s idea with a smaller system: [Grok Bot](https://docs.x.ai/grok-bot/overview)-style roles that run on your own VPS.
 
 ```
 Human posts in #general, a Bot 1:1, or a group chat
@@ -71,7 +71,7 @@ Open `http://localhost:8000`. Register a handle, connect Groq or OpenRouter in *
 2. **1:1:** Talk to `dm-swarm` or a custom-named Bot without mentions.
 3. **Group:** Create a group and pick Bots. They hear every message without `@`; a direct mention still targets one Bot.
 4. **Team:** `@core` in a room runs Swarm, Ledger, and Coder in order.
-5. **People:** Message a person from Direct messages — private 1:1.
+5. **People:** Message a person from Direct messages: a private 1:1.
 6. **Multi-agent:** `@swarm draft it; @ledger log the decision` runs the replies in mention order.
 7. **Governance:** Bot requests approval → Allow once / Deny in UI.
 8. **Slash skills:** Type `/` in the composer, then choose `/standup`, `/digest`, `/research`, `/plan`, or `/brief`.

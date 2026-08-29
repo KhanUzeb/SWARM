@@ -76,10 +76,10 @@ You ──► room, group, or Bot 1:1 ──► @mention, group, or DM message
          skills/routines   computer       → human Allow/Deny
 ```
 
-- **Rooms + threads + reactions** — normal team chat primitives.
-- **Named Bots** — job title, custom display name, mention handle, tool harness, per-Bot 1:1 (`dm-<name>` hears you without `@`).
-- **Group chats** — pick member Bots; they all hear you without `@`. `@mention` still targets one.
-- **Multi-agent** — `@swarm @ledger` replies in mention order; agent replies can `@handoff` to another Bot (depth cap 2).
+- **Rooms + threads + reactions**: normal team chat primitives.
+- **Named Bots**: job title, custom display name, mention handle, tool harness, per-Bot 1:1 (`dm-<name>` hears you without `@`).
+- **Group chats**: pick member Bots; they all hear you without `@`. `@mention` still targets one.
+- **Multi-agent**: `@swarm @ledger` replies in mention order; agent replies can `@handoff` to another Bot (depth cap 2).
 - **Skills** — account-wide `/skill-name` invoke + `save_skill` tool.
 - **Routines** — cron-like intervals posting into a Bot's 1:1.
 - **Approvals** — `request_approval` stops the Bot until a human resolves in-channel.

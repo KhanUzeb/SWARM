@@ -23,7 +23,7 @@ items: semantic history (Phase 6). See `docs/CHANGELOG.md`.
 |------------|----------------------------------|-----|
 | Backend    | FastAPI + Uvicorn                | async-native, WS support built in, matches VOX/AXIOM stack |
 | DB         | SQLite via `aiosqlite`           | zero-ops for a portfolio project; swap to Postgres if this ever needs concurrent writers at scale |
-| Realtime   | Native WebSocket, in-memory hub  | one process, one hub — no Redis pub/sub needed at this scale |
+| Realtime   | Native WebSocket, in-memory hub  | one process, one hub, no Redis pub/sub needed at this scale |
 | LLM        | Groq (primary), OpenRouter/OpenAI/HF/Together fallback | Priority chain via `backend/ai_support/resolver.py`; env or UI-stored keys |
 | Frontend   | React 19 + Vite 8, built with bun | small SPA, hashed assets, FastAPI serves `frontend/dist` |
 | Tracing    | Langfuse                         | follows the eval/observability pattern from VERIS; becomes a no-op when unconfigured |
@@ -73,7 +73,7 @@ swarm/
 | 4     | Multi-agent personas      | ✅ done | `agents` table, seeded `swarm` + `ledger`, ordered sequential replies on multi-mention |
 | 5     | Observability             | ✅ done | Langfuse trace per generation, tagged by channel + agent, silent no-op if unconfigured |
 | 6     | Semantic history (opt.)   | ⛔ intentionally skipped | keyword search has not proved insufficient, so building Qdrant now would be speculative work that Phase 6 forbids |
-| 7     | Deployment                | ✅ done (verified) | Dockerfile, compose, DEPLOY.md — `docker compose build && up -d` run live; `/api/channels` ok; SQLite volume survived down/up; sandbox tool ran in-container at `/tmp/swarm-sandbox` |
+| 7     | Deployment                | ✅ done (verified) | Dockerfile, compose, DEPLOY.md: `docker compose build && up -d` run live; `/api/channels` ok; SQLite volume survived down/up; sandbox tool ran in-container at `/tmp/swarm-sandbox` |
 | 8     | Reliability + streaming UI | ✅ done | WS `last_seen_id` catch-up, history `before_id` pagination, `GET /api/messages/{id}/thread`, AsyncGroq token streaming, pytest, React UI with thread panel, mention picker, reconnect, mobile layout |
 | 9     | Custom agents + memory     | ✅ done | Agent create/edit UI + GET/PATCH, per-agent harness (window, tool toggles), `agent_memory` notes via remember/recall, context injects notes + rolling summary, classified errors, one retry, optional OpenRouter |
 | 10    | Grok Bot teammates         | ✅ done | Named jobs, 1:1 DMs (no @ needed), job templates, skills, interval routines, approvals, shared workspace/"computer" panel, bot-to-bot handoff, status chips |
@@ -86,7 +86,7 @@ swarm/
 - **Auth token format** ended up as a single composite string
   (`handle:raw`) rather than a bare opaque token, so REST and WS auth
   share one code path (`parse_token`) without a second lookup table.
-  Not in the original spec — added during Phase 1 implementation
+  Not in the original spec, added during Phase 1 implementation
   because the alternative (separate handle + token fields everywhere)
   was more surface area for the same guarantee.
 - **Multi-agent ordering bug caught and fixed during build**: firing
@@ -94,7 +94,7 @@ swarm/
   and reply out of order, violating FR4.2. Fixed by running all
   mentioned agents sequentially inside one task. Documented here
   because it's the kind of bug that only shows up under concurrent
-  load, not in a single-agent test — worth remembering if
+  load, not in a single-agent test, worth remembering if
   agent-to-agent triggering ever gets added. Phase 10 did add
   handoffs: an agent reply that `@mentions` another Bot triggers
   that Bot, depth-capped at 2, still sequential inside the task.
@@ -106,7 +106,7 @@ swarm/
   added columns on `agents` and the `agent_memory` table. Existing
   SQLite files get `ALTER TABLE` on startup via `PRAGMA table_info`
   rather than Alembic. Documented because a later column type change
-  would still need a real migration tool — this only covers additive
+  would still need a real migration tool. This only covers additive
   columns and new tables.
 
 ## Explicit risks (updated)
@@ -135,7 +135,7 @@ swarm/
   `SWARM_SYSTEM_ROOT` (the repo by default). Browser sessions, 24/7
   cloud work with the laptop closed, and teach-by-demonstration are
   out of scope. Files placed in either tree are visible to every Bot
-  on the account — same boundary as Grok Bot's docs, without the
+  on the account, same boundary as Grok Bot's docs, without the
   cloud isolation story.
 
 ## V3 roadmap (product-complete, not Buzz-complete)

@@ -1,7 +1,7 @@
 # SPEC.md — swarm
 
 Technical contract for what's actually running (V2 + Phase 10). If code
-and this document disagree, one of them is wrong — file it as a bug
+and this document disagree, one of them is wrong. File it as a bug
 against whichever is easier to fix correctly, not whichever is easier
 to leave broken.
 
@@ -52,7 +52,7 @@ Indexed on `(channel_id, created_at)` and `(parent_id)`.
 | emoji      | TEXT    | free-text, capped at 8 chars |
 | created_at | REAL    | |
 
-`UNIQUE(message_id, author, emoji)` — same tuple twice is a no-op, not
+`UNIQUE(message_id, author, emoji)`: same tuple twice is a no-op, not
 a duplicate row or an error.
 
 ### `agents`
@@ -181,7 +181,7 @@ Env vars (`GROQ_API_KEY`, `HF_TOKEN`, …) remain fallbacks.
 
 Indexed on `(agent_name, created_at)`. Notes are written by the
 `remember` tool. At most one `summary` row is kept per
-`(agent_name, channel_id)` — a new summary replaces the previous.
+`(agent_name, channel_id)`: a new summary replaces the previous.
 
 ### `skills`
 
