@@ -171,6 +171,48 @@ def test_routines_and_due(client, auth, monkeypatch):
     assert any(m["author_kind"] == "agent" and m["body"] == "digest ready" for m in history)
 
 
+def test_manual_routine_run_does_not_reschedule(client, auth, monkeypatch):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+        return {"reply": "manual result", "tool_events": [], "usage": {}}
+
+    monkeypatch.setattr(main.agent, "generate_reply", fake_reply)
+    _clear_rate()
+    created = client.post(
+        "/api/routines",
+        json={
+            "agent_name": "swarm",
+            "title": "Manual check",
+            "instructions": "Check now.",
+            "interval_minutes": 60,
+        },
+        headers=auth,
+    ).json()
+    before = created["next_run_at"]
+
+    asyncio.run(main._execute_routine(created, test_run=True))
+    after = asyncio.run(db.get_routine(created["id"]))
+    assert after["next_run_at"] == before
+
+
+def test_agent_failure_is_persisted_and_status_resets(client, auth, monkeypatch):
+    async def broken_reply(*_args, **_kwargs):
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(main.agent, "generate_reply", broken_reply)
+
+    async def run():
+        row = await db.fetch_agent("swarm")
+        await db.add_message("general", "uzeb", "please help", "human")
+        return await main._run_agent("general", row)
+
+    result = asyncio.run(run())
+    assert result["reply"].startswith("[agent error:")
+    history = client.get("/api/channels/general/messages", headers=auth).json()
+    assert any(m["author_kind"] == "agent" and "agent error" in m["body"] for m in history)
+    swarm = client.get("/api/agents/swarm", headers=auth).json()
+    assert swarm["status"] == "idle"
+
+
 def test_approvals_roundtrip(client, auth, monkeypatch):
     async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
         events = [{

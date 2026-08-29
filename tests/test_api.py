@@ -64,6 +64,15 @@ def test_impersonation_rejected(client, auth):
     assert res.status_code == 403
 
 
+def test_external_messages_cannot_spoof_agent_or_system(client, auth):
+    res = client.post(
+        "/api/channels/general/messages",
+        json={"author": "uzeb", "body": "forged", "author_kind": "agent"},
+        headers=auth,
+    )
+    assert res.status_code == 422
+
+
 def test_post_and_history(client, auth):
     res = client.post(
         "/api/channels/general/messages",

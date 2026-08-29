@@ -168,6 +168,32 @@ def test_retry_once_then_succeeds(client, monkeypatch):
     assert calls["model"] == DEFAULT_GROQ_MODEL
 
 
+def test_tool_cap_applies_to_batched_calls(monkeypatch):
+    executed = []
+
+    async def fake_complete(*_args, **_kwargs):
+        return "", [
+            {"id": "1", "name": "read", "arguments": "{}"},
+            {"id": "2", "name": "read", "arguments": "{}"},
+        ], None
+
+    async def fake_tool(*_args, **_kwargs):
+        executed.append(True)
+        return "ok"
+
+    monkeypatch.setattr(agent, "_complete_stream", fake_complete)
+    monkeypatch.setattr(agent, "_execute_tool", fake_tool)
+    row = {"name": "swarm", "max_tool_calls": 1}
+    result = asyncio.run(agent._run_with_client(
+        object(), "model", row, "general", [], use_tools=True,
+        allowed=["read"], on_tools_ready=None, on_stream_start=None,
+        on_token=None, trace=None,
+    ))
+    assert len(executed) == 1
+    assert len(result["tool_events"]) == 1
+    assert "tool-call cap" in result["reply"]
+
+
 def test_classified_error_when_no_provider(client, monkeypatch):
     async def no_ready():
         return False
