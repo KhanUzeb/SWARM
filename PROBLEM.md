@@ -10,13 +10,13 @@ Team chat and AI assistance live in different tools.
 
 When an agent runs a shell command, searches history, or drafts an outbound email, that work is invisible unless someone copy-pastes it back into the thread. The team cannot delegate with `@name`, cannot see tool calls alongside human messages, and cannot approve risky actions in the same room where the decision was made.
 
-## The hypothesis Buzz names — and what we're testing
+## The hypothesis from Buzz, and what we are testing
 
 Block's [Buzz](https://github.com/block/buzz) states it directly: one event log, one identity model, humans and agents both speaking it, same audit trail. Agents join channels, run workflows, review code, and leave the same record as everyone else.
 
 That's the right *shape*. But Buzz's implementation (Rust, Nostr relay, cryptographic signing, git hosting, workflow engine, canvases, huddles, desktop app) is a full product with a security model and multi-tenant hosting. Cloning it teaches infrastructure, not whether the chat-native agent model actually helps.
 
-**swarm tests one question:**
+**Swarm tests one question:**
 
 > Does putting an agent in the same room as humans, with the same message history, the same `@mention` trigger, and tool calls posted as visible audit messages, produce something more useful than a chatbot sidebar?
 
@@ -34,7 +34,7 @@ Everything else (signing, multi-tenancy, git integration, canvases, Slack connec
 
 **swarm's slice:** self-hosted workspace, Buzz-shaped agent model, Grok Bot-style named jobs, without Nostr, without Slack dependency, spec'd and Docker-deployable today.
 
-See `VISION.md` for the full competitive map and V3 scope.
+See `VISION.md` for the full comparison and V3 scope.
 
 ## Who this is for
 

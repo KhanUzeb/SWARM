@@ -1,6 +1,6 @@
 # Changelog
 
-Track feature layers for easy `git revert` / bisect. Each row maps to one commit on `main`.
+This file maps the feature layers to the commits that introduced them. Use it when you need to bisect a change or revert a layer.
 
 | Commit (search log) | Scope | Revert effect |
 |---------------------|-------|---------------|

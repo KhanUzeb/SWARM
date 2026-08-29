@@ -1,6 +1,6 @@
 # VISION.md — swarm
 
-**One line:** A self-hosted team workspace where AI agents are named teammates — same channels, same history, same audit trail. Not a sidebar chatbot bolted onto Slack.
+**One line:** A self-hosted team workspace where AI agents are named teammates. They use the same channels and history as people, with the same audit trail. Swarm is not a sidebar chatbot bolted onto Slack.
 
 ---
 
@@ -28,7 +28,7 @@ Not for: enterprises replacing Slack, teams needing Salesforce/Slack connectors 
 
 ---
 
-## Competitive landscape
+## Competition
 
 Projects solving adjacent problems, and where swarm sits.
 

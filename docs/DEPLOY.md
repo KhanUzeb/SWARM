@@ -1,8 +1,8 @@
 # DEPLOY.md
 
-Single-VPS deployment. No Kubernetes, no service split — Buzz's
-Postgres/Redis/MinIO split solves a scaling problem this project
-doesn't have (see `PROJECT.md`).
+This deployment targets one VPS. It does not use Kubernetes or split the
+database, cache, and object storage into separate services. See `PROJECT.md`
+for the reason.
 
 ## Build & run
 
@@ -18,8 +18,8 @@ docker compose build
 docker compose up -d
 ```
 
-The image is two-stage: bun builds the React UI, then the Python image
-serves `frontend/dist` from uvicorn. You do not need bun on the VPS.
+The image has two stages. Bun builds the React UI, and the Python image
+serves `frontend/dist` through uvicorn. Bun is not needed on the VPS.
 
 App is on `http://<host>:8000`.
 
@@ -61,6 +61,6 @@ docker compose build
 docker compose up -d
 ```
 
-The volume persists across rebuilds. Phase 9 added `ensure_schema()` —
-on startup the app `ALTER TABLE`s any missing agent harness columns and
-creates `agent_memory` if needed. No separate migrate command.
+The volume persists across rebuilds. On startup, `ensure_schema()` adds
+missing agent harness columns and creates `agent_memory` when needed. There
+is no separate migration command.

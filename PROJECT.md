@@ -1,15 +1,15 @@
 # PROJECT.md — swarm
 
-**Agents as teammates, not a sidebar.** Self-hosted workspace where LLM
-Bots are channel members with jobs, 1:1s, skills, routines, and a
-shared audit trail. It's the minimum test of [Buzz](https://github.com/block/buzz)'s
-thesis without Nostr/git/workflows.
+**Agents as teammates, not a sidebar.** Swarm is a self-hosted workspace
+where LLM Bots have channel membership, jobs, 1:1s, skills, routines, and a
+shared audit trail. It tests the central idea behind [Buzz](https://github.com/block/buzz)
+without Nostr, git hosting, or workflow management.
 
 | Doc | Role |
 |-----|------|
 | `VISION.md` | Product thesis, competitive map (Buzz, SlackHive, Operator, OpenTag, Grok Bot), V3 scope, demo script |
 | `PROBLEM.md` | Why this exists, and what hypothesis we're testing |
-| `SPEC.md` | Technical contract — if code disagrees, file a bug |
+| `SPEC.md` | Technical contract. If code disagrees, file a bug. |
 | `PROMPTS.md` | Phase history + gated build prompts |
 
 **Status: V3 workspace complete (admin, teams, people DMs, audit export, bot archive, computer-use, browser-use, Composio apps).**
@@ -26,7 +26,7 @@ items: semantic history (Phase 6). See `docs/CHANGELOG.md`.
 | Realtime   | Native WebSocket, in-memory hub  | one process, one hub — no Redis pub/sub needed at this scale |
 | LLM        | Groq (primary), OpenRouter/OpenAI/HF/Together fallback | Priority chain via `backend/ai_support/resolver.py`; env or UI-stored keys |
 | Frontend   | React 19 + Vite 8, built with bun | small SPA, hashed assets, FastAPI serves `frontend/dist` |
-| Tracing    | Langfuse                         | reuses the eval/observability pattern from VERIS; degrades to no-op if unconfigured |
+| Tracing    | Langfuse                         | follows the eval/observability pattern from VERIS; becomes a no-op when unconfigured |
 | Deployment | Docker + docker-compose          | single VPS, named volume for the SQLite file |
 
 ## Repo layout
@@ -72,7 +72,7 @@ swarm/
 | 3     | Threads & reactions       | ✅ done | `parent_id` threading, idempotent reactions, both broadcast over WS |
 | 4     | Multi-agent personas      | ✅ done | `agents` table, seeded `swarm` + `ledger`, ordered sequential replies on multi-mention |
 | 5     | Observability             | ✅ done | Langfuse trace per generation, tagged by channel + agent, silent no-op if unconfigured |
-| 6     | Semantic history (opt.)   | ⛔ intentionally skipped | keyword search hasn't been shown insufficient — building Qdrant now would be exactly the speculative work Phase 6's own spec forbids |
+| 6     | Semantic history (opt.)   | ⛔ intentionally skipped | keyword search has not proved insufficient, so building Qdrant now would be speculative work that Phase 6 forbids |
 | 7     | Deployment                | ✅ done (verified) | Dockerfile, compose, DEPLOY.md — `docker compose build && up -d` run live; `/api/channels` ok; SQLite volume survived down/up; sandbox tool ran in-container at `/tmp/swarm-sandbox` |
 | 8     | Reliability + streaming UI | ✅ done | WS `last_seen_id` catch-up, history `before_id` pagination, `GET /api/messages/{id}/thread`, AsyncGroq token streaming, pytest, React UI with thread panel, mention picker, reconnect, mobile layout |
 | 9     | Custom agents + memory     | ✅ done | Agent create/edit UI + GET/PATCH, per-agent harness (window, tool toggles), `agent_memory` notes via remember/recall, context injects notes + rolling summary, classified errors, one retry, optional OpenRouter |
@@ -162,7 +162,7 @@ GitHub, Notion, and other app toolkits with one workspace key.
 
 ## Natural next steps (still gated)
 
-Same rule as Phase 6 — don't build speculatively:
+The Phase 6 rule still applies: do not build these features speculatively.
 
 1. Semantic history — only if keyword search has proven insufficient.
 2. Isolated cloud VMs — only if the local sandbox + browser session has proven insufficient.
