@@ -421,69 +421,73 @@ export default function App() {
         onOpenSettings={() => setMainView("dashboard")}
       />
 
-      <TopBar
-        channel={current}
-        agents={agents}
-        onToggleComputer={() => setComputerOpen(o => !o)}
-        computerOpen={computerOpen}
-        onOpenCommandPalette={() => setCmdOpen(true)}
-        onViewChange={setMainView}
-        currentView={mainView}
-        approvals={approvals}
-        onResolveApproval={onResolveApproval}
-      />
-
-      {["dashboard", "workflows", "runs"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
-      {mainView === "talk" && (
-        <MessageList
-          messages={messages}
-          order={order}
+      <div className="workspace-shell">
+        <TopBar
+          channel={current}
           agents={agents}
-          allAgents={allAgents}
-          user={user}
-          onReply={onReply}
-          onReact={onReact}
-          onDelete={onDelete}
-          onOpenThread={onReply}
-          replyCounts={replyCounts}
-          reactions={reactions}
-          channelId={channel}
-          onLoadMore={async () => {
-            if (loadingLog || order.length === 0) return;
-            setLoadingLog(true);
-            try {
-              const history = await loadHistory(channelRef.current, order[0]);
-              applyHistory(history, true);
-            } catch { flash("Failed to load earlier messages", "error"); }
-            finally { setLoadingLog(false); }
-          }}
-          hasMore={hasMore}
-          loadingMore={loadingLog}
-          typing={typing}
-          groupedWith={(prev, m) => {
-            if (!prev) return false;
-            if (prev.author !== m.author) return false;
-            if (prev.author_kind !== m.author_kind) return false;
-            if (m.parent_id) return false;
-            const dt = (m.created_at - prev.created_at) * 1000;
-            return dt < 5 * 60 * 1000;
-          }}
+          onToggleComputer={() => setComputerOpen(o => !o)}
+          computerOpen={computerOpen}
+          onOpenCommandPalette={() => setCmdOpen(true)}
+          onViewChange={setMainView}
+          currentView={mainView}
+          approvals={approvals}
+          onResolveApproval={onResolveApproval}
         />
-      )}
 
-      {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
-      {mainView === "files" && <FilesView computer={computer} />}
-      {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => setChannel(id)} />}
+        <main id="main">
+          {["dashboard", "workflows", "runs"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
+          {mainView === "talk" && (
+            <MessageList
+              messages={messages}
+              order={order}
+              agents={agents}
+              allAgents={allAgents}
+              user={user}
+              onReply={onReply}
+              onReact={onReact}
+              onDelete={onDelete}
+              onOpenThread={onReply}
+              replyCounts={replyCounts}
+              reactions={reactions}
+              channelId={channel}
+              onLoadMore={async () => {
+                if (loadingLog || order.length === 0) return;
+                setLoadingLog(true);
+                try {
+                  const history = await loadHistory(channelRef.current, order[0]);
+                  applyHistory(history, true);
+                } catch { flash("Failed to load earlier messages", "error"); }
+                finally { setLoadingLog(false); }
+              }}
+              hasMore={hasMore}
+              loadingMore={loadingLog}
+              typing={typing}
+              groupedWith={(prev, m) => {
+                if (!prev) return false;
+                if (prev.author !== m.author) return false;
+                if (prev.author_kind !== m.author_kind) return false;
+                if (m.parent_id) return false;
+                const dt = (m.created_at - prev.created_at) * 1000;
+                return dt < 5 * 60 * 1000;
+              }}
+            />
+          )}
+
+          {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
+          {mainView === "files" && <FilesView computer={computer} />}
+          {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => setChannel(id)} />}
+        </main>
+
+        {mainView === "talk" && <Composer
+          onSend={(text) => sendMessage(text)}
+          channelName={current.name}
+          agents={agents}
+          placeholder={`Message ${current.name}…`}
+        />}
+      </div>
 
       {selectedRun && <RunMonitor token={token} run={selectedRun} onClose={() => setSelectedRun(null)} />}
       {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) setChannel(id); flash("Created", "success"); }} />}
-
-      {mainView === "talk" && <Composer
-        onSend={(text) => sendMessage(text)}
-        channelName={current.name}
-        agents={agents}
-        placeholder={`Message ${current.name}…`}
-      />}
 
       {computerOpen && (
         <ComputerPanel

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { Avatar, Badge, RichBody, Tooltip } from "../ui.jsx";
-import { fmtTime, initials } from "../lib.js";
+import { Avatar, RichBody, Tooltip } from "../ui.jsx";
+import { fmtTime } from "../lib.js";
 
 export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onDelete, onOpenThread, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith }) {
   const endRef = useRef(null);
@@ -23,8 +23,8 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
           </div>
-          <div className="empty-state-title">No messages yet</div>
-          <div className="empty-state-message">Start the conversation — @mention an agent to bring them in.</div>
+          <div className="empty-state-title">Start a conversation</div>
+          <div className="empty-state-message">Message your team or @mention an agent to get started.</div>
         </div>
       </div>
     );
@@ -33,46 +33,46 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
   return (
     <div id="log" ref={logRef}>
       <div className="log-inner">
-      {hasMore && (
-        <button className="load-earlier" onClick={onLoadMore} disabled={loadingMore}>
-          {loadingMore ? "Loading…" : "Load earlier messages"}
-        </button>
-      )}
+        {hasMore && (
+          <button className="load-earlier" onClick={onLoadMore} disabled={loadingMore}>
+            {loadingMore ? "Loading…" : "Load earlier messages"}
+          </button>
+        )}
 
-      {roots.map((m, i) => {
-        const prev = roots[i - 1];
-        const grouped = groupedWith(prev, m);
-        const label = m.author_kind === "agent"
-          ? (allAgents.find(a => a.name === m.author)?.display_name || m.author)
-          : m.author;
-        const agent = m.author_kind === "agent" ? allAgents.find(a => a.name === m.author) : null;
+        {roots.map((m, i) => {
+          const prev = roots[i - 1];
+          const grouped = groupedWith(prev, m);
+          const label = m.author_kind === "agent"
+            ? (allAgents.find(a => a.name === m.author)?.display_name || m.author)
+            : m.author;
+          const agent = m.author_kind === "agent" ? allAgents.find(a => a.name === m.author) : null;
 
-        return (
-          <MessageRow
-            key={m.id}
-            m={m}
-            grouped={grouped}
-            label={label}
-            agent={agent}
-            reactions={reactions[m.id] || []}
-            replyCount={replyCounts[m.id] || 0}
-            onReply={onReply}
-            onReact={onReact}
-            onDelete={onDelete}
-            onOpenThread={onOpenThread}
-            myHandle={user?.handle}
-          />
-        );
-      })}
+          return (
+            <MessageRow
+              key={m.id}
+              m={m}
+              grouped={grouped}
+              label={label}
+              agent={agent}
+              reactions={reactions[m.id] || []}
+              replyCount={replyCounts[m.id] || 0}
+              onReply={onReply}
+              onReact={onReact}
+              onDelete={onDelete}
+              onOpenThread={onOpenThread}
+              myHandle={user?.handle}
+            />
+          );
+        })}
 
-      {typing && (
-        <div className="typing-indicator">
-          <span className="typing-dots"><span /><span /><span /></span>
-          <span className="typing-text">{typing} is typing…</span>
-        </div>
-      )}
+        {typing && (
+          <div className="typing-indicator">
+            <span className="typing-dots"><span /><span /><span /></span>
+            <span className="typing-text">{typing} is typing…</span>
+          </div>
+        )}
 
-      <div ref={endRef} />
+        <div ref={endRef} />
       </div>
     </div>
   );
@@ -86,47 +86,92 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
   const kind = m.author_kind || "human";
   const avatarKind = kind === "system" ? "system" : agent ? "agent" : "human";
 
-  return (
-    <div className={`msg-row ${kind} ${grouped ? "grouped" : ""} ${m.streaming ? "streaming" : ""}`}>
-      <div className="msg-main">
-        {!grouped && (
-          <Avatar name={label} kind={avatarKind} size="md" />
-        )}
-        {grouped && <div className="msg-gutter" />}
-
-        <div className="msg-content">
-          {!grouped && (
-            <div className="msg-meta">
-              <span className="msg-author">{label}</span>
-              {agent && <Badge variant="brand" className="msg-badge">{agent.job || "agent"}</Badge>}
-              <span className="msg-time">{fmtTime(m.created_at)}</span>
-            </div>
-          )}
+  if (kind === "system") {
+    return (
+      <div className="msg-row system">
+        <div className="msg-system-line">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
+          </svg>
           <RichBody body={m.body || ""} />
         </div>
       </div>
+    );
+  }
 
-      {kind !== "system" && !m.streaming && m.id != null && (
-        <div className="msg-actions">
-          <Tooltip content="Reply"><button onClick={() => onReply(m.parent_id || m.id)} aria-label="Reply">↩</button></Tooltip>
-          <Tooltip content="React"><button onClick={(ev) => onReact(m.id, ev.currentTarget)} aria-label="React">😊</button></Tooltip>
-          {onDelete && isMe && <Tooltip content="Delete"><button className="danger" onClick={() => onDelete(m)} aria-label="Delete">🗑</button></Tooltip>}
+  if (isMe) {
+    return (
+      <div className={`msg-row human me ${grouped ? "grouped" : ""} ${m.streaming ? "streaming" : ""}`}>
+        <div className="msg-bubble user-bubble">
+          <RichBody body={m.body || ""} />
+          {!m.streaming && m.id != null && Object.keys(counts).length > 0 && (
+            <div className="msg-reactions inline">
+              {Object.entries(counts).map(([emoji, count]) => (
+                <button key={emoji} className="reaction-chip" onClick={() => onReact(m.id, emoji)}>
+                  {emoji} {count > 1 && <span className="reaction-count">{count}</span>}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+        {!grouped && !m.parent_id && !m.streaming && replyCount > 0 && (
+          <button className="thread-count" onClick={() => onOpenThread(m.id)}>
+            {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
+          </button>
+        )}
+      </div>
+    );
+  }
 
-      {!m.streaming && m.id != null && counts && Object.keys(counts).length > 0 && (
-        <div className="msg-reactions">
-          {Object.entries(counts).map(([emoji, count]) => (
-            <button key={emoji} className="reaction-chip" onClick={() => onReact(m.id, emoji)}>
-              {emoji} <span className="reaction-count">{count}</span>
-            </button>
-          ))}
-        </div>
-      )}
+  return (
+    <div className={`msg-row ${kind} ${grouped ? "grouped" : ""} ${m.streaming ? "streaming" : ""}`}>
+      <div className="msg-bubble agent-bubble">
+        {!grouped && (
+          <div className="msg-bubble-header">
+            <Avatar name={label} kind={avatarKind} size="sm" />
+            <span className="msg-author">{label}</span>
+            {agent?.job && <span className="msg-role">{agent.job}</span>}
+            <span className="msg-time">{fmtTime(m.created_at)}</span>
+          </div>
+        )}
+        <RichBody body={m.body || ""} />
+
+        {kind !== "system" && !m.streaming && m.id != null && (
+          <div className="msg-actions">
+            <Tooltip content="Reply">
+              <button onClick={() => onReply(m.parent_id || m.id)} aria-label="Reply">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 14L4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+              </button>
+            </Tooltip>
+            <Tooltip content="React">
+              <button onClick={() => onReact(m.id, "👍")} aria-label="React">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+              </button>
+            </Tooltip>
+            {onDelete && isMe && (
+              <Tooltip content="Delete">
+                <button className="danger" onClick={() => onDelete(m)} aria-label="Delete">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>
+              </Tooltip>
+            )}
+          </div>
+        )}
+
+        {!m.streaming && m.id != null && Object.keys(counts).length > 0 && (
+          <div className="msg-reactions inline">
+            {Object.entries(counts).map(([emoji, count]) => (
+              <button key={emoji} className="reaction-chip" onClick={() => onReact(m.id, emoji)}>
+                {emoji} {count > 1 && <span className="reaction-count">{count}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {!grouped && !m.parent_id && !m.streaming && replyCount > 0 && (
         <button className="thread-count" onClick={() => onOpenThread(m.id)}>
-          💬 {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
+          {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
         </button>
       )}
     </div>
