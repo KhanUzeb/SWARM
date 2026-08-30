@@ -4,9 +4,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from ..models import DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, resolve_groq_model
 from .config import OpenAICompatibleConfig, RuntimeProviderAuth
 from .providers import get_provider, providers_by_priority
 from . import store
+
+_DEFAULT_AGENT_MODELS = frozenset({DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-70b-versatile"})
 
 
 def _env_key(name: str) -> str:
@@ -30,6 +33,23 @@ async def resolve_runtime_auth(provider_id: str) -> RuntimeProviderAuth | None:
         headers=headers or None,
         default_model=row or spec.get("default_model"),
     )
+
+
+async def resolve_effective_model(agent_model: str, *, override: str | None = None) -> str:
+    """Pick the model for an agent turn: explicit override, env, provider default, then agent row."""
+    if override and override.strip():
+        return resolve_groq_model(override.strip())
+    env = (os.environ.get("SWARM_AGENT_MODEL") or "").strip()
+    if env:
+        return resolve_groq_model(env)
+    chosen = resolve_groq_model((agent_model or "").strip())
+    if chosen and chosen not in _DEFAULT_AGENT_MODELS:
+        return chosen
+    for spec in providers_by_priority():
+        auth = await resolve_runtime_auth(spec["id"])
+        if auth and auth.default_model:
+            return resolve_groq_model(auth.default_model)
+    return chosen or DEFAULT_GROQ_MODEL
 
 
 def map_model_for_provider(agent_model: str, provider_id: str, *, stored_model: str | None = None) -> str:

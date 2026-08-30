@@ -196,8 +196,17 @@ async def api_v2_providers(handle: str = Depends(require_auth)):
     connections = {c["provider_id"]: c for c in await ai_store.status()}
     for provider in catalog:
         spec = get_provider(provider["id"]) or {}
-        provider["connected"] = provider["id"] in connections or _key_set(spec.get("env_fallback"))
-        provider["via"] = "stored" if provider["id"] in connections else ("env" if provider["connected"] else None)
+        conn = connections.get(provider["id"])
+        env_name = spec.get("env_fallback")
+        env_ok = _key_set(env_name) if env_name else False
+        provider["connected"] = conn is not None or env_ok
+        provider["via"] = "stored" if conn else ("env" if env_ok else None)
+        if conn:
+            provider["model"] = conn.get("model")
+            provider["key_hint"] = conn.get("key_hint")
+            provider["connected_at"] = conn.get("connected_at")
+        elif env_ok:
+            provider["model"] = spec.get("default_model")
         provider["capabilities"] = {"streaming": True, "tool_calling": spec.get("kind") == "openai_compatible", "vision": False}
         provider["oauth_configured"] = bool(spec.get("oauth_authorize_url") and os.environ.get(f"SWARM_{provider['id'].upper()}_OAUTH_CLIENT_ID"))
     return catalog
@@ -280,7 +289,7 @@ async def api_v2_runs(limit: int = Query(default=50, ge=1, le=100), handle: str 
 async def api_v2_create_run(payload: RunCreate, handle: str = Depends(require_auth)):
     if payload.workflow_id and not await v2.get_workflow(payload.workflow_id, handle):
         raise HTTPException(status_code=404, detail="workflow not found")
-    run = await v2.create_run(handle, payload.objective, payload.workflow_id, payload.policy)
+    run = await v2.create_run(handle, payload.objective, payload.workflow_id, payload.policy, payload.model)
     v2.start_run(run["id"], handle)
     return run
 

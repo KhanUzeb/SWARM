@@ -813,6 +813,7 @@ async def generate_reply(
     on_tools_ready: OnToolsReady | None = None,
     on_stream_start: OnStreamStart | None = None,
     on_token: OnToken | None = None,
+    model_override: str | None = None,
 ) -> dict[str, Any]:
     """Returns {"reply": str, "tool_events": [{"tool", "args", "result"}], "usage": {...}}.
     tool_events is populated in order — caller (main.py) persists each as
@@ -831,8 +832,11 @@ async def generate_reply(
         return result
 
     name = agent_row["name"]
-    model = resolve_groq_model(
-        (os.environ.get("SWARM_AGENT_MODEL") or "").strip() or agent_row["model"]
+    from .ai_support.resolver import any_provider_ready, iter_provider_attempts, resolve_effective_model
+
+    model = await resolve_effective_model(
+        agent_row.get("model") or "",
+        override=(model_override or "").strip() or None,
     )
     window = history_window_of(agent_row)
     allowed = agent_tools(agent_row)
@@ -901,11 +905,10 @@ async def generate_reply(
         )
 
     last_exc: BaseException | None = None
-    from .ai_support.resolver import any_provider_ready, iter_provider_attempts
 
     if not await any_provider_ready():
         return {
-            "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect in Computer → AI]",
+            "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect a provider in Command Center → AI providers]",
             "tool_events": [],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
@@ -913,7 +916,7 @@ async def generate_reply(
     attempts = await iter_provider_attempts(model)
     if not attempts:
         return {
-            "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect in Computer → AI]",
+            "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect a provider in Command Center → AI providers]",
             "tool_events": [],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }

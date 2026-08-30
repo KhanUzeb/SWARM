@@ -267,6 +267,9 @@ body {
 .event-seq { color: var(--color-brand); font: 12px var(--font-mono); }
 .run-event b { display: block; color: var(--color-text-primary); font-size: 13px; text-transform: capitalize; }
 .run-event small { display: block; margin-top: 5px; color: var(--color-text-subtle); font: 11px var(--font-mono); }
+.run-event-detail { margin: 10px 0 0; padding: 10px 12px; color: var(--color-text-secondary); background: rgba(255, 255, 255, 0.03); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.run-event-error .run-event-detail { color: var(--color-error); border-color: rgba(255, 99, 99, 0.28); background: var(--color-error-bg); }
+.cc-form .field-label { display: block; margin: 2px 0 6px; font-size: 12px; font-weight: 510; color: var(--color-text-muted); }
 .run-approval-actions { display: flex; gap: 8px; margin-top: 12px; }
 .run-report { margin: 0 30px 28px; padding: 18px; background: var(--color-success-bg); border: 1px solid rgba(16,185,129,.28); border-radius: var(--radius-lg); }
 .run-report h3 { margin: 9px 0 6px; color: var(--color-text-primary); font-size: 15px; line-height: 1.45; }
