@@ -23,6 +23,18 @@ serves `frontend/dist` through uvicorn. Bun is not needed on the VPS.
 
 App is on `http://<host>:8000`.
 
+## First login
+
+Register the first handle in the UI — it becomes **admin**. You can
+optionally set a password at creation; it is stored as a PBKDF2 hash
+(100k rounds), never plain text. If you set one, reclaiming that admin
+handle later requires the password. Later users register as **members**
+without a password gate.
+
+If a Bot reply fails (provider down, rate limit, timeout), use **Retry**
+on the error bubble. If your own message fails to send, use the banner
+above the composer.
+
 ## Where the data lives
 
 The SQLite file lives at `/app/data/swarm.db` inside the container,

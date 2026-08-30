@@ -13,9 +13,10 @@ without Nostr, git hosting, or workflow management.
 | `PROMPTS.md` | Phase history + gated build prompts |
 
 **Status: V3 workspace complete (admin, teams, people DMs, audit export, bot archive, computer-use, browser-use, Composio apps).**
-Onboarding, demo mode, tool registry, plugins, multi-provider AI, and
-authenticated API reads are live. Pip mascot removed. Remaining gated
-items: semantic history (Phase 6). See `docs/CHANGELOG.md`.
+Onboarding, demo mode, tool registry, plugins, multi-provider AI,
+authenticated API reads, optional admin password hashing, and chat retry
+are live. Pip mascot removed. Remaining gated items: semantic history
+(Phase 6). See `docs/CHANGELOG.md`.
 
 ## Stack
 
@@ -80,6 +81,7 @@ swarm/
 | 11    | V3 onboarding + demo       | ✅ done | Register → job picker → create Bot → 1:1 with suggested prompt; `SWARM_DEMO=1` mock replies + `#general` seed thread |
 | 12    | Companion + groups         | ✅ done | Custom Bot display names, group chats with member trigger (mascot later removed) |
 | 13    | Small-team workspace       | ✅ done | Admin role, human DMs, `@team` pods, audit export, soft-delete bots |
+| 14    | Auth hardening + chat retry | ✅ done | Optional admin password (PBKDF2), reclaim gate; agent error Retry button + failed-send banner; `POST /api/messages/{id}/retry` |
 
 ## What changed from the original plan
 
@@ -117,7 +119,9 @@ swarm/
 - **Admin role.** First registered handle is `admin`; later handles are
   `member`. Only admins create/edit/archive Bots, teams, custom tools,
   and provider keys. Members can still chat, open people DMs, and
-  export history they can see.
+  export history they can see. The first admin may set an optional
+  password (PBKDF2-HMAC-SHA256, 100k rounds); reclaiming that handle
+  then requires the password.
 - **Bot archive, not hard-delete.** `DELETE /api/agents/{name}` sets
   `archived_at`. History keeps the old author; mentions stop firing.
 - **Docker verified locally, not on a VPS.** `docker compose build &&
