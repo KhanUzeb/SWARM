@@ -81,6 +81,23 @@ def test_v2_run_accepts_model(client, auth):
     assert body["model"] == "openai/gpt-oss-20b"
 
 
+def test_v2_connected_models_endpoint(client, auth):
+    response = client.get("/api/v2/models/connected", headers=auth)
+    assert response.status_code == 200
+    body = response.json()
+    assert "models" in body
+    assert "default_model" in body
+    assert "live" in body
+
+
+def test_computer_run_endpoint(client, auth):
+    response = client.post("/api/computer/run", headers=auth, json={"command": "echo swarm"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["command"] == "echo swarm"
+    assert "swarm" in body["output"]
+
+
 def test_v2_provider_catalog_and_routing_preflight(client, auth):
     providers = client.get("/api/v2/providers", headers=auth)
     assert providers.status_code == 200

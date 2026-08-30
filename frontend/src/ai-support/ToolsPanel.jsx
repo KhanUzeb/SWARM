@@ -1,7 +1,9 @@
-import { useState } from "react";
-import { api } from "../lib.js";
+import { useCallback, useEffect, useState } from "react";
+import { api, apiJson } from "../lib.js";
 
-export default function ToolsPanel({ token, toolCatalog, plugins, onReload, flash }) {
+export default function ToolsPanel({ token, flash }) {
+  const [toolCatalog, setToolCatalog] = useState([]);
+  const [plugins, setPlugins] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
@@ -10,6 +12,22 @@ export default function ToolsPanel({ token, toolCatalog, plugins, onReload, flas
     handler_type: "template",
     template: "Result: {{query}}",
   });
+
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await apiJson("/api/tools", { token });
+      if (res.ok) {
+        setToolCatalog(res.data?.tools || []);
+        setPlugins(res.data?.plugins || []);
+      }
+    } catch {
+      setToolCatalog([]);
+      setPlugins([]);
+    }
+  }, [token]);
+
+  useEffect(() => { load(); }, [load]);
 
   async function createTool(ev) {
     ev.preventDefault();
@@ -39,7 +57,7 @@ export default function ToolsPanel({ token, toolCatalog, plugins, onReload, flas
         flash?.(`Custom tool ${name} saved`);
         setShowForm(false);
         setForm({ name: "", description: "", handler_type: "template", template: "Result: {{query}}" });
-        onReload?.();
+        await load();
       } else if (res.status === 409) flash?.("Tool name already exists", true);
       else flash?.("Couldn't save custom tool", true);
     } catch {
@@ -52,30 +70,35 @@ export default function ToolsPanel({ token, toolCatalog, plugins, onReload, flas
     const res = await api(`/api/tools/custom/${id}`, { token, method: "DELETE", json: false });
     if (res.ok) {
       flash?.(`Removed ${name}`);
-      onReload?.();
+      await load();
     } else flash?.("Couldn't delete tool", true);
   }
 
-  const builtins = (toolCatalog || []).filter((t) => t.kind === "builtin");
-  const customs = (toolCatalog || []).filter((t) => t.kind === "custom");
-  const pluginTools = (toolCatalog || []).filter((t) => t.kind === "plugin");
+  const builtins = toolCatalog.filter((t) => t.kind === "builtin");
+  const customs = toolCatalog.filter((t) => t.kind === "custom");
+  const pluginTools = toolCatalog.filter((t) => t.kind === "plugin");
 
   return (
     <div className="panel-body tools-panel">
       <p className="panel-note">
-        Built-in tools, custom handlers (template / HTTP / echo), and plugin tools from <code>plugins/</code>.
+        Built-in tools, custom handlers, and plugin tools available to every bot in this workspace.
       </p>
       <div className="panel-section">
-        <div className="mem-title">Built-in ({builtins.length})</div>
+        <div className="panel-section-head">
+          <span className="mem-title">Built-in ({builtins.length})</span>
+          <button type="button" className="btn ghost btn-sm" onClick={load}>Refresh</button>
+        </div>
         <ul className="panel-list tool-grid">
           {builtins.map((t) => (
-            <li key={t.name}><span className="tool-tag builtin">{t.name}</span></li>
+            <li key={t.name} title={t.description}>
+              <span className="tool-tag builtin">{t.name}</span>
+            </li>
           ))}
         </ul>
       </div>
       {pluginTools.length > 0 && (
         <div className="panel-section">
-          <div className="mem-title">Plugin tools ({pluginTools.length})</div>
+          <div className="mem-title">From plugins ({pluginTools.length})</div>
           <ul className="panel-list tool-grid">
             {pluginTools.map((t) => (
               <li key={t.name} title={t.description}>
@@ -86,20 +109,23 @@ export default function ToolsPanel({ token, toolCatalog, plugins, onReload, flas
         </div>
       )}
       <div className="panel-section">
-        <div className="mem-title">Custom tools ({customs.length})</div>
-        {!customs.length && <p className="empty-state">No custom tools yet.</p>}
-        <ul className="panel-list">
+        <div className="panel-section-head">
+          <span className="mem-title">Custom tools ({customs.length})</span>
+          {!showForm && (
+            <button type="button" className="btn primary btn-sm" onClick={() => setShowForm(true)}>+ Custom</button>
+          )}
+        </div>
+        {!customs.length && !showForm && <p className="empty-state">No custom tools yet.</p>}
+        <ul className="panel-list tool-rows">
           {customs.map((t) => (
-            <li key={t.name}>
+            <li key={t.name} className="tool-row-item">
               <span className="tool-tag custom">{t.name}</span>
-              <span className="hint"> — {t.description}</span>
-              <button type="button" className="btn ghost" onClick={() => deleteTool(t.id, t.name)}>Delete</button>
+              <span className="tool-row-desc">{t.description}</span>
+              <button type="button" className="btn ghost btn-sm" onClick={() => deleteTool(t.id, t.name)}>Delete</button>
             </li>
           ))}
         </ul>
-        {!showForm ? (
-          <button type="button" className="btn primary" onClick={() => setShowForm(true)}>+ Custom tool</button>
-        ) : (
+        {showForm && (
           <form className="mini-form" onSubmit={createTool}>
             <input required maxLength={64} pattern="[A-Za-z0-9_\-]+" placeholder="tool_name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
             <input required maxLength={500} placeholder="What it does" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
@@ -110,15 +136,15 @@ export default function ToolsPanel({ token, toolCatalog, plugins, onReload, flas
             </select>
             <textarea rows={2} placeholder={form.handler_type === "http_get" ? "https://api.example.com?q={{query}}" : "Result: {{query}}"} value={form.template} onChange={(e) => setForm((f) => ({ ...f, template: e.target.value }))} />
             <div className="modal-actions">
-              <button type="button" className="btn" onClick={() => setShowForm(false)}>Cancel</button>
+              <button type="button" className="btn ghost" onClick={() => setShowForm(false)}>Cancel</button>
               <button type="submit" className="btn primary" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
             </div>
           </form>
         )}
       </div>
-      {plugins?.length > 0 && (
+      {plugins.length > 0 && (
         <div className="panel-section">
-          <div className="mem-title">Loaded plugins</div>
+          <div className="mem-title">Plugin sources</div>
           <ul className="panel-list dim">
             {plugins.map((p) => <li key={p.id}>{p.name} v{p.version} — {p.description}</li>)}
           </ul>

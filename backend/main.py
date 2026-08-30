@@ -38,6 +38,7 @@ from .models import (
     CustomToolPatch, DirectMessageCreate, MessageCreate, ReactionCreate,
     RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate, SkillPatch,
     SystemRootSet, TeamCreate, TeamPatch, RunCreate, WorkflowCreate, WorkflowPatch,
+    ComputerRunRequest,
 )
 from .security import (
     allowed_origins, install_api_guard, is_loopback, optional_auth, parse_token,
@@ -240,6 +241,44 @@ async def api_v2_provider_models(provider_id: str, handle: str = Depends(require
         return await list_provider_models(provider_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="provider not found")
+
+
+@app.get("/api/v2/models/connected")
+async def api_v2_connected_models(handle: str = Depends(require_auth)):
+    """Return live models from the first connected provider, for dynamic UI defaults."""
+    from .ai_support.providers import providers_by_priority
+    from .ai_support.resolver import resolve_runtime_auth
+
+    for spec in providers_by_priority():
+        auth = await resolve_runtime_auth(spec["id"])
+        if auth is None:
+            continue
+        body = await list_provider_models(spec["id"])
+        models = body.get("models") or []
+        if not models:
+            continue
+        preferred = auth.default_model or body.get("default_model")
+        if preferred and not any(m.get("id") == preferred for m in models):
+            preferred = models[0]["id"]
+        preferred = preferred or (models[0]["id"] if models else None)
+        return {
+            "provider_id": spec["id"],
+            "provider_name": spec.get("name") or spec["id"],
+            "live": bool(body.get("live")),
+            "models": models,
+            "default_model": preferred,
+            "note": body.get("note"),
+        }
+    merged = await list_all_models()
+    models = merged.get("models") or []
+    return {
+        "provider_id": None,
+        "provider_name": None,
+        "live": False,
+        "models": models,
+        "default_model": models[0]["id"] if models else None,
+        "note": "Connect a provider to fetch live models from its API.",
+    }
 
 
 @app.get("/api/v2/model-routing/validate")
@@ -1179,6 +1218,15 @@ async def api_computer_file(path: str, handle: str = Depends(require_auth)):
         "path": path,
         "content": target.read_text(encoding="utf-8", errors="replace"),
     }
+
+
+@app.post("/api/computer/run")
+async def api_computer_run(payload: ComputerRunRequest, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import computer as computer_mod
+    output = computer_mod.computer_run(payload.command.strip())
+    return {"command": payload.command.strip(), "output": output}
 
 
 @app.get("/api/computer/system")

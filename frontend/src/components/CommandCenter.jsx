@@ -12,19 +12,15 @@ const starterGraph = {
   edges: [["brief", "lead"], ["lead", "report"]],
 };
 
-function firstConnectedModel(providers) {
-  for (const provider of providers) {
-    if (provider.connected && (provider.model || provider.default_model)) {
-      return provider.model || provider.default_model;
-    }
-  }
-  return "";
+function firstConnectedProvider(providers) {
+  return providers.find(p => p.connected && p.via === "stored") || providers.find(p => p.connected) || null;
 }
 
 export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
   const [workflows, setWorkflows] = useState([]);
   const [runs, setRuns] = useState([]);
   const [providers, setProviders] = useState([]);
+  const [modelProviderId, setModelProviderId] = useState(null);
   const [llmReady, setLlmReady] = useState(true);
   const [name, setName] = useState("");
   const [objective, setObjective] = useState("");
@@ -37,25 +33,27 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
   const [agentModel, setAgentModel] = useState("");
 
   const connectedProvider = useMemo(
-    () => providers.find(p => p.connected && p.via === "stored") || providers.find(p => p.connected),
-    [providers],
+    () => providers.find(p => p.id === modelProviderId) || firstConnectedProvider(providers),
+    [providers, modelProviderId],
   );
 
   const load = useCallback(async () => {
     if (!token) return;
-    const [w, r, p, status] = await Promise.all([
+    const [w, r, p, status, models] = await Promise.all([
       apiJson("/api/v2/workflows", { token }),
       apiJson("/api/v2/runs", { token }),
       apiJson("/api/v2/providers", { token }),
       apiJson("/api/status", { token, cacheTtl: 10_000 }),
+      apiJson("/api/v2/models/connected", { token, cacheTtl: 0 }),
     ]);
     if (w.ok) setWorkflows(w.data);
     if (r.ok) setRuns(r.data);
-    if (p.ok) {
-      setProviders(p.data);
-      setRunModel(prev => prev || firstConnectedModel(p.data));
-    }
+    if (p.ok) setProviders(p.data);
     if (status.ok) setLlmReady(!!status.data?.llm_ready);
+    if (models.ok && models.data) {
+      if (models.data.provider_id) setModelProviderId(models.data.provider_id);
+      if (models.data.default_model) setRunModel(prev => prev || models.data.default_model);
+    }
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
@@ -123,7 +121,8 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
               providerId={connectedProvider?.id}
               value={runModel}
               onChange={setRunModel}
-              placeholder={connectedProvider ? "Search live models" : "Connect a provider first"}
+              autoSelectFirst
+              placeholder={connectedProvider ? "Select a model from API" : "Connect a provider first"}
               disabled={!connectedProvider}
             />
             {workflows.length > 0 && (
@@ -145,7 +144,7 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
           <form onSubmit={createWorkflow} className="cc-inline-form"><Input value={name} onChange={e => setName(e.target.value)} placeholder="New workflow name" /><Button type="submit" variant="ghost" disabled={busy || !name.trim()}>Create</Button></form>
         </Card>
       </section>
-      {editing && <div className="workflow-editor-backdrop"><section className="workflow-editor"><header className="run-monitor-head"><div><span className="eyebrow">WORKFLOW DESIGNER</span><h2>{editing.name}</h2></div><button className="panel-close" onClick={() => setEditing(null)}>×</button></header><div className="workflow-node-list">{editNodes.map((node, index) => <div className="workflow-node" key={node.id}><span className="node-index">{index + 1}</span><span><b>{node.label}</b><small>{node.type === "agent" ? `@${node.agent}${node.model ? ` · ${node.model}` : ""}` : node.type}</small></span><button className="node-remove" onClick={() => setEditNodes(nodes => nodes.filter(n => n.id !== node.id))}>×</button></div>)}</div><div className="cc-inline-form workflow-add"><select className="input" value={agentName} onChange={e => setAgentName(e.target.value)}>{agents.length ? agents.map(a => <option key={a.name} value={a.name}>{a.display_name || a.name}</option>) : <option value="swarm">swarm</option>}</select><Input value={agentModel} onChange={e => setAgentModel(e.target.value)} placeholder="Optional model id" aria-label="Optional model id" /><Button variant="ghost" onClick={() => setEditNodes(nodes => [...nodes, { id: `agent-${Date.now()}`, type: "agent", label: `Agent ${agentName}`, agent: agentName, ...(agentModel.trim() ? { model: agentModel.trim() } : {}) }])}>Add agent</Button></div><footer className="workflow-editor-actions"><Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button><Button variant="primary" disabled={busy} onClick={saveEditor}>Save workflow</Button></footer></section></div>}
+      {editing && <div className="workflow-editor-backdrop"><section className="workflow-editor"><header className="run-monitor-head"><div><span className="eyebrow">WORKFLOW DESIGNER</span><h2>{editing.name}</h2></div><button className="panel-close" onClick={() => setEditing(null)}>×</button></header><div className="workflow-node-list">{editNodes.map((node, index) => <div className="workflow-node" key={node.id}><span className="node-index">{index + 1}</span><span><b>{node.label}</b><small>{node.type === "agent" ? `@${node.agent}${node.model ? ` · ${node.model}` : ""}` : node.type}</small></span><button className="node-remove" onClick={() => setEditNodes(nodes => nodes.filter(n => n.id !== node.id))}>×</button></div>)}</div><div className="cc-inline-form workflow-add"><select className="input" value={agentName} onChange={e => setAgentName(e.target.value)}>{agents.length ? agents.map(a => <option key={a.name} value={a.name}>{a.display_name || a.name}</option>) : <option value="swarm">swarm</option>}</select><ModelPicker token={token} providerId={connectedProvider?.id} value={agentModel} onChange={setAgentModel} placeholder="Model from API" disabled={!connectedProvider} /><Button variant="ghost" onClick={() => setEditNodes(nodes => [...nodes, { id: `agent-${Date.now()}`, type: "agent", label: `Agent ${agentName}`, agent: agentName, ...(agentModel.trim() ? { model: agentModel.trim() } : {}) }])}>Add agent</Button></div><footer className="workflow-editor-actions"><Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button><Button variant="primary" disabled={busy} onClick={saveEditor}>Save workflow</Button></footer></section></div>}
       <section className="cc-runs"><div className="cc-section-head"><div><span className="eyebrow">RECENT ACTIVITY</span><h2>Runs</h2></div><span className="cc-count">{runs.length}</span></div>{runs.length ? <div className="cc-run-list">{runs.slice(0, 8).map(r => <button className="cc-run-row" key={r.id} onClick={() => onOpenRun?.(r)}><span className={`run-status ${r.status}`} /><span className="run-objective">{r.objective}</span><Badge variant={r.status === "completed" ? "success" : r.status === "failed" ? "error" : "subtle"}>{r.status.replaceAll("_", " ")}</Badge><span className="text-mono-xs text-subtle">{new Date(r.created_at * 1000).toLocaleString()}</span></button>)}</div> : <EmptyState icon="◌" title="No runs yet" message="Launch a brief and your live run history will appear here." />}</section>
       <section className="cc-providers"><div className="cc-section-head"><div><span className="eyebrow">MODEL ACCESS</span><h2>AI providers</h2></div><span className="cc-provider-note">API key or supported OAuth</span></div><ProviderPanel token={token} onStatusChange={load} flash={(message, error) => flash?.(message, error ? "error" : "success")} /></section>
     </main>

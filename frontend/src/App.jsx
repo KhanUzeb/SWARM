@@ -485,7 +485,17 @@ export default function App() {
         placeholder={`Message ${current.name}…`}
       />}
 
-      {computerOpen && <ComputerPanel computer={computer} onClose={() => setComputerOpen(false)} onRefresh={loadComputer} />}
+      {computerOpen && (
+        <ComputerPanel
+          computer={computer}
+          token={token}
+          user={user}
+          meRole={meRole}
+          onClose={() => setComputerOpen(false)}
+          onRefresh={loadComputer}
+          flash={flash}
+        />
+      )}
 
       {threadId && (
         <ThreadPanel

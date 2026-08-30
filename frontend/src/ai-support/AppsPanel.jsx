@@ -98,22 +98,29 @@ export default function AppsPanel({ token, flash }) {
   const composio = connectors.find((c) => c.id === "composio");
 
   return (
-    <div className="panel-body">
+    <div className="panel-body apps-panel">
       <p className="panel-note">
-        Workspace connectors shared by every Bot. Search (Exa, Tavily), scrape (Firecrawl),
-        apps (Composio), Browser Use CLI, and CUA desktop drivers. Sends still need
-        <code> request_approval</code>.
+        Workspace connectors shared by every bot — search, scrape, apps, browser automation, and desktop drivers.
       </p>
-      <ul className="panel-list">
+      <ul className="connector-grid">
         {!connectors.length && <li className="empty-state">Loading connectors…</li>}
         {connectors.map((c) => (
-          <li key={c.id}>
-            <strong>{c.name}</strong>{" "}
-            <span className="hint">{c.kind}</span>{" "}
-            <span className="bot-job">{c.connected ? `ready${c.key_hint ? ` (${c.key_hint})` : ""}` : "not connected"}</span>
-            <div className="bot-job">{c.note}</div>
+          <li key={c.id} className={`connector-card${c.connected ? " connected" : ""}`}>
+            <div className="connector-head">
+              <strong className="connector-name">{c.name}</strong>
+              <span className={`provider-badge${c.connected ? " on" : ""}`}>
+                {c.connected ? "Ready" : "Not connected"}
+              </span>
+            </div>
+            <p className="connector-meta">{c.kind}{c.key_hint ? ` · ${c.key_hint}` : ""}</p>
+            <p className="connector-desc">{c.note}</p>
+            {c.tools?.length > 0 && (
+              <div className="tool-grid">
+                {c.tools.map(t => <span key={t} className="tool-tag plugin">{t}</span>)}
+              </div>
+            )}
             {c.kind === "cli" ? (
-              <div className="hint">Local install — no API key. {c.tools?.join(", ")}</div>
+              <p className="hint">Local install — no API key required.</p>
             ) : !c.connected ? (
               <form className="mini-form" onSubmit={(ev) => { ev.preventDefault(); connect(c.id); }}>
                 <input
@@ -131,15 +138,15 @@ export default function AppsPanel({ token, flash }) {
                 </div>
               </form>
             ) : (
-              <button type="button" className="btn ghost" disabled={busy === `disconnect-${c.id}`} onClick={() => disconnect(c.id)}>
+              <button type="button" className="btn ghost btn-sm" disabled={busy === `disconnect-${c.id}`} onClick={() => disconnect(c.id)}>
                 Disconnect stored key
               </button>
             )}
           </li>
         ))}
       </ul>
-      {composio?.connected ? (
-        <>
+      {composio?.connected && (
+        <div className="panel-section">
           <div className="mem-title">Composio app toolkits</div>
           <form className="mini-form" onSubmit={(ev) => { ev.preventDefault(); listToolkits(); }}>
             <input
@@ -151,14 +158,14 @@ export default function AppsPanel({ token, flash }) {
               <button type="submit" className="btn primary" disabled={busy === "list"}>
                 {busy === "list" ? "Listing…" : "List toolkits"}
               </button>
-              <button type="button" className="btn" disabled={busy === "toolkit"} onClick={connectToolkit}>
+              <button type="button" className="btn ghost" disabled={busy === "toolkit"} onClick={connectToolkit}>
                 {busy === "toolkit" ? "Starting…" : "Connect this app"}
               </button>
             </div>
           </form>
           {toolkits ? <pre id="file-preview">{toolkits}</pre> : null}
-        </>
-      ) : null}
+        </div>
+      )}
     </div>
   );
 }

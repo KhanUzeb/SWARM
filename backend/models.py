@@ -296,3 +296,7 @@ class RunCreate(BaseModel):
             return None
         trimmed = value.strip()
         return resolve_groq_model(trimmed) if trimmed else None
+
+
+class ComputerRunRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=4000)
