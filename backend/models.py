@@ -287,3 +287,16 @@ class RunCreate(BaseModel):
     objective: str = Field(min_length=1, max_length=4000)
     workflow_id: str | None = Field(default=None, max_length=64)
     policy: str = Field(default="supervised", pattern=r"^(supervised|autonomous|checkpointed)$")
+    model: str | None = Field(default=None, max_length=200)
+
+    @field_validator("model")
+    @classmethod
+    def _normalize_run_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        return resolve_groq_model(trimmed) if trimmed else None
+
+
+class ComputerRunRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=4000)

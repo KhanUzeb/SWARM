@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Button, Tooltip, Avatar } from "../ui.jsx";
+import { Avatar } from "../ui.jsx";
 
-export function Composer({ onSend, placeholder, channelName, agents, onMention, compact, threadParent }) {
+export function Composer({ onSend, placeholder, channelName, agents, compact, threadParent }) {
   const [draft, setDraft] = useState("");
   const [mention, setMention] = useState({ open: false, index: 0, items: [], query: "" });
   const inputRef = useRef(null);
@@ -48,10 +48,11 @@ export function Composer({ onSend, placeholder, channelName, agents, onMention, 
     }
   }
 
-  function send() {
+  async function send() {
     const text = draft.trim();
     if (!text) return;
-    onSend(text);
+    const ok = await onSend(text);
+    if (ok === false) return;
     setDraft("");
     setMention({ open: false, index: 0, items: [], query: "" });
   }
@@ -63,61 +64,73 @@ export function Composer({ onSend, placeholder, channelName, agents, onMention, 
     }
   }, [mention.index, mention.open]);
 
+  const canSend = draft.trim().length > 0;
+
   return (
     <div id="composer">
-      <div className="composer-wrap">
-        <div className="composer-toolbar">
-          <Tooltip content="Attach file"><button className="composer-tool" aria-label="Attach">📎</button></Tooltip>
-          <Tooltip content="Code block"><button className="composer-tool" aria-label="Code">{"</>"}</button></Tooltip>
-          <Tooltip content="Mention agent"><button className="composer-tool" aria-label="Mention" onClick={() => { setDraft(draft + "@"); inputRef.current?.focus(); }}>@</button></Tooltip>
-          {threadParent && <span className="composer-thread-hint">Replying in thread</span>}
-        </div>
+      {threadParent && <div className="composer-thread-hint">Replying in thread</div>}
+      <div className="composer-pill">
+        <button
+          type="button"
+          className="composer-add"
+          aria-label="Add attachment"
+          onClick={() => { setDraft(draft + "@"); inputRef.current?.focus(); }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
 
-        <div className="composer-input-wrap">
-          <textarea
-            ref={inputRef}
-            id={compact ? "thread-input" : "msg-input"}
-            className="composer-input"
-            value={draft}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder || `Message ${channelName || "#channel"}…`}
-            rows={1}
-            aria-label="Message input"
-          />
+        <textarea
+          ref={inputRef}
+          id={compact ? "thread-input" : "msg-input"}
+          className="composer-input"
+          value={draft}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder || `Message ${channelName || "channel"}…`}
+          rows={1}
+          aria-label="Message input"
+        />
 
-          <div className="composer-actions">
-            <Tooltip content="Send (Enter)">
-              <Button variant="primary" size="sm" onClick={send} disabled={!draft.trim()} className="composer-send">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/></svg>
-              </Button>
-            </Tooltip>
-          </div>
-
-          {mention.open && (
-            <ul className="mention-menu" ref={mentionRef} role="listbox">
-              {mention.items.map((item, i) => (
-                <li key={item.name}>
-                  <button
-                    className={`mention-item ${i === mention.index ? "active" : ""}`}
-                    onMouseDown={(e) => { e.preventDefault(); insertMention(item); }}
-                    role="option"
-                    aria-selected={i === mention.index}
-                  >
-                    {item.kind === "agent" ? <Avatar name={item.label} kind="agent" size="sm" /> : <span className="mention-icon">#</span>}
-                    <span className="mention-label">{item.label}</span>
-                    <span className="mention-handle text-mono-xs text-subtle">@{item.name}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+        <button
+          type="button"
+          className={`composer-send-btn ${canSend ? "ready" : ""}`}
+          onClick={send}
+          disabled={!canSend}
+          aria-label={canSend ? "Send message" : "Voice input"}
+        >
+          {canSend ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
           )}
-        </div>
+        </button>
 
-        <div className="composer-hint">
-          <span><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for newline · <kbd>@</kbd> to mention</span>
-          {agents?.length > 0 && <span className="composer-agents">{agents.length} agent{agents.length !== 1 ? "s" : ""} in this space</span>}
-        </div>
+        {mention.open && (
+          <ul className="mention-menu" ref={mentionRef} role="listbox">
+            {mention.items.map((item, i) => (
+              <li key={item.name}>
+                <button
+                  className={`mention-item ${i === mention.index ? "active" : ""}`}
+                  onMouseDown={(e) => { e.preventDefault(); insertMention(item); }}
+                  role="option"
+                  aria-selected={i === mention.index}
+                >
+                  {item.kind === "agent" ? <Avatar name={item.label} kind="agent" size="sm" /> : <span className="mention-icon">@</span>}
+                  <span className="mention-label">{item.label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

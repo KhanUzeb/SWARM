@@ -42,6 +42,7 @@ Indexed on `(channel_id, created_at)` and `(parent_id)`.
 | token_hash | TEXT | SHA-256 of the raw token half, never the raw token itself |
 | created_at | REAL | |
 | role       | TEXT | `admin` \| `member`. First registered user is admin; later users are members |
+| password_hash | TEXT | nullable. PBKDF2-HMAC-SHA256 (100k rounds, random 16-byte salt), stored as `{salt_hex}${digest_hex}`. Only set when the first admin chooses a password at workspace creation; used to gate reclaiming that admin handle |
 
 ### `reactions`
 
@@ -255,6 +256,15 @@ The composite form exists so REST and WS share one parsing path
 (`parse_token` in `main.py`) instead of needing the handle supplied
 separately from the token on every call.
 
+- **Admin password (optional).** The first registered handle may set an
+  optional `password` (min 8 chars). It is hashed with PBKDF2-HMAC-SHA256
+  (100,000 rounds, random salt) via `hash_password()` in `db.py` and
+  stored in `users.password_hash` — never plain text. If an admin has a
+  password, reclaiming that handle via `POST /api/register` requires the
+  correct password (403 otherwise). Members typically have no password;
+  loopback reclaim rotates their token without a password check. The login
+  UI surfaces the hashing note.
+
 - **REST writes**: `Authorization: Bearer <handle>:<raw>` header,
   required on every POST/PATCH/DELETE that creates or modifies data.
 - **REST reads**: same Bearer token required on all `/api/*` data
@@ -314,13 +324,20 @@ Admin only. Soft-delete (`archived_at`). 404 if already archived.
 
 ### `POST /api/register`
 ```json
-// request
-{"handle": "uzeb"}
-// response 200
-{"handle": "uzeb", "token": "uzeb:2y0-_JDXp9NN...", "created": true, "role": "admin"}
-// response 409 if handle taken
+// request — password optional; only meaningful for the first admin
+{"handle": "uzeb", "password": "secret12"}
+// response 200 (first user → admin)
+{"handle": "uzeb", "token": "uzeb:2y0-_JDXp9NN...", "created": true, "role": "admin", "onboarded": false}
+// response 200 (reclaim existing handle — rotates token)
+{"handle": "uzeb", "token": "uzeb:NEW...", "created": false, "role": "admin", "onboarded": true}
+// response 403 if admin has a password and it is wrong/missing
+{"detail": "wrong or missing admin password"}
+// response 409 if handle taken (non-loopback reclaim without password when required)
 {"detail": "handle already registered"}
+// response 400 if password shorter than 8 chars on first admin
+{"detail": "admin password must be at least 8 characters"}
 ```
+Members created after the first admin omit `password`; they get `role: member`.
 
 ### `GET /api/status`
 Public. Returns booleans only — never raw API keys.
@@ -441,6 +458,20 @@ Auth required, `author` must match. Idempotent — same
 // response: 204 No Content
 ```
 404 if message doesn't exist, 403 author mismatch.
+
+### `POST /api/messages/{message_id}/retry`
+Auth required. Re-runs an agent after a classified provider/network
+failure. The target message must be an agent message whose body starts
+with `[agent error:`. The server finds the most recent human message
+(or `[routine:…]` system message) in the same thread scope, deletes the
+error message, broadcasts `message_deleted`, and schedules `_run_agent`
+again in the background.
+```json
+// response 200
+{"ok": true, "trigger_id": 42, "agent": "swarm"}
+```
+400 if the message is not a retryable agent error or no trigger is found,
+404 if the message or agent does not exist, 429 rate limited.
 
 ### `GET /api/messages/{message_id}/thread`
 Auth required. One-level thread: the parent message plus every
@@ -619,6 +650,7 @@ against, WS doesn't need one to exist at all.
 {"type": "message", "message": { ...same shape as REST message... }}
 {"type": "typing", "author": "swarm"}
 {"type": "reaction", "message_id": 1, "author": "uzeb", "emoji": "🔥"}
+{"type": "message_deleted", "message_id": 12, "ids": [12]}
 {"type": "error", "detail": "slow down"}
 {"type": "agent_stream_start", "author": "swarm"}
 {"type": "agent_token", "author": "swarm", "delta": "..."}
@@ -765,7 +797,10 @@ Live `message` events from a human/agent/system write may omit
   model, and network errors become a short in-channel line
   (`[agent error: …]`), not a raw exception string. They are posted as
   a normal agent message and are not streamed. The relay never 500s
-  because an agent failed.
+  because an agent failed. The UI shows a **Retry** button on these
+  bubbles; it calls `POST /api/messages/{id}/retry` to delete the error
+  and re-run the agent. Failed human sends show a composer banner with
+  Retry/Dismiss and preserve the draft.
 - **Tracing**: if `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are
   both set, every generation call is wrapped in a Langfuse trace
   (`swarm.agent.<name>`), tagged with `channel_id` and agent name in
@@ -806,6 +841,7 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR8.2 | Streaming final agent reply over WS token-by-token | ✅ |
 | FR8.3 | Message history pagination via `before_id` | ✅ |
 | FR8.4 | `GET /api/messages/{id}/thread` one-level thread | ✅ |
+| FR8.5 | Chat retry: agent error bubbles + failed-send banner in UI; `POST /api/messages/{id}/retry` | ✅ |
 | FR9.1 | GET/PATCH agent, harness fields, create-agent UI/CLI | ✅ |
 | FR9.2 | `agent_memory` notes via remember/recall tools | ✅ |
 | FR9.3 | Context injects notes + latest summary | ✅ |
@@ -834,6 +870,7 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR13.3 | `@team-id` expands to an ordered Bot roster | ✅ |
 | FR13.4 | Channel audit export JSON/CSV | ✅ |
 | FR13.5 | Soft-delete Bots (`archived_at`); history kept | ✅ |
+| FR13.6 | Optional admin password (PBKDF2 hash); reclaim requires password when set | ✅ |
 
 ---
 

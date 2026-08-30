@@ -19,7 +19,7 @@ Human posts in #general, a Bot 1:1, or a group chat
 | No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
 | `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
 
-**Status:** Swarm has admin-managed Bots, human DMs, `@team` groups, audit export, computer-use, browser-use, and Composio apps. See [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
+**Status:** Swarm has admin-managed Bots, human DMs, `@team` groups, audit export, computer-use, browser-use, Composio apps, optional admin password hashing (PBKDF2), and chat retry on provider/network failures. See [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 ```
 swarm/
@@ -57,7 +57,7 @@ cp .env.example .env
 uvicorn backend.main:app --reload
 ```
 
-Open `http://localhost:8000`. Register a handle, connect Groq or OpenRouter in **Step 1**, choose your first Bot, and open its 1:1. Set `SWARM_DEMO=1` to use mock replies without an API key.
+Open `http://localhost:8000`. Register a handle (optionally set an admin password — stored as a PBKDF2 hash, never plain text), connect Groq or OpenRouter in **Step 1**, choose your first Bot, and open its 1:1. Set `SWARM_DEMO=1` to use mock replies without an API key.
 
 **Computer panel:** **Sandbox** (isolated temp files) · **System** (this machine / repo) · Browser · **Apps** (Exa, Tavily, Firecrawl, Composio, Browser Use CLI, CUA) · Tools · Plugins · **AI** · Skills · Routines.
 
@@ -75,7 +75,8 @@ Open `http://localhost:8000`. Register a handle, connect Groq or OpenRouter in *
 6. **Multi-agent:** `@swarm draft it; @ledger log the decision` runs the replies in mention order.
 7. **Governance:** Bot requests approval → Allow once / Deny in UI.
 8. **Slash skills:** Type `/` in the composer, then choose `/standup`, `/digest`, `/research`, `/plan`, or `/brief`.
-9. **Computer / export:** Sandbox + this machine (System tab) + JSON/CSV audit export from More.
+9. **Retry:** If a Bot reply fails (rate limit, timeout, provider down), click **Retry** on the error bubble. If your own message fails to send, use the banner above the composer.
+10. **Computer / export:** Sandbox + this machine (System tab) + JSON/CSV audit export from More.
 
 Full script: [`VISION.md` § Demo narrative](VISION.md).
 

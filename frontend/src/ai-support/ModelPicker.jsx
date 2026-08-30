@@ -16,6 +16,8 @@ export default function ModelPicker({
   apiKey,
   placeholder = "Search models",
   disabled = false,
+  autoSelectFirst = false,
+  onModelsLoaded,
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -28,64 +30,86 @@ export default function ModelPicker({
   const rootRef = useRef(null);
   const inputRef = useRef(null);
   const fetchGen = useRef(0);
-  const openedFetch = useRef(false);
+  const autoSelected = useRef(false);
+
+  const applyModels = useCallback((list, meta = {}) => {
+    setModels(list);
+    setLive(!!meta.live);
+    setNote(meta.note || "");
+    setError(meta.error || "");
+    onModelsLoaded?.(list, meta);
+    if (autoSelectFirst && !autoSelected.current && list.length && !value) {
+      const preferred = meta.defaultModel
+        || list.find(m => m.default)?.id
+        || list[0]?.id;
+      if (preferred) {
+        autoSelected.current = true;
+        onChange?.(preferred);
+      }
+    }
+  }, [autoSelectFirst, onChange, onModelsLoaded, value]);
 
   const load = useCallback(async () => {
     if (!token) return;
     const gen = ++fetchGen.current;
     setLoading(true);
+    setError("");
     try {
-      let res;
       if (providerId) {
         const key = (apiKey || "").trim();
         if (key.length >= 8) {
-          res = await api(`/api/ai-support/providers/${providerId}/models`, {
+          const res = await api(`/api/ai-support/providers/${providerId}/models`, {
             token,
             method: "POST",
             body: { api_key: key },
           });
           const data = res.ok ? await res.json() : null;
           if (gen !== fetchGen.current) return;
-          const list = data?.models || [];
-          setModels(list);
-          setLive(!!data?.live);
-          setNote(data?.note || "");
-          setError(data?.error || "");
+          applyModels(data?.models || [], {
+            live: !!data?.live,
+            note: data?.note,
+            error: data?.error,
+            defaultModel: data?.default_model,
+          });
           setLoading(false);
           return;
         }
-        res = await apiJson(`/api/ai-support/providers/${providerId}/models`, { token });
+        const res = await apiJson(`/api/v2/providers/${providerId}/models`, { token, cacheTtl: 0 });
+        if (gen !== fetchGen.current) return;
+        const data = res.ok ? res.data : null;
+        applyModels(data?.models || [], {
+          live: !!data?.live,
+          note: data?.note,
+          error: data?.error,
+          defaultModel: data?.default_model,
+        });
       } else {
-        res = await apiJson("/api/ai-support/models", { token });
+        const res = await apiJson("/api/v2/models/connected", { token, cacheTtl: 0 });
+        if (gen !== fetchGen.current) return;
+        const data = res.ok ? res.data : null;
+        applyModels(data?.models || [], {
+          live: !!data?.live,
+          note: data?.note,
+          defaultModel: data?.default_model,
+        });
       }
-      if (gen !== fetchGen.current) return;
-      const data = res.ok ? res.data : null;
-      const list = data?.models || [];
-      setModels(list);
-      setLive(providerId ? !!data?.live : !!(data?.providers || []).some((p) => p.live));
-      setNote(data?.note || (list.length ? "" : "Connect a provider to load live models."));
-      setError(data?.error || "");
     } catch {
       if (gen !== fetchGen.current) return;
-      setModels([]);
-      setLive(false);
-      setNote("Couldn't load models.");
+      applyModels([], { live: false, note: "Couldn't load models." });
     }
     setLoading(false);
-  }, [token, providerId, apiKey]);
+  }, [token, providerId, apiKey, applyModels]);
+
+  useEffect(() => {
+    autoSelected.current = false;
+    load();
+  }, [load]);
 
   useEffect(() => {
     if (!apiKey || apiKey.trim().length < 8) return undefined;
     const t = setTimeout(load, 350);
     return () => clearTimeout(t);
   }, [load, apiKey]);
-
-  useEffect(() => {
-    if (open && !models.length && !loading && !openedFetch.current) {
-      openedFetch.current = true;
-      load();
-    }
-  }, [open, models.length, loading, load]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -135,6 +159,7 @@ export default function ModelPicker({
   }
 
   const current = models.find((m) => m.id === value);
+  const badge = loading ? "Loading…" : live ? "Live API" : models.length ? "Catalog" : "No models";
 
   return (
     <div className="model-picker" ref={rootRef}>
@@ -142,7 +167,7 @@ export default function ModelPicker({
         type="button"
         id={id}
         className="model-picker-toggle"
-        disabled={disabled}
+        disabled={disabled || loading}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => {
@@ -153,9 +178,7 @@ export default function ModelPicker({
         <span className="model-picker-value">
           {current ? labelOf(current) : (value || placeholder)}
         </span>
-        <span className={`model-live${live ? " on" : ""}`}>
-          {loading ? "Loading" : live ? "Live API" : "Fallback"}
-        </span>
+        <span className={`model-live${live ? " on" : ""}`}>{badge}</span>
         <span className="model-picker-chevron" aria-hidden="true">⌄</span>
       </button>
       {open && (
@@ -171,7 +194,7 @@ export default function ModelPicker({
             spellCheck={false}
           />
           <ul className="model-picker-list" role="listbox" aria-label="Models">
-            {loading && !filtered.length && <li className="empty-state">Fetching models…</li>}
+            {loading && !filtered.length && <li className="empty-state">Fetching models from API…</li>}
             {!loading && !filtered.length && (
               <li className="empty-state">{note || "No models match."}</li>
             )}
@@ -194,7 +217,7 @@ export default function ModelPicker({
             ))}
           </ul>
           <div className="model-picker-foot">
-            {error ? <span className="hint">{error}</span> : <span className="hint">{note || (live ? "From the provider API" : "Connect a key to fetch live models")}</span>}
+            {error ? <span className="hint error">{error}</span> : <span className="hint">{note || (live ? "Fetched from provider API" : "Connect a key to load live models")}</span>}
             <button type="button" className="btn ghost" onClick={load} disabled={loading}>
               Refresh
             </button>

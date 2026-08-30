@@ -16,7 +16,6 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
       <div className="sidebar-header">
         <div className="brand">
           <span className="brand-mark">swarm</span>
-          <span className="brand-sub">AI NESTED TEAMWORK</span>
         </div>
         <button className="btn btn-ghost btn-icon tooltip-trigger" data-tooltip="New message" onClick={onNewDM}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -125,7 +124,7 @@ function ChannelItem({ channel, active, onClick, dm }) {
   return (
     <li className="channel-item">
       <button className={`channel-link ${active ? "active" : ""}`} onClick={onClick}>
-        <span className="channel-icon">{dm ? "@" : "#"}</span>
+        <span className={`channel-dot ${dm ? "dm" : ""}`} />
         <span className="channel-name truncate">{channel.name}</span>
       </button>
     </li>

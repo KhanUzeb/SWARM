@@ -38,6 +38,7 @@ from .models import (
     CustomToolPatch, DirectMessageCreate, MessageCreate, ReactionCreate,
     RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate, SkillPatch,
     SystemRootSet, TeamCreate, TeamPatch, RunCreate, WorkflowCreate, WorkflowPatch,
+    ComputerRunRequest,
 )
 from .security import (
     allowed_origins, install_api_guard, is_loopback, optional_auth, parse_token,
@@ -196,8 +197,17 @@ async def api_v2_providers(handle: str = Depends(require_auth)):
     connections = {c["provider_id"]: c for c in await ai_store.status()}
     for provider in catalog:
         spec = get_provider(provider["id"]) or {}
-        provider["connected"] = provider["id"] in connections or _key_set(spec.get("env_fallback"))
-        provider["via"] = "stored" if provider["id"] in connections else ("env" if provider["connected"] else None)
+        conn = connections.get(provider["id"])
+        env_name = spec.get("env_fallback")
+        env_ok = _key_set(env_name) if env_name else False
+        provider["connected"] = conn is not None or env_ok
+        provider["via"] = "stored" if conn else ("env" if env_ok else None)
+        if conn:
+            provider["model"] = conn.get("model")
+            provider["key_hint"] = conn.get("key_hint")
+            provider["connected_at"] = conn.get("connected_at")
+        elif env_ok:
+            provider["model"] = spec.get("default_model")
         provider["capabilities"] = {"streaming": True, "tool_calling": spec.get("kind") == "openai_compatible", "vision": False}
         provider["oauth_configured"] = bool(spec.get("oauth_authorize_url") and os.environ.get(f"SWARM_{provider['id'].upper()}_OAUTH_CLIENT_ID"))
     return catalog
@@ -231,6 +241,44 @@ async def api_v2_provider_models(provider_id: str, handle: str = Depends(require
         return await list_provider_models(provider_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="provider not found")
+
+
+@app.get("/api/v2/models/connected")
+async def api_v2_connected_models(handle: str = Depends(require_auth)):
+    """Return live models from the first connected provider, for dynamic UI defaults."""
+    from .ai_support.providers import providers_by_priority
+    from .ai_support.resolver import resolve_runtime_auth
+
+    for spec in providers_by_priority():
+        auth = await resolve_runtime_auth(spec["id"])
+        if auth is None:
+            continue
+        body = await list_provider_models(spec["id"])
+        models = body.get("models") or []
+        if not models:
+            continue
+        preferred = auth.default_model or body.get("default_model")
+        if preferred and not any(m.get("id") == preferred for m in models):
+            preferred = models[0]["id"]
+        preferred = preferred or (models[0]["id"] if models else None)
+        return {
+            "provider_id": spec["id"],
+            "provider_name": spec.get("name") or spec["id"],
+            "live": bool(body.get("live")),
+            "models": models,
+            "default_model": preferred,
+            "note": body.get("note"),
+        }
+    merged = await list_all_models()
+    models = merged.get("models") or []
+    return {
+        "provider_id": None,
+        "provider_name": None,
+        "live": False,
+        "models": models,
+        "default_model": models[0]["id"] if models else None,
+        "note": "Connect a provider to fetch live models from its API.",
+    }
 
 
 @app.get("/api/v2/model-routing/validate")
@@ -280,7 +328,7 @@ async def api_v2_runs(limit: int = Query(default=50, ge=1, le=100), handle: str 
 async def api_v2_create_run(payload: RunCreate, handle: str = Depends(require_auth)):
     if payload.workflow_id and not await v2.get_workflow(payload.workflow_id, handle):
         raise HTTPException(status_code=404, detail="workflow not found")
-    run = await v2.create_run(handle, payload.objective, payload.workflow_id, payload.policy)
+    run = await v2.create_run(handle, payload.objective, payload.workflow_id, payload.policy, payload.model)
     v2.start_run(run["id"], handle)
     return run
 
@@ -675,6 +723,50 @@ async def api_delete_message(message_id: int, handle: str = Depends(require_auth
         "ids": ids,
     })
     return {"ok": True, "ids": ids}
+
+
+@app.post("/api/messages/{message_id}/retry")
+async def api_retry_agent_message(message_id: int, handle: str = Depends(require_auth)):
+    """Re-run an agent after a provider/network error message."""
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    msg = await db.get_message(message_id)
+    if msg is None:
+        raise HTTPException(404, "no such message")
+    channel_id = msg["channel_id"]
+    await _require_channel(channel_id, handle)
+    if msg.get("author_kind") != "agent" or not agent.is_agent_error(msg.get("body") or ""):
+        raise HTTPException(400, "only agent error messages can be retried")
+
+    agent_row = await db.fetch_agent(msg["author"])
+    if agent_row is None or agent_row.get("archived"):
+        raise HTTPException(404, "agent not found")
+
+    parent_id = msg.get("parent_id")
+    history = await db.get_history(channel_id, limit=120, before_id=message_id)
+    trigger = None
+    for candidate in reversed(history):
+        if candidate.get("parent_id") != parent_id:
+            continue
+        kind = candidate.get("author_kind")
+        body = candidate.get("body") or ""
+        if kind == "human":
+            trigger = candidate
+            break
+        if kind == "system" and body.startswith("[routine:"):
+            trigger = candidate
+            break
+    if trigger is None:
+        raise HTTPException(400, "could not find the message that triggered this agent")
+
+    ids = await db.delete_message(message_id)
+    await hub.broadcast(channel_id, {
+        "type": "message_deleted",
+        "message_id": message_id,
+        "ids": ids,
+    })
+    _track_task(_run_agent(channel_id, agent_row), "agent retry")
+    return {"ok": True, "trigger_id": trigger["id"], "agent": agent_row["name"]}
 
 
 @app.get("/api/messages/{message_id}/thread")
@@ -1170,6 +1262,15 @@ async def api_computer_file(path: str, handle: str = Depends(require_auth)):
         "path": path,
         "content": target.read_text(encoding="utf-8", errors="replace"),
     }
+
+
+@app.post("/api/computer/run")
+async def api_computer_run(payload: ComputerRunRequest, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import computer as computer_mod
+    output = computer_mod.computer_run(payload.command.strip())
+    return {"command": payload.command.strip(), "output": output}
 
 
 @app.get("/api/computer/system")

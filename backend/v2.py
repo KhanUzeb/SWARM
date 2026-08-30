@@ -174,6 +174,10 @@ async def init_db() -> None:
             await conn.execute("ALTER TABLE ai_providers ADD COLUMN refresh_secret TEXT")
         if "expires_at" not in columns:
             await conn.execute("ALTER TABLE ai_providers ADD COLUMN expires_at REAL")
+        cur = await conn.execute("PRAGMA table_info(runs)")
+        run_columns = {row[1] for row in await cur.fetchall()}
+        if "model" not in run_columns:
+            await conn.execute("ALTER TABLE runs ADD COLUMN model TEXT")
         await conn.commit()
 
 
@@ -238,14 +242,32 @@ async def update_workflow(workflow_id: str, owner: str, patch: dict[str, Any]) -
     return current
 
 
-async def create_run(owner: str, objective: str, workflow_id: str | None, policy: str = "supervised") -> dict[str, Any]:
+async def create_run(
+    owner: str,
+    objective: str,
+    workflow_id: str | None,
+    policy: str = "supervised",
+    model: str | None = None,
+) -> dict[str, Any]:
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     now = time.time()
     async with aiosqlite.connect(db.DB_PATH) as conn:
-        await conn.execute("INSERT INTO runs(id, workflow_id, owner, objective, status, policy, created_at) VALUES(?,?,?,?,?,?,?)", (run_id, workflow_id, owner, objective, "queued", policy, now))
+        await conn.execute(
+            "INSERT INTO runs(id, workflow_id, owner, objective, status, policy, model, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (run_id, workflow_id, owner, objective, "queued", policy, model, now),
+        )
         await conn.commit()
-    await append_event(run_id, "run_queued", {"objective": objective})
-    return {"id": run_id, "workflow_id": workflow_id, "owner": owner, "objective": objective, "status": "queued", "policy": policy, "created_at": now}
+    await append_event(run_id, "run_queued", {"objective": objective, "model": model})
+    return {
+        "id": run_id,
+        "workflow_id": workflow_id,
+        "owner": owner,
+        "objective": objective,
+        "status": "queued",
+        "policy": policy,
+        "model": model,
+        "created_at": now,
+    }
 
 
 async def list_runs(owner: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -385,9 +407,13 @@ async def execute_run(run_id: str, owner: str) -> None:
                 from . import agent as legacy_agent
                 row = await db.fetch_agent(str(node.get("agent") or "swarm"))
                 if row:
-                    if node.get("model"):
-                        row = {**row, "model": str(node["model"])}
-                    result = await legacy_agent.generate_reply(row, f"run-{run_id}", [{"author": owner, "author_kind": "human", "body": run["objective"]}])
+                    model_override = node.get("model") or run.get("model")
+                    result = await legacy_agent.generate_reply(
+                        row,
+                        f"run-{run_id}",
+                        [{"author": owner, "author_kind": "human", "body": run["objective"]}],
+                        model_override=str(model_override) if model_override else None,
+                    )
                     return result.get("reply") or ""
                 return f"Agent {node.get('agent') or 'swarm'} is not configured."
             return f"Completed {node.get('label') or node.get('type') or 'step'}."

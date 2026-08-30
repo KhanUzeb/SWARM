@@ -58,6 +58,46 @@ def test_v2_rejects_invalid_workflow_graph(client, auth):
     assert "node ids must be unique" in str(response.json()["detail"])
 
 
+def test_v2_provider_catalog_includes_saved_model(client, auth):
+    connect = client.post(
+        "/api/ai-support/connect/groq",
+        headers=auth,
+        json={"api_key": "gsk_test_key_12345678", "model": "openai/gpt-oss-20b"},
+    )
+    assert connect.status_code == 200
+    providers = {row["id"]: row for row in client.get("/api/v2/providers", headers=auth).json()}
+    assert providers["groq"]["model"] == "openai/gpt-oss-20b"
+    assert providers["groq"]["connected"] is True
+
+
+def test_v2_run_accepts_model(client, auth):
+    run = client.post(
+        "/api/v2/runs",
+        headers=auth,
+        json={"objective": "Summarize the brief", "model": "openai/gpt-oss-20b"},
+    )
+    assert run.status_code == 200
+    body = run.json()
+    assert body["model"] == "openai/gpt-oss-20b"
+
+
+def test_v2_connected_models_endpoint(client, auth):
+    response = client.get("/api/v2/models/connected", headers=auth)
+    assert response.status_code == 200
+    body = response.json()
+    assert "models" in body
+    assert "default_model" in body
+    assert "live" in body
+
+
+def test_computer_run_endpoint(client, auth):
+    response = client.post("/api/computer/run", headers=auth, json={"command": "echo swarm"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["command"] == "echo swarm"
+    assert "swarm" in body["output"]
+
+
 def test_v2_provider_catalog_and_routing_preflight(client, auth):
     providers = client.get("/api/v2/providers", headers=auth)
     assert providers.status_code == 200

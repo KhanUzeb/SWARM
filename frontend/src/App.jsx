@@ -61,6 +61,8 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [selectedRun, setSelectedRun] = useState(null);
   const [quickAction, setQuickAction] = useState(null);
+  const [retryingId, setRetryingId] = useState(null);
+  const [sendFailure, setSendFailure] = useState(null);
 
   const wsRef = useRef(null);
   const wsGen = useRef(0);
@@ -345,13 +347,45 @@ export default function App() {
 
   // ── Send ──
   async function sendMessage(text, parentId = null) {
-    if (!tokenRef.current) return;
+    if (!tokenRef.current) return false;
     const body = { author: user.handle, body: text, author_kind: "human", parent_id: parentId };
-    const res = await apiJson(`/api/channels/${channelRef.current}/messages`, {
-      token: tokenRef.current, method: "POST", body,
-    });
-    if (!res.ok) { flash("Failed to send", "error"); return; }
-    remember(res.data);
+    try {
+      const res = await apiJson(`/api/channels/${channelRef.current}/messages`, {
+        token: tokenRef.current, method: "POST", body,
+      });
+      if (!res.ok) {
+        setSendFailure({ text, parentId, detail: res.data?.detail || "Message could not be sent" });
+        return false;
+      }
+      setSendFailure(prev => (prev?.text === text && prev?.parentId === parentId ? null : prev));
+      remember(res.data);
+      return true;
+    } catch {
+      setSendFailure({ text, parentId, detail: "Network error — check your connection" });
+      return false;
+    }
+  }
+
+  async function retryFailedSend() {
+    if (!sendFailure) return;
+    const { text, parentId } = sendFailure;
+    const ok = await sendMessage(text, parentId);
+    if (ok) setSendFailure(null);
+  }
+
+  async function onRetryAgent(m) {
+    if (!tokenRef.current || retryingId) return;
+    setRetryingId(m.id);
+    try {
+      const res = await apiJson(`/api/messages/${m.id}/retry`, {
+        token: tokenRef.current, method: "POST",
+      });
+      if (!res.ok) flash(res.data?.detail || "Retry failed", "error");
+    } catch {
+      flash("Retry failed — check your connection", "error");
+    } finally {
+      setRetryingId(null);
+    }
   }
 
   async function onReply(parentId) {
@@ -384,16 +418,16 @@ export default function App() {
 
   // ── Command palette commands ──
   const commands = useMemo(() => [
-    { id: "cmd-new-channel", group: "Create", label: "New channel", icon: "#", hint: "room", shortcut: "⌘⇧C", keywords: ["channel", "room"], action: () => setQuickAction("channel") },
-    { id: "cmd-new-agent", group: "Create", label: "New agent", icon: "🤖", hint: "bot", keywords: ["agent", "bot", "teammate"], action: () => setQuickAction("agent") },
-    { id: "cmd-new-group", group: "Create", label: "New group", icon: "👥", hint: "pod", keywords: ["group", "team", "pod"], action: () => setQuickAction("group") },
-    { id: "cmd-new-dm", group: "Create", label: "New direct message", icon: "@", hint: "person", keywords: ["dm", "message", "person"], action: () => setQuickAction("dm") },
-    { id: "cmd-toggle-computer", group: "View", label: "Toggle computer panel", icon: "🖥", hint: "", keywords: ["computer", "sandbox", "screen"], action: () => setComputerOpen(o => !o) },
-    { id: "cmd-view-talk", group: "View", label: "Go to Talk", icon: "💬", keywords: ["chat", "message"], action: () => setMainView("talk") },
-    { id: "cmd-view-paper", group: "View", label: "Go to Paper", icon: "📄", keywords: ["paper", "latex", "doc"], action: () => setMainView("paper") },
-    { id: "cmd-view-files", group: "View", label: "Go to Files", icon: "📁", keywords: ["files", "sandbox"], action: () => setMainView("files") },
-    ...rooms.map(c => ({ id: `ch-${c.id}`, group: "Channels", label: `#${c.name}`, icon: "#", keywords: [c.name], action: () => setChannel(c.id) })),
-    ...allAgents.map(a => ({ id: `ag-${a.name}`, group: "Agents", label: `@${a.name}`, icon: "🤖", keywords: [a.name, a.job], action: () => setChannel(a.dm_channel_id) })),
+    { id: "cmd-new-channel", group: "Create", label: "New channel", hint: "room", keywords: ["channel", "room"], action: () => setQuickAction("channel") },
+    { id: "cmd-new-agent", group: "Create", label: "New agent", hint: "bot", keywords: ["agent", "bot", "teammate"], action: () => setQuickAction("agent") },
+    { id: "cmd-new-group", group: "Create", label: "New group", hint: "pod", keywords: ["group", "team", "pod"], action: () => setQuickAction("group") },
+    { id: "cmd-new-dm", group: "Create", label: "New direct message", hint: "person", keywords: ["dm", "message", "person"], action: () => setQuickAction("dm") },
+    { id: "cmd-toggle-computer", group: "View", label: "Toggle computer panel", keywords: ["computer", "sandbox", "screen"], action: () => setComputerOpen(o => !o) },
+    { id: "cmd-view-talk", group: "View", label: "Go to Talk", keywords: ["chat", "message"], action: () => setMainView("talk") },
+    { id: "cmd-view-paper", group: "View", label: "Go to Paper", keywords: ["paper", "latex", "doc"], action: () => setMainView("paper") },
+    { id: "cmd-view-files", group: "View", label: "Go to Files", keywords: ["files", "sandbox"], action: () => setMainView("files") },
+    ...rooms.map(c => ({ id: `ch-${c.id}`, group: "Channels", label: c.name, keywords: [c.name], action: () => setChannel(c.id) })),
+    ...allAgents.map(a => ({ id: `ag-${a.name}`, group: "Agents", label: a.display_name || a.name, keywords: [a.name, a.job], action: () => setChannel(a.dm_channel_id) })),
   ], [rooms, allAgents]);
 
   // ── Render ──
@@ -421,71 +455,100 @@ export default function App() {
         onOpenSettings={() => setMainView("dashboard")}
       />
 
-      <TopBar
-        channel={current}
-        agents={agents}
-        onToggleComputer={() => setComputerOpen(o => !o)}
-        computerOpen={computerOpen}
-        onOpenCommandPalette={() => setCmdOpen(true)}
-        onViewChange={setMainView}
-        currentView={mainView}
-        approvals={approvals}
-        onResolveApproval={onResolveApproval}
-      />
-
-      {["dashboard", "workflows", "runs"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
-      {mainView === "talk" && (
-        <MessageList
-          messages={messages}
-          order={order}
+      <div className="workspace-shell">
+        <TopBar
+          channel={current}
           agents={agents}
-          allAgents={allAgents}
-          user={user}
-          onReply={onReply}
-          onReact={onReact}
-          onDelete={onDelete}
-          onOpenThread={onReply}
-          replyCounts={replyCounts}
-          reactions={reactions}
-          channelId={channel}
-          onLoadMore={async () => {
-            if (loadingLog || order.length === 0) return;
-            setLoadingLog(true);
-            try {
-              const history = await loadHistory(channelRef.current, order[0]);
-              applyHistory(history, true);
-            } catch { flash("Failed to load earlier messages", "error"); }
-            finally { setLoadingLog(false); }
-          }}
-          hasMore={hasMore}
-          loadingMore={loadingLog}
-          typing={typing}
-          groupedWith={(prev, m) => {
-            if (!prev) return false;
-            if (prev.author !== m.author) return false;
-            if (prev.author_kind !== m.author_kind) return false;
-            if (m.parent_id) return false;
-            const dt = (m.created_at - prev.created_at) * 1000;
-            return dt < 5 * 60 * 1000;
-          }}
+          onToggleComputer={() => setComputerOpen(o => !o)}
+          computerOpen={computerOpen}
+          onOpenCommandPalette={() => setCmdOpen(true)}
+          onViewChange={setMainView}
+          currentView={mainView}
+          approvals={approvals}
+          onResolveApproval={onResolveApproval}
         />
-      )}
 
-      {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
-      {mainView === "files" && <FilesView computer={computer} />}
-      {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => setChannel(id)} />}
+        <main id="main">
+          {["dashboard", "workflows", "runs"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
+          {mainView === "talk" && (
+            <MessageList
+              messages={messages}
+              order={order}
+              agents={agents}
+              allAgents={allAgents}
+              user={user}
+              onReply={onReply}
+              onReact={onReact}
+              onDelete={onDelete}
+              onOpenThread={onReply}
+              onRetry={onRetryAgent}
+              retryingId={retryingId}
+              replyCounts={replyCounts}
+              reactions={reactions}
+              channelId={channel}
+              onLoadMore={async () => {
+                if (loadingLog || order.length === 0) return;
+                setLoadingLog(true);
+                try {
+                  const history = await loadHistory(channelRef.current, order[0]);
+                  applyHistory(history, true);
+                } catch { flash("Failed to load earlier messages", "error"); }
+                finally { setLoadingLog(false); }
+              }}
+              hasMore={hasMore}
+              loadingMore={loadingLog}
+              typing={typing}
+              groupedWith={(prev, m) => {
+                if (!prev) return false;
+                if (prev.author !== m.author) return false;
+                if (prev.author_kind !== m.author_kind) return false;
+                if (m.parent_id) return false;
+                const dt = (m.created_at - prev.created_at) * 1000;
+                return dt < 5 * 60 * 1000;
+              }}
+            />
+          )}
+
+          {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
+          {mainView === "files" && <FilesView computer={computer} />}
+          {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => setChannel(id)} />}
+        </main>
+
+        {mainView === "talk" && (
+          <>
+            {sendFailure && !threadId && (
+              <div className="send-failure-banner" role="alert">
+                <span className="send-failure-text">{sendFailure.detail}</span>
+                <div className="send-failure-actions">
+                  <button type="button" className="send-failure-retry" onClick={retryFailedSend}>Retry</button>
+                  <button type="button" className="send-failure-dismiss" onClick={() => setSendFailure(null)} aria-label="Dismiss">Dismiss</button>
+                </div>
+              </div>
+            )}
+            <Composer
+              onSend={(text) => sendMessage(text)}
+              channelName={current.name}
+              agents={agents}
+              placeholder={`Message ${current.name}…`}
+            />
+          </>
+        )}
+      </div>
 
       {selectedRun && <RunMonitor token={token} run={selectedRun} onClose={() => setSelectedRun(null)} />}
       {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) setChannel(id); flash("Created", "success"); }} />}
 
-      {mainView === "talk" && <Composer
-        onSend={(text) => sendMessage(text)}
-        channelName={current.name}
-        agents={agents}
-        placeholder={`Message ${current.name}…`}
-      />}
-
-      {computerOpen && <ComputerPanel computer={computer} onClose={() => setComputerOpen(false)} onRefresh={loadComputer} />}
+      {computerOpen && (
+        <ComputerPanel
+          computer={computer}
+          token={token}
+          user={user}
+          meRole={meRole}
+          onClose={() => setComputerOpen(false)}
+          onRefresh={loadComputer}
+          flash={flash}
+        />
+      )}
 
       {threadId && (
         <ThreadPanel
@@ -493,9 +556,15 @@ export default function App() {
           messages={messages}
           threadReplies={threadReplies}
           allAgents={allAgents}
+          user={user}
           onClose={() => setThreadId(null)}
           onSend={(text) => sendMessage(text, threadId)}
           onReact={onReact}
+          onRetry={onRetryAgent}
+          retryingId={retryingId}
+          sendFailure={sendFailure?.parentId === threadId ? sendFailure : null}
+          onRetrySend={retryFailedSend}
+          onDismissSendFailure={() => setSendFailure(null)}
           reactions={reactions}
         />
       )}
@@ -537,7 +606,7 @@ function PaperView({ messages, title }) {
 }
 
 function FilesView({ computer }) {
-  if (!computer) return <EmptyState icon="📁" title="No sandbox" message="Computer panel is off. Toggle it from the top bar." />;
+  if (!computer) return <EmptyState kind="folder" title="No sandbox" message="Computer panel is off. Toggle it from the top bar." />;
   const files = computer.files || [];
   return (
     <div id="log" className="files-view">
@@ -581,17 +650,20 @@ function AgentsView({ agents, onOpenChannel }) {
   );
 }
 
-function ThreadPanel({ parentId, messages, threadReplies, allAgents, onClose, onSend, onReact, reactions }) {
+function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions }) {
   const parent = messages[parentId];
   const replies = threadReplies.length > 0 ? threadReplies : Object.values(messages).filter(m => m.parent_id === parentId);
+  const replyOrder = replies.map(r => r.id);
   return (
     <aside id="thread-panel">
       <div className="panel-header">
         <div className="panel-header-main">
-          <span className="panel-icon">💬</span>
+          <span className="panel-icon" aria-hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </span>
           <div>
             <h2 className="panel-title">Thread</h2>
-            <span className="panel-subtitle text-mono-xs text-subtle">{replies.length} repl{replies.length === 1 ? "y" : "ies"}</span>
+            <span className="panel-subtitle">{replies.length} repl{replies.length === 1 ? "y" : "ies"}</span>
           </div>
         </div>
         <button className="panel-close" onClick={onClose} aria-label="Close">×</button>
@@ -599,20 +671,23 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, onClose, on
       <ScrollArea className="thread-body">
         {parent && (
           <div className="thread-parent">
-            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={{ handle: "you" }} onReply={() => {}} onReact={onReact} onDelete={() => {}} onOpenThread={() => {}} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onDelete={() => {}} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
           </div>
         )}
         <Divider />
-        {replies.map(r => (
-          <div key={r.id} className="thread-reply">
-            <Avatar name={r.author} kind={r.author_kind === "agent" ? "agent" : "human"} size="sm" />
-            <div className="thread-reply-body">
-              <div className="msg-meta"><span className="msg-author">{r.author}</span><span className="msg-time text-mono-xs text-subtle">{fmtTime(r.created_at)}</span></div>
-              <RichBody body={r.body || ""} />
-            </div>
-          </div>
-        ))}
+        {replyOrder.length > 0 && (
+          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onDelete={() => {}} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+        )}
       </ScrollArea>
+      {sendFailure && (
+        <div className="send-failure-banner thread" role="alert">
+          <span className="send-failure-text">{sendFailure.detail}</span>
+          <div className="send-failure-actions">
+            <button type="button" className="send-failure-retry" onClick={onRetrySend}>Retry</button>
+            <button type="button" className="send-failure-dismiss" onClick={onDismissSendFailure} aria-label="Dismiss">Dismiss</button>
+          </div>
+        </div>
+      )}
       <Composer onSend={onSend} placeholder="Reply in thread…" compact threadParent />
     </aside>
   );
@@ -642,5 +717,35 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
     if (response.ok) onCreated(response.data?.id || response.data?.dm_channel_id);
   }
 
-  return <div className="quick-create-backdrop"><section className="quick-create"><header className="run-monitor-head"><div><span className="eyebrow">WORKSPACE</span><h2>{labels[action]}</h2></div><button className="panel-close" onClick={onClose}>×</button></header><form className="quick-create-form" onSubmit={submit}><Input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder={action === "dm" ? "Person handle" : action === "agent" ? "Agent handle" : "Name"} />{needsDetail && <Textarea value={detail} onChange={e => setDetail(e.target.value)} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}{needsMembers && <label className="quick-members">{agents.map(agent => <span key={agent.name}><input type="checkbox" checked={members.includes(agent.name)} onChange={e => setMembers(value => e.target.checked ? [...value, agent.name] : value.filter(item => item !== agent.name))} /> {agent.display_name || agent.name}</span>)}</label>}<footer className="workflow-editor-actions"><Button variant="ghost" type="button" onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" disabled={busy || !name.trim() || (needsMembers && !members.length)}>{busy ? "Creating…" : "Create"}</Button></footer></form></section></div>;
+  return (
+    <div className="quick-create-backdrop">
+      <section className="quick-create">
+        <header className="run-monitor-head">
+          <div>
+            <span className="eyebrow">Create</span>
+            <h2>{labels[action]}</h2>
+          </div>
+          <button className="panel-close" onClick={onClose}>×</button>
+        </header>
+        <form className="quick-create-form" onSubmit={submit}>
+          <Input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder={action === "dm" ? "Person handle" : action === "agent" ? "Agent handle" : "Name"} />
+          {needsDetail && <Textarea value={detail} onChange={e => setDetail(e.target.value)} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}
+          {needsMembers && (
+            <label className="quick-members">
+              {agents.map(agent => (
+                <span key={agent.name}>
+                  <input type="checkbox" checked={members.includes(agent.name)} onChange={e => setMembers(value => e.target.checked ? [...value, agent.name] : value.filter(item => item !== agent.name))} />
+                  {" "}{agent.display_name || agent.name}
+                </span>
+              ))}
+            </label>
+          )}
+          <footer className="workflow-editor-actions">
+            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
+            <Button variant="primary" type="submit" disabled={busy || !name.trim() || (needsMembers && !members.length)}>{busy ? "Creating…" : "Create"}</Button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
 }

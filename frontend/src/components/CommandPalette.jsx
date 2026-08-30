@@ -54,23 +54,25 @@ export function CommandPalette({ open, onClose, commands, onCommand }) {
     <div className="modal-overlay cmd-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Command palette">
       <div className="cmd-palette" onClick={e => e.stopPropagation()}>
         <div className="cmd-input-row">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
           <Input
             ref={inputRef}
             className="cmd-input"
-            placeholder="Type a command or search…"
+            placeholder="Search commands…"
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={handleKey}
             aria-label="Command input"
           />
-          <kbd className="cmd-esc">ESC</kbd>
+          <span className="cmd-esc">esc</span>
         </div>
 
         <div className="cmd-list scrollable" ref={listRef}>
           {filtered.length === 0 && (
             <div className="cmd-empty">
-              <span className="cmd-empty-icon">🔍</span>
+              <div className="empty-state-icon" aria-hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
+              </div>
               <span className="cmd-empty-text">No commands found</span>
             </div>
           )}
@@ -88,21 +90,14 @@ export function CommandPalette({ open, onClose, commands, onCommand }) {
                     onMouseEnter={() => setIndex(fi)}
                     onClick={() => { onCommand(item); onClose(); }}
                   >
-                    {item.icon && <span className="cmd-item-icon">{item.icon}</span>}
                     <span className="cmd-item-label">{item.label}</span>
-                    {item.hint && <span className="cmd-item-hint text-mono-xs text-subtle">{item.hint}</span>}
-                    {item.shortcut && <kbd className="cmd-item-kbd text-mono-xs">{item.shortcut}</kbd>}
+                    {item.hint && <span className="cmd-item-hint">{item.hint}</span>}
+                    {item.shortcut && <span className="cmd-item-kbd">{item.shortcut}</span>}
                   </button>
                 );
               })}
             </div>
           ))}
-        </div>
-
-        <div className="cmd-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span>
-          <span><kbd>↵</kbd> to select</span>
-          <span><kbd>esc</kbd> to close</span>
         </div>
       </div>
     </div>

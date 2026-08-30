@@ -22,7 +22,10 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
 
   return (
     <div id="login">
-      <div className="login-bg-grid" aria-hidden />
+      <div className="login-bg-glow" aria-hidden>
+        <div className="login-orb login-orb-1" />
+        <div className="login-orb login-orb-2" />
+      </div>
       <div className="login-card">
         <div className="login-brand">
           <span className="login-logo">swarm</span>
@@ -60,6 +63,10 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
           </Button>
         </form>
 
+        <p className="login-security text-subtle text-sm">
+          Passwords are hashed with PBKDF2 (100k rounds) and never stored in plain text.
+        </p>
+
         <div className="login-switch">
           {mode === "login" ? (
             <span>New here? <button className="link-btn" onClick={() => { setMode("setup"); setError(""); }}>Create a workspace</button></span>
@@ -70,14 +77,13 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
 
         {demoMode && (
           <button className="login-demo" onClick={() => onLogin("demo", "")}>
-            <span className="login-demo-icon">✨</span> Enter demo mode
+            Enter demo mode
           </button>
         )}
       </div>
 
       <div className="login-foot">
         <span>Self-hosted · Open source</span>
-        <span>Spec: SPEC.md · VISION.md</span>
       </div>
     </div>
   );
