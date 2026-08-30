@@ -119,8 +119,8 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
             <li key={p.id} className={`provider-card${p.connected ? " connected" : ""}`}>
               <div className="provider-head">
                 <span className="provider-name">{p.name}</span>
-                <span className="provider-kind">{p.kind || "openai_compatible"}</span>
-                <span className="provider-kind">{(p.auth_methods || ["api_key"]).join(" / ")}</span>
+                <span className="provider-meta">{p.kind || "OpenAI compatible"}</span>
+                <span className="provider-meta">{(p.auth_methods || ["api_key"]).join(" · ")}</span>
                 <span className={`provider-badge${p.connected ? " on" : ""}`}>
                   {p.connected ? (p.via === "env" ? "Env" : "Connected") : "Not connected"}
                 </span>

@@ -44,7 +44,7 @@ export function ComputerPanel({ computer, token, user, meRole, onClose, onRefres
     return (
       <aside id="computer-panel">
         <PanelChrome activeGroup={activeGroup} activeTab={activeTab} onSelectTab={selectTab} onClose={onClose} onRefresh={onRefresh} subtitle="Workspace offline" />
-        <EmptyState icon="🖥" title="Sandbox offline" message="Could not load workspace data. Agents can still use tools when configured." />
+        <EmptyState kind="sandbox" title="Sandbox offline" message="Could not load workspace data. Agents can still use tools when configured." />
       </aside>
     );
   }
@@ -147,7 +147,7 @@ function SandboxView({ computer, token, flash }) {
     <div className="panel-body sandbox-panel">
       <p className="panel-note">{computer?.note || "Shared sandbox files for every bot."}</p>
       {files.length === 0 ? (
-        <EmptyState icon="📁" title="Empty sandbox" message="Agents can write files here with write_workspace." />
+        <EmptyState kind="folder" title="Empty sandbox" message="Agents can write files here with write_workspace." />
       ) : (
         <ul className="file-list">
           {files.map(f => (

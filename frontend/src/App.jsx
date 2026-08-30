@@ -384,16 +384,16 @@ export default function App() {
 
   // ── Command palette commands ──
   const commands = useMemo(() => [
-    { id: "cmd-new-channel", group: "Create", label: "New channel", icon: "#", hint: "room", shortcut: "⌘⇧C", keywords: ["channel", "room"], action: () => setQuickAction("channel") },
-    { id: "cmd-new-agent", group: "Create", label: "New agent", icon: "🤖", hint: "bot", keywords: ["agent", "bot", "teammate"], action: () => setQuickAction("agent") },
-    { id: "cmd-new-group", group: "Create", label: "New group", icon: "👥", hint: "pod", keywords: ["group", "team", "pod"], action: () => setQuickAction("group") },
-    { id: "cmd-new-dm", group: "Create", label: "New direct message", icon: "@", hint: "person", keywords: ["dm", "message", "person"], action: () => setQuickAction("dm") },
-    { id: "cmd-toggle-computer", group: "View", label: "Toggle computer panel", icon: "🖥", hint: "", keywords: ["computer", "sandbox", "screen"], action: () => setComputerOpen(o => !o) },
-    { id: "cmd-view-talk", group: "View", label: "Go to Talk", icon: "💬", keywords: ["chat", "message"], action: () => setMainView("talk") },
-    { id: "cmd-view-paper", group: "View", label: "Go to Paper", icon: "📄", keywords: ["paper", "latex", "doc"], action: () => setMainView("paper") },
-    { id: "cmd-view-files", group: "View", label: "Go to Files", icon: "📁", keywords: ["files", "sandbox"], action: () => setMainView("files") },
-    ...rooms.map(c => ({ id: `ch-${c.id}`, group: "Channels", label: `#${c.name}`, icon: "#", keywords: [c.name], action: () => setChannel(c.id) })),
-    ...allAgents.map(a => ({ id: `ag-${a.name}`, group: "Agents", label: `@${a.name}`, icon: "🤖", keywords: [a.name, a.job], action: () => setChannel(a.dm_channel_id) })),
+    { id: "cmd-new-channel", group: "Create", label: "New channel", hint: "room", keywords: ["channel", "room"], action: () => setQuickAction("channel") },
+    { id: "cmd-new-agent", group: "Create", label: "New agent", hint: "bot", keywords: ["agent", "bot", "teammate"], action: () => setQuickAction("agent") },
+    { id: "cmd-new-group", group: "Create", label: "New group", hint: "pod", keywords: ["group", "team", "pod"], action: () => setQuickAction("group") },
+    { id: "cmd-new-dm", group: "Create", label: "New direct message", hint: "person", keywords: ["dm", "message", "person"], action: () => setQuickAction("dm") },
+    { id: "cmd-toggle-computer", group: "View", label: "Toggle computer panel", keywords: ["computer", "sandbox", "screen"], action: () => setComputerOpen(o => !o) },
+    { id: "cmd-view-talk", group: "View", label: "Go to Talk", keywords: ["chat", "message"], action: () => setMainView("talk") },
+    { id: "cmd-view-paper", group: "View", label: "Go to Paper", keywords: ["paper", "latex", "doc"], action: () => setMainView("paper") },
+    { id: "cmd-view-files", group: "View", label: "Go to Files", keywords: ["files", "sandbox"], action: () => setMainView("files") },
+    ...rooms.map(c => ({ id: `ch-${c.id}`, group: "Channels", label: c.name, keywords: [c.name], action: () => setChannel(c.id) })),
+    ...allAgents.map(a => ({ id: `ag-${a.name}`, group: "Agents", label: a.display_name || a.name, keywords: [a.name, a.job], action: () => setChannel(a.dm_channel_id) })),
   ], [rooms, allAgents]);
 
   // ── Render ──
@@ -551,7 +551,7 @@ function PaperView({ messages, title }) {
 }
 
 function FilesView({ computer }) {
-  if (!computer) return <EmptyState icon="📁" title="No sandbox" message="Computer panel is off. Toggle it from the top bar." />;
+  if (!computer) return <EmptyState kind="folder" title="No sandbox" message="Computer panel is off. Toggle it from the top bar." />;
   const files = computer.files || [];
   return (
     <div id="log" className="files-view">
