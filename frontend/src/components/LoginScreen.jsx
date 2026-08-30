@@ -23,6 +23,11 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
   return (
     <div id="login">
       <div className="login-bg-grid" aria-hidden />
+      <div className="login-bg-glow" aria-hidden>
+        <div className="login-orb login-orb-1" />
+        <div className="login-orb login-orb-2" />
+        <div className="login-orb login-orb-3" />
+      </div>
       <div className="login-card">
         <div className="login-brand">
           <span className="login-logo">swarm</span>

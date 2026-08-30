@@ -18,7 +18,11 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
     return (
       <div id="log" className="log-empty">
         <div className="empty-state">
-          <div className="empty-state-icon">💬</div>
+          <div className="empty-state-icon" aria-hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </div>
           <div className="empty-state-title">No messages yet</div>
           <div className="empty-state-message">Start the conversation — @mention an agent to bring them in.</div>
         </div>
@@ -28,6 +32,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
 
   return (
     <div id="log" ref={logRef}>
+      <div className="log-inner">
       {hasMore && (
         <button className="load-earlier" onClick={onLoadMore} disabled={loadingMore}>
           {loadingMore ? "Loading…" : "Load earlier messages"}
@@ -68,6 +73,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
       )}
 
       <div ref={endRef} />
+      </div>
     </div>
   );
 }
