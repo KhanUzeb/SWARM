@@ -602,10 +602,12 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, onClose, on
     <aside id="thread-panel">
       <div className="panel-header">
         <div className="panel-header-main">
-          <span className="panel-icon">💬</span>
+          <span className="panel-icon" aria-hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </span>
           <div>
             <h2 className="panel-title">Thread</h2>
-            <span className="panel-subtitle text-mono-xs text-subtle">{replies.length} repl{replies.length === 1 ? "y" : "ies"}</span>
+            <span className="panel-subtitle">{replies.length} repl{replies.length === 1 ? "y" : "ies"}</span>
           </div>
         </div>
         <button className="panel-close" onClick={onClose} aria-label="Close">×</button>
@@ -656,5 +658,35 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
     if (response.ok) onCreated(response.data?.id || response.data?.dm_channel_id);
   }
 
-  return <div className="quick-create-backdrop"><section className="quick-create"><header className="run-monitor-head"><div><span className="eyebrow">WORKSPACE</span><h2>{labels[action]}</h2></div><button className="panel-close" onClick={onClose}>×</button></header><form className="quick-create-form" onSubmit={submit}><Input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder={action === "dm" ? "Person handle" : action === "agent" ? "Agent handle" : "Name"} />{needsDetail && <Textarea value={detail} onChange={e => setDetail(e.target.value)} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}{needsMembers && <label className="quick-members">{agents.map(agent => <span key={agent.name}><input type="checkbox" checked={members.includes(agent.name)} onChange={e => setMembers(value => e.target.checked ? [...value, agent.name] : value.filter(item => item !== agent.name))} /> {agent.display_name || agent.name}</span>)}</label>}<footer className="workflow-editor-actions"><Button variant="ghost" type="button" onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" disabled={busy || !name.trim() || (needsMembers && !members.length)}>{busy ? "Creating…" : "Create"}</Button></footer></form></section></div>;
+  return (
+    <div className="quick-create-backdrop">
+      <section className="quick-create">
+        <header className="run-monitor-head">
+          <div>
+            <span className="eyebrow">Create</span>
+            <h2>{labels[action]}</h2>
+          </div>
+          <button className="panel-close" onClick={onClose}>×</button>
+        </header>
+        <form className="quick-create-form" onSubmit={submit}>
+          <Input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder={action === "dm" ? "Person handle" : action === "agent" ? "Agent handle" : "Name"} />
+          {needsDetail && <Textarea value={detail} onChange={e => setDetail(e.target.value)} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}
+          {needsMembers && (
+            <label className="quick-members">
+              {agents.map(agent => (
+                <span key={agent.name}>
+                  <input type="checkbox" checked={members.includes(agent.name)} onChange={e => setMembers(value => e.target.checked ? [...value, agent.name] : value.filter(item => item !== agent.name))} />
+                  {" "}{agent.display_name || agent.name}
+                </span>
+              ))}
+            </label>
+          )}
+          <footer className="workflow-editor-actions">
+            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
+            <Button variant="primary" type="submit" disabled={busy || !name.trim() || (needsMembers && !members.length)}>{busy ? "Creating…" : "Create"}</Button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
 }

@@ -104,14 +104,18 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
   }
 
   return (
-    <main id="command-center" className="command-center">
+    <div id="command-center" className="command-center">
       <div className="cc-hero">
-        <div><span className="eyebrow">AGENT COMMAND CENTER</span><h1>Make the work legible.</h1><p>Design a team, launch a supervised run, and keep the result after the agents are done.</p></div>
-        <div className="cc-hero-mark">✦</div>
+        <div>
+          <span className="eyebrow">Overview</span>
+          <h1>Make the work legible.</h1>
+          <p>Design a team, launch a supervised run, and keep the result after the agents are done.</p>
+        </div>
+        <div className="cc-hero-mark" aria-hidden>✦</div>
       </div>
       <section className="cc-grid">
         <Card padded className="cc-launch-card">
-          <div className="cc-section-head"><div><span className="eyebrow">START WORK</span><h2>Launch a run</h2></div><Badge variant={llmReady ? "success" : "warning"}>{llmReady ? "Model ready" : "No provider"}</Badge></div>
+          <div className="cc-section-head"><div><span className="eyebrow">Start work</span><h2>Launch a run</h2></div><Badge variant={llmReady ? "success" : "warning"}>{llmReady ? "Model ready" : "No provider"}</Badge></div>
           <form onSubmit={launchRun} className="cc-form">
             <Textarea value={objective} onChange={e => setObjective(e.target.value)} placeholder="What should your agent team accomplish?" rows={4} />
             <label className="field-label" htmlFor="run-model">Model</label>
@@ -139,15 +143,15 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
           </form>
         </Card>
         <Card padded className="cc-workflow-card">
-          <div className="cc-section-head"><div><span className="eyebrow">TEAM DESIGN</span><h2>Workflows</h2></div><span className="cc-count">{workflows.length}</span></div>
+          <div className="cc-section-head"><div><span className="eyebrow">Team design</span><h2>Workflows</h2></div><span className="cc-count">{workflows.length}</span></div>
           {workflows.length ? workflows.slice(0, 3).map(w => <button className="cc-list-row" key={w.id} onClick={() => openEditor(w)}><span className="workflow-glyph">⌘</span><span><b>{w.name}</b><small>{w.description || "Supervised workflow"}</small></span><span>→</span></button>) : <EmptyState icon="◇" title="No workflows yet" message="Create your first reusable team below." />}
           <form onSubmit={createWorkflow} className="cc-inline-form"><Input value={name} onChange={e => setName(e.target.value)} placeholder="New workflow name" /><Button type="submit" variant="ghost" disabled={busy || !name.trim()}>Create</Button></form>
         </Card>
       </section>
-      {editing && <div className="workflow-editor-backdrop"><section className="workflow-editor"><header className="run-monitor-head"><div><span className="eyebrow">WORKFLOW DESIGNER</span><h2>{editing.name}</h2></div><button className="panel-close" onClick={() => setEditing(null)}>×</button></header><div className="workflow-node-list">{editNodes.map((node, index) => <div className="workflow-node" key={node.id}><span className="node-index">{index + 1}</span><span><b>{node.label}</b><small>{node.type === "agent" ? `@${node.agent}${node.model ? ` · ${node.model}` : ""}` : node.type}</small></span><button className="node-remove" onClick={() => setEditNodes(nodes => nodes.filter(n => n.id !== node.id))}>×</button></div>)}</div><div className="cc-inline-form workflow-add"><select className="input" value={agentName} onChange={e => setAgentName(e.target.value)}>{agents.length ? agents.map(a => <option key={a.name} value={a.name}>{a.display_name || a.name}</option>) : <option value="swarm">swarm</option>}</select><ModelPicker token={token} providerId={connectedProvider?.id} value={agentModel} onChange={setAgentModel} placeholder="Model from API" disabled={!connectedProvider} /><Button variant="ghost" onClick={() => setEditNodes(nodes => [...nodes, { id: `agent-${Date.now()}`, type: "agent", label: `Agent ${agentName}`, agent: agentName, ...(agentModel.trim() ? { model: agentModel.trim() } : {}) }])}>Add agent</Button></div><footer className="workflow-editor-actions"><Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button><Button variant="primary" disabled={busy} onClick={saveEditor}>Save workflow</Button></footer></section></div>}
-      <section className="cc-runs"><div className="cc-section-head"><div><span className="eyebrow">RECENT ACTIVITY</span><h2>Runs</h2></div><span className="cc-count">{runs.length}</span></div>{runs.length ? <div className="cc-run-list">{runs.slice(0, 8).map(r => <button className="cc-run-row" key={r.id} onClick={() => onOpenRun?.(r)}><span className={`run-status ${r.status}`} /><span className="run-objective">{r.objective}</span><Badge variant={r.status === "completed" ? "success" : r.status === "failed" ? "error" : "subtle"}>{r.status.replaceAll("_", " ")}</Badge><span className="text-mono-xs text-subtle">{new Date(r.created_at * 1000).toLocaleString()}</span></button>)}</div> : <EmptyState icon="◌" title="No runs yet" message="Launch a brief and your live run history will appear here." />}</section>
-      <section className="cc-providers"><div className="cc-section-head"><div><span className="eyebrow">MODEL ACCESS</span><h2>AI providers</h2></div><span className="cc-provider-note">API key or supported OAuth</span></div><ProviderPanel token={token} onStatusChange={load} flash={(message, error) => flash?.(message, error ? "error" : "success")} /></section>
-    </main>
+      {editing && <div className="workflow-editor-backdrop"><section className="workflow-editor"><header className="run-monitor-head"><div><span className="eyebrow">Workflow designer</span><h2>{editing.name}</h2></div><button className="panel-close" onClick={() => setEditing(null)}>×</button></header><div className="workflow-node-list">{editNodes.map((node, index) => <div className="workflow-node" key={node.id}><span className="node-index">{index + 1}</span><span><b>{node.label}</b><small>{node.type === "agent" ? `${node.agent}${node.model ? ` · ${node.model}` : ""}` : node.type}</small></span><button className="node-remove" onClick={() => setEditNodes(nodes => nodes.filter(n => n.id !== node.id))}>×</button></div>)}</div><div className="cc-inline-form workflow-add"><select className="input" value={agentName} onChange={e => setAgentName(e.target.value)}>{agents.length ? agents.map(a => <option key={a.name} value={a.name}>{a.display_name || a.name}</option>) : <option value="swarm">swarm</option>}</select><ModelPicker token={token} providerId={connectedProvider?.id} value={agentModel} onChange={setAgentModel} placeholder="Model from API" disabled={!connectedProvider} /><Button variant="ghost" onClick={() => setEditNodes(nodes => [...nodes, { id: `agent-${Date.now()}`, type: "agent", label: `Agent ${agentName}`, agent: agentName, ...(agentModel.trim() ? { model: agentModel.trim() } : {}) }])}>Add agent</Button></div><footer className="workflow-editor-actions"><Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button><Button variant="primary" disabled={busy} onClick={saveEditor}>Save workflow</Button></footer></section></div>}
+      <section className="cc-runs"><div className="cc-section-head"><div><span className="eyebrow">Recent activity</span><h2>Runs</h2></div><span className="cc-count">{runs.length}</span></div>{runs.length ? <div className="cc-run-list">{runs.slice(0, 8).map(r => <button className="cc-run-row" key={r.id} onClick={() => onOpenRun?.(r)}><span className={`run-status ${r.status}`} /><span className="run-objective">{r.objective}</span><Badge variant={r.status === "completed" ? "success" : r.status === "failed" ? "error" : "subtle"}>{r.status.replaceAll("_", " ")}</Badge><span className="text-subtle" style={{ fontSize: 12 }}>{new Date(r.created_at * 1000).toLocaleString()}</span></button>)}</div> : <EmptyState icon="◌" title="No runs yet" message="Launch a brief and your live run history will appear here." />}</section>
+      <section className="cc-providers"><div className="cc-section-head"><div><span className="eyebrow">Model access</span><h2>AI providers</h2></div><span className="cc-provider-note">API key or supported OAuth</span></div><ProviderPanel token={token} onStatusChange={load} flash={(message, error) => flash?.(message, error ? "error" : "success")} /></section>
+    </div>
   );
 }
 
@@ -214,7 +218,7 @@ export function RunMonitor({ token, run, onClose }) {
   return (
     <div className="run-monitor-backdrop" role="dialog" aria-modal="true">
       <section className="run-monitor">
-        <header className="run-monitor-head"><div><span className="eyebrow">LIVE RUN</span><h2>{current?.objective || run.objective}</h2><span className="text-mono-xs text-subtle">{current?.id || run.id}{current?.model ? ` · ${current.model}` : ""}</span></div><button className="panel-close" onClick={onClose} aria-label="Close">×</button></header>
+        <header className="run-monitor-head"><div><span className="eyebrow">Live run</span><h2>{current?.objective || run.objective}</h2><span className="text-subtle" style={{ fontSize: 12 }}>{current?.id || run.id}{current?.model ? ` · ${current.model}` : ""}</span></div><button className="panel-close" onClick={onClose} aria-label="Close">×</button></header>
         <div className="run-monitor-status"><span className={`run-status ${current?.status}`} /><strong>{(current?.status || "queued").replaceAll("_", " ")}</strong><span className="text-subtle">Supervised execution</span></div>
         {error && <p className="run-monitor-error">{error}</p>}
         <div className="run-event-list">{events.length ? events.map(e => {
@@ -237,7 +241,7 @@ export function RunMonitor({ token, run, onClose }) {
             </div>
           );
         }) : <EmptyState icon="◌" title="Waiting for events" message="The run is queued and will appear here as execution begins." />}</div>
-        {current?.report && <article className="run-report"><span className="eyebrow">RUN REPORT</span><h3>{current.report.summary || "Completed run"}</h3><p>{current.report.steps?.length || 0} workflow steps completed.</p>{current.report.artifacts?.map(a => <a className="run-artifact" key={a.id} href={`/api/v2/artifacts/${a.id}`} onClick={event => downloadArtifact(event, a)}>↓ {a.name}</a>)}</article>}
+        {current?.report && <article className="run-report"><span className="eyebrow">Run report</span><h3>{current.report.summary || "Completed run"}</h3><p>{current.report.steps?.length || 0} workflow steps completed.</p>{current.report.artifacts?.map(a => <a className="run-artifact" key={a.id} href={`/api/v2/artifacts/${a.id}`} onClick={event => downloadArtifact(event, a)}>Download {a.name}</a>)}</article>}
       </section>
     </div>
   );

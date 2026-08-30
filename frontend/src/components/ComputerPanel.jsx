@@ -10,15 +10,15 @@ import PluginsPanel from "../ai-support/PluginsPanel.jsx";
 
 const PANEL_GROUPS = [
   { id: "places", label: "Places", tabs: [
-    { id: "files", label: "Sandbox", icon: "📁" },
-    { id: "system", label: "System", icon: "💻" },
-    { id: "browser", label: "Browser", icon: "🌐" },
+    { id: "files", label: "Sandbox" },
+    { id: "system", label: "System" },
+    { id: "browser", label: "Browser" },
   ]},
   { id: "connect", label: "Connect", tabs: [
-    { id: "ai", label: "AI", icon: "✦" },
-    { id: "apps", label: "Apps", icon: "🔌" },
-    { id: "tools", label: "Tools", icon: "🔧" },
-    { id: "plugins", label: "Plugins", icon: "🧩" },
+    { id: "ai", label: "AI" },
+    { id: "apps", label: "Apps" },
+    { id: "tools", label: "Tools" },
+    { id: "plugins", label: "Plugins" },
   ]},
 ];
 
@@ -81,7 +81,6 @@ export function ComputerPanel({ computer, token, user, meRole, onClose, onRefres
             className={`panel-tab${activeTab === t.id ? " active" : ""}`}
             onClick={() => setActiveTab(t.id)}
           >
-            <span className="panel-tab-icon" aria-hidden>{t.icon}</span>
             {t.label}
           </button>
         ))}
@@ -104,15 +103,19 @@ function PanelChrome({ activeGroup, activeTab, onSelectTab, onClose, onRefresh, 
   return (
     <div className="panel-header">
       <div className="panel-header-main">
-        <span className="panel-icon">🖥</span>
+        <span className="panel-icon" aria-hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </span>
         <div>
           <h2 className="panel-title">Workspace</h2>
-          <span className="panel-subtitle text-mono-xs text-subtle">{subtitle}</span>
+          <span className="panel-subtitle">{subtitle}</span>
         </div>
       </div>
       <div className="panel-header-actions">
         <Tooltip content="Refresh">
-          <button className="btn btn-ghost btn-icon btn-sm" onClick={onRefresh} aria-label="Refresh">⟳</button>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onRefresh} aria-label="Refresh">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          </button>
         </Tooltip>
         <button className="panel-close" onClick={onClose} aria-label="Close">×</button>
       </div>
