@@ -63,6 +63,10 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
           </Button>
         </form>
 
+        <p className="login-security text-subtle text-sm">
+          Passwords are hashed with PBKDF2 (100k rounds) and never stored in plain text.
+        </p>
+
         <div className="login-switch">
           {mode === "login" ? (
             <span>New here? <button className="link-btn" onClick={() => { setMode("setup"); setError(""); }}>Create a workspace</button></span>

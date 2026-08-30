@@ -237,6 +237,82 @@
 .msg-actions button:hover { color: var(--color-text-primary); background: rgba(255, 255, 255, 0.08); }
 .msg-actions button.danger:hover { color: var(--color-error); }
 
+.msg-row.failed .agent-bubble.error-bubble {
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+.msg-retry-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.msg-retry-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 510;
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.msg-retry-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.msg-retry-btn:disabled { opacity: 0.6; cursor: wait; }
+
+.send-failure-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0 var(--space-4) var(--space-2);
+  padding: 10px 14px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+.send-failure-banner.thread {
+  margin: 0 var(--space-3) var(--space-2);
+}
+.send-failure-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+.send-failure-retry,
+.send-failure-dismiss {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 510;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.send-failure-retry {
+  color: #fff;
+  background: var(--color-error);
+  border: none;
+}
+.send-failure-retry:hover { filter: brightness(1.08); }
+.send-failure-dismiss {
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.send-failure-dismiss:hover {
+  color: var(--color-text-primary);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
 .msg-reactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .msg-reactions.inline { margin-top: 10px; }
 .reaction-chip {
@@ -509,7 +585,12 @@
 .login-form label { margin: var(--space-4) 0 var(--space-2); }
 .login-error { margin-top: var(--space-3); }
 .login-submit { margin-top: var(--space-5); justify-content: center; width: 100%; padding: 12px 18px !important; border-radius: var(--radius-full) !important; }
-.login-switch { margin-top: var(--space-5); text-align: center; font-size: 13px; color: var(--color-text-muted); }
+.login-security {
+  margin: var(--space-4) 0 0;
+  text-align: center;
+  line-height: 1.5;
+}
+.login-switch { margin-top: var(--space-4); text-align: center; font-size: 13px; color: var(--color-text-muted); }
 .link-btn { background: none; border: none; color: var(--color-brand); font-size: 13px; cursor: pointer; padding: 0; font-weight: 510; }
 .link-btn:hover { color: var(--color-brand-hover); text-decoration: underline; }
 .login-demo {

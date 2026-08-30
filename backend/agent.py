@@ -470,6 +470,10 @@ def compact_summary(history: list[dict[str, Any]], window: int) -> str | None:
     return "Earlier in this channel:\n" + "\n".join(lines)
 
 
+def is_agent_error(body: str) -> bool:
+    return (body or "").strip().startswith("[agent error:")
+
+
 def classify_error(exc: BaseException) -> str:
     """Short in-channel line. Never a raw traceback."""
     status = getattr(exc, "status_code", None)

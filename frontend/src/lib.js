@@ -81,6 +81,10 @@ export function statusLabel(status) {
   return ({ working: "Working", needs_approval: "Needs approval", idle: "Idle" })[status] || status || "Idle";
 }
 
+export function isAgentError(body) {
+  return String(body || "").trim().startsWith("[agent error:");
+}
+
 export function roleLine(prompt) {
   const text = String(prompt || "").replace(/\s+/g, " ").trim();
   if (!text) return "custom bot";

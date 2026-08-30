@@ -48,10 +48,11 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
     }
   }
 
-  function send() {
+  async function send() {
     const text = draft.trim();
     if (!text) return;
-    onSend(text);
+    const ok = await onSend(text);
+    if (ok === false) return;
     setDraft("");
     setMention({ open: false, index: 0, items: [], query: "" });
   }

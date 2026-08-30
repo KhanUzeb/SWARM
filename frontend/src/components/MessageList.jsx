@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Avatar, RichBody, Tooltip } from "../ui.jsx";
-import { fmtTime } from "../lib.js";
+import { fmtTime, isAgentError } from "../lib.js";
 
-export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onDelete, onOpenThread, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith }) {
+export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId }) {
   const endRef = useRef(null);
   const logRef = useRef(null);
 
@@ -60,6 +60,8 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
               onReact={onReact}
               onDelete={onDelete}
               onOpenThread={onOpenThread}
+              onRetry={onRetry}
+              retrying={retryingId === m.id}
               myHandle={user?.handle}
             />
           );
@@ -78,10 +80,11 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
   );
 }
 
-function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, onReact, onDelete, onOpenThread, myHandle }) {
+function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, onReact, onDelete, onOpenThread, onRetry, retrying, myHandle }) {
   const counts = {};
   for (const r of reactions || []) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
   const isMe = m.author === myHandle;
+  const failedAgent = m.author_kind === "agent" && isAgentError(m.body);
 
   const kind = m.author_kind || "human";
   const avatarKind = kind === "system" ? "system" : agent ? "agent" : "human";
@@ -124,8 +127,8 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
   }
 
   return (
-    <div className={`msg-row ${kind} ${grouped ? "grouped" : ""} ${m.streaming ? "streaming" : ""}`}>
-      <div className="msg-bubble agent-bubble">
+    <div className={`msg-row ${kind} ${grouped ? "grouped" : ""} ${m.streaming ? "streaming" : ""} ${failedAgent ? "failed" : ""}`}>
+      <div className={`msg-bubble agent-bubble${failedAgent ? " error-bubble" : ""}`}>
         {!grouped && (
           <div className="msg-bubble-header">
             <Avatar name={label} kind={avatarKind} size="sm" />
@@ -136,7 +139,15 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
         )}
         <RichBody body={m.body || ""} />
 
-        {kind !== "system" && !m.streaming && m.id != null && (
+        {failedAgent && onRetry && (
+          <div className="msg-retry-row">
+            <button type="button" className="msg-retry-btn" onClick={() => onRetry(m)} disabled={retrying}>
+              {retrying ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        )}
+
+        {kind !== "system" && !m.streaming && m.id != null && !failedAgent && (
           <div className="msg-actions">
             <Tooltip content="Reply">
               <button onClick={() => onReply(m.parent_id || m.id)} aria-label="Reply">

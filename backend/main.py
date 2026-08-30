@@ -725,6 +725,50 @@ async def api_delete_message(message_id: int, handle: str = Depends(require_auth
     return {"ok": True, "ids": ids}
 
 
+@app.post("/api/messages/{message_id}/retry")
+async def api_retry_agent_message(message_id: int, handle: str = Depends(require_auth)):
+    """Re-run an agent after a provider/network error message."""
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    msg = await db.get_message(message_id)
+    if msg is None:
+        raise HTTPException(404, "no such message")
+    channel_id = msg["channel_id"]
+    await _require_channel(channel_id, handle)
+    if msg.get("author_kind") != "agent" or not agent.is_agent_error(msg.get("body") or ""):
+        raise HTTPException(400, "only agent error messages can be retried")
+
+    agent_row = await db.fetch_agent(msg["author"])
+    if agent_row is None or agent_row.get("archived"):
+        raise HTTPException(404, "agent not found")
+
+    parent_id = msg.get("parent_id")
+    history = await db.get_history(channel_id, limit=120, before_id=message_id)
+    trigger = None
+    for candidate in reversed(history):
+        if candidate.get("parent_id") != parent_id:
+            continue
+        kind = candidate.get("author_kind")
+        body = candidate.get("body") or ""
+        if kind == "human":
+            trigger = candidate
+            break
+        if kind == "system" and body.startswith("[routine:"):
+            trigger = candidate
+            break
+    if trigger is None:
+        raise HTTPException(400, "could not find the message that triggered this agent")
+
+    ids = await db.delete_message(message_id)
+    await hub.broadcast(channel_id, {
+        "type": "message_deleted",
+        "message_id": message_id,
+        "ids": ids,
+    })
+    _track_task(_run_agent(channel_id, agent_row), "agent retry")
+    return {"ok": True, "trigger_id": trigger["id"], "agent": agent_row["name"]}
+
+
 @app.get("/api/messages/{message_id}/thread")
 async def api_get_thread(message_id: int, handle: str = Depends(require_auth)):
     parent = await db.get_message(message_id)
