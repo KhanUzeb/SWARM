@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import agent, db, v2
 from .ai_support import store as ai_store
+from .ai_support.agent_templates import get_agent_templates
 from .ai_support.catalog import list_all_models, list_provider_models
 from .ai_support.providers import get_provider, list_providers, providers_by_priority
 from .jobs import JOB_TEMPLATES
@@ -822,6 +823,11 @@ async def _validate_tool_names(names: list[str] | None) -> None:
     invalid = [n for n in names if n not in reg.all_names()]
     if invalid:
         raise HTTPException(400, detail=f"unknown tools: {invalid}")
+
+
+@app.get("/api/agent-templates")
+async def api_agent_templates():
+    return get_agent_templates()
 
 
 @app.post("/api/agents")

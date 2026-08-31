@@ -698,9 +698,27 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
   const [detail, setDetail] = useState("");
   const [members, setMembers] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
   const labels = { channel: "New channel", dm: "New direct message", group: "New group", team: "New agent team", agent: "New agent" };
   const needsMembers = action === "group" || action === "team";
   const needsDetail = action !== "dm";
+  const isAgent = action === "agent";
+
+  useEffect(() => {
+    if (isAgent && !templatesLoaded) {
+      api(`/api/agent-templates`, { token })
+        .then((data) => { setTemplates(data || []); setTemplatesLoaded(true); })
+        .catch(() => setTemplatesLoaded(true));
+    }
+  }, [isAgent, templatesLoaded, token]);
+
+  function selectTemplate(tpl) {
+    setSelectedTemplate(tpl.id);
+    setName(tpl.name);
+    setDetail(tpl.system_prompt);
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -711,7 +729,16 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
     if (action === "dm") { path = "/api/dms"; body = { handle: name.trim() }; }
     if (action === "group") { body = { name: name.trim(), topic: detail.trim(), kind: "group", members }; }
     if (action === "team") { path = "/api/teams"; body = { name: name.trim(), description: detail.trim(), members }; }
-    if (action === "agent") { path = "/api/agents"; body = { name: name.trim(), display_name: name.trim(), system_prompt: detail.trim() || `You are ${name.trim()}, a helpful specialist teammate.`, job: "Teammate" }; }
+    if (action === "agent") {
+      const tpl = templates.find(t => t.id === selectedTemplate);
+      path = "/api/agents";
+      body = {
+        name: name.trim(),
+        display_name: name.trim(),
+        system_prompt: detail.trim() || `You are ${name.trim()}, a helpful specialist teammate.`,
+        job: tpl ? tpl.job : "Teammate",
+      };
+    }
     const response = await apiJson(path, { token, method: "POST", body });
     setBusy(false);
     if (response.ok) onCreated(response.data?.id || response.data?.dm_channel_id);
@@ -728,8 +755,26 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
           <button className="panel-close" onClick={onClose}>×</button>
         </header>
         <form className="quick-create-form" onSubmit={submit}>
-          <Input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder={action === "dm" ? "Person handle" : action === "agent" ? "Agent handle" : "Name"} />
-          {needsDetail && <Textarea value={detail} onChange={e => setDetail(e.target.value)} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}
+          {isAgent && templates.length > 0 && (
+            <div className="template-picker">
+              <span className="eyebrow">Start from a template</span>
+              <div className="template-grid">
+                {templates.map(t => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={`template-card${selectedTemplate === t.id ? " selected" : ""}`}
+                    onClick={() => selectTemplate(t)}
+                  >
+                    <span className="template-name">{t.display_name}</span>
+                    <span className="template-desc">{t.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <Input autoFocus value={name} onChange={e => { setName(e.target.value); setSelectedTemplate(null); }} placeholder={action === "dm" ? "Person handle" : action === "agent" ? "Agent handle" : "Name"} />
+          {needsDetail && <Textarea value={detail} onChange={e => { setDetail(e.target.value); setSelectedTemplate(null); }} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}
           {needsMembers && (
             <label className="quick-members">
               {agents.map(agent => (
