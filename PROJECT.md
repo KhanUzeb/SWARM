@@ -25,7 +25,7 @@ are live. Pip mascot removed. Remaining gated items: semantic history
 | Backend    | FastAPI + Uvicorn                | async-native, WS support built in, matches VOX/AXIOM stack |
 | DB         | SQLite via `aiosqlite`           | zero-ops for a portfolio project; swap to Postgres if this ever needs concurrent writers at scale |
 | Realtime   | Native WebSocket, in-memory hub  | one process, one hub, no Redis pub/sub needed at this scale |
-| LLM        | Groq (primary), OpenRouter/OpenAI/HF/Together fallback | Priority chain via `backend/ai_support/resolver.py`; env or UI-stored keys |
+| LLM        | Groq (primary), OpenRouter/OpenAI/HF/Together + 10 more | Priority chain via `backend/ai_support/resolver.py` (OpenAI SDK adapter); env or UI-stored keys |
 | Frontend   | React 19 + Vite 8, built with bun | small SPA, hashed assets, FastAPI serves `frontend/dist` |
 | Tracing    | Langfuse                         | follows the eval/observability pattern from VERIS; becomes a no-op when unconfigured |
 | Deployment | Docker + docker-compose          | single VPS, named volume for the SQLite file |

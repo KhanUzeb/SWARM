@@ -23,6 +23,17 @@ serves `frontend/dist` through uvicorn. Bun is not needed on the VPS.
 
 App is on `http://<host>:8000`.
 
+## Local development
+
+Always use `python -m uvicorn` (not bare `uvicorn`) so the working directory
+stays the repo root and `backend` is importable:
+
+```powershell
+cd swarm
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn backend.main:app --reload
+```
+
 ## First login
 
 Register the first handle in the UI — it becomes **admin**. You can
@@ -63,6 +74,17 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 | `SWARM_SYSTEM` | no | `1` by default; set `0` to disable host-system tools |
 | `SWARM_SYSTEM_ROOT` | no | host path Bots may read/write (Dockerfile sets `/app`) |
 | `SWARM_DB_PATH` | no | set by the Dockerfile to `/app/data/swarm.db` |
+| `OPENAI_API_KEY` | no | OpenAI direct |
+| `ANTHROPIC_API_KEY` | no | Anthropic direct |
+| `GOOGLE_API_KEY` | no | Google Gemini |
+| `MISTRAL_API_KEY` | no | Mistral |
+| `DEEPSEEK_API_KEY` | no | DeepSeek |
+| `XAI_API_KEY` | no | xAI (Grok) |
+| `FIREWORKS_API_KEY` | no | Fireworks AI |
+| `PERPLEXITY_API_KEY` | no | Perplexity |
+| `NVIDIA_API_KEY` | no | NVIDIA NIM |
+| `OPENCODE_API_KEY` | no | OpenCode |
+| `ZEN_API_KEY` | no | Zen |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | no | tracing degrades silently if unset |
 
 ## Updating

@@ -187,15 +187,17 @@ async def _openrouter_api_key() -> str | None:
 
 
 def _groq_client(api_key: str):
-    from groq import AsyncGroq
+    # Use OpenAI SDK with Groq's OpenAI-compatible base to avoid the
+    # Groq SDK's hardcoded /openai/v1 prefix doubling (was /openai/v1/openai/v1/models).
+    from openai import AsyncOpenAI
 
-    return AsyncGroq(api_key=api_key)
+    return AsyncOpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
 
 
 def _openrouter_client(api_key: str):
-    from groq import AsyncGroq
+    from openai import AsyncOpenAI
 
-    return AsyncGroq(
+    return AsyncOpenAI(
         api_key=api_key,
         base_url=OPENROUTER_BASE_URL,
         default_headers={

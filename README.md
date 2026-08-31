@@ -54,7 +54,7 @@ cd frontend && bun install && bun run build && cd ..
 cp .env.example .env
 # Set GROQ_API_KEY (console.groq.com). Optional: OPENROUTER_API_KEY, Langfuse keys.
 
-uvicorn backend.main:app --reload
+python -m uvicorn backend.main:app --reload
 ```
 
 Open `http://localhost:8000`. Register a handle (optionally set an admin password — stored as a PBKDF2 hash, never plain text), connect Groq or OpenRouter in **Step 1**, choose your first Bot, and open its 1:1. Set `SWARM_DEMO=1` to use mock replies without an API key.

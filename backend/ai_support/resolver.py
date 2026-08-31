@@ -66,12 +66,21 @@ def map_model_for_provider(agent_model: str, provider_id: str, *, stored_model: 
     return stored_model or spec.get("default_model") or chosen
 
 
+def _normalize_base_url(url: str | None) -> str | None:
+    """Strip trailing slash; keep provider's path as-is — OpenAI SDK just appends /models, /chat/completions."""
+    if not url:
+        return None
+    return url.rstrip("/")
+
+
 def openai_compatible_config(auth: RuntimeProviderAuth) -> OpenAICompatibleConfig:
     spec = get_provider(auth.provider_id) or {}
+    raw_base = auth.base_url or spec.get("base_url") or "https://api.openai.com/v1"
+    base = _normalize_base_url(str(raw_base)) or "https://api.openai.com/v1"
     return OpenAICompatibleConfig(
         provider_id=auth.provider_id,
         api_key=auth.api_key,
-        base_url=(auth.base_url or spec.get("base_url") or "https://api.openai.com/v1").rstrip("/"),
+        base_url=base,
         headers=auth.headers,
         provider_name=str(spec.get("name") or auth.provider_id),
         model_aliases=dict(spec.get("model_aliases") or {}),
@@ -79,15 +88,23 @@ def openai_compatible_config(auth: RuntimeProviderAuth) -> OpenAICompatibleConfi
 
 
 def build_openai_compatible_client(config: OpenAICompatibleConfig) -> Any:
-    """Groq SDK speaks OpenAI-compatible chat completions — same adapter tau uses for many backends."""
-    from groq import AsyncGroq
+    """OpenAI SDK as generic OpenAI-compatible adapter (fixes Groq double /openai/v1 bug).
+
+    Previous impl used groq.AsyncGroq for every provider. Groq's SDK hardcodes
+    /openai/v1/models on top of base_url, so passing base_url=https://api.groq.com/openai/v1
+    produced https://api.groq.com/openai/v1/openai/v1/models (404). Using
+    openai.AsyncOpenAI ensures base_url + /models is the request, which matches
+    every provider's declared base_url in providers.py.
+    """
+    from openai import AsyncOpenAI
 
     kwargs: dict[str, Any] = {"api_key": config.api_key}
-    if config.base_url:
-        kwargs["base_url"] = config.base_url
+    base = _normalize_base_url(config.base_url)
+    if base:
+        kwargs["base_url"] = base
     if config.headers:
         kwargs["default_headers"] = dict(config.headers)
-    return AsyncGroq(**kwargs)
+    return AsyncOpenAI(**kwargs)
 
 
 async def iter_openai_compatible_attempts(agent_model: str) -> list[tuple[Any, str, str]]:

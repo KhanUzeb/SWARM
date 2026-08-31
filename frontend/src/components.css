@@ -46,6 +46,7 @@
 .channel-link.active {
   color: var(--color-text-primary);
   background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 3px 0 0 var(--color-brand);
 }
 .channel-dot {
   width: 8px;
@@ -170,8 +171,10 @@
 .agent-bubble {
   background: var(--color-bubble-agent);
   color: var(--color-text-secondary);
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+  box-shadow: inset 0 0 0 1px transparent;
 }
-.agent-bubble:hover { background: var(--color-bubble-agent-hover); }
+.agent-bubble:hover { background: var(--color-bubble-agent-hover); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04); }
 .user-bubble {
   background: var(--color-bubble-user);
   color: var(--color-bubble-user-text);
@@ -370,11 +373,12 @@
   background: rgba(255, 255, 255, 0.05);
   border-radius: var(--radius-full);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-  transition: box-shadow var(--transition-fast), background var(--transition-fast);
+  transition: box-shadow var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
 }
 .composer-pill:focus-within {
   background: rgba(255, 255, 255, 0.07);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 0 0 3px rgba(99, 102, 241, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.35), 0 0 0 3px rgba(99, 102, 241, 0.10), 0 8px 24px rgba(0,0,0,0.18);
+  transform: translateY(-1px);
 }
 
 .composer-add {
@@ -570,6 +574,7 @@
   box-shadow: 0 0 0 1px rgba(255,255,255,0.06), 0 24px 80px rgba(0,0,0,0.55);
   animation: slide-up var(--transition-slow);
 }
+.login-card:focus-within { box-shadow: 0 0 0 1px rgba(99,102,241,0.18), 0 24px 80px rgba(0,0,0,0.55); }
 .login-brand { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--space-8); }
 .login-logo {
   font-family: var(--font-display);

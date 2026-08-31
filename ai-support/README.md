@@ -7,13 +7,13 @@ Implementation lives in `backend/ai_support/`, modeled after [Hugging Face tau `
 | tau concept | swarm |
 |-------------|-------|
 | `RuntimeProviderAuth` | `config.RuntimeProviderAuth` — key + base URL + headers resolved at call time |
-| `OpenAICompatibleConfig` | `config.OpenAICompatibleConfig` — Groq, OpenRouter, OpenAI, HF, Together |
+| `OpenAICompatibleConfig` | `config.OpenAICompatibleConfig` — all OpenAI-compatible providers |
 | `openai_compatible_config_from_env` | `store.resolve_key` + provider `env_fallback` |
-| Provider adapters | `resolver.build_openai_compatible_client` (Groq SDK, OpenAI-compatible) |
+| Provider adapters | `resolver.build_openai_compatible_client` (OpenAI SDK, OpenAI-compatible) |
 | Fallback chain | `resolver.iter_openai_compatible_attempts` sorted by `priority` |
 
 Connect a provider in the UI to store an encrypted API key in SQLite. Environment variables remain available as fallbacks.
 
-**Providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together AI, Anthropic (catalog; use OpenRouter for Claude chat today).
+**Providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together AI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen.
 
 **Apps (not an LLM provider):** Composio lives in Computer → Apps (`/api/composio/*`, `COMPOSIO_API_KEY`). A Composio key does not make an LLM provider ready.

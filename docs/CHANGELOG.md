@@ -16,12 +16,13 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 | Add bot profiles and research/CUA connectors | `profiles/`, `backend/profiles.py`, `backend/tools/connectors.py` | Removes profile.md + Exa/Tavily/Firecrawl/browser-use/CUA |
 | Seed ten /commands | `skills/*.md`, `backend/bundled_skills.py` | Removes bundled standup/digest/research/… skills |
 | Add host-system tools + Computer panel UX | `backend/tools/system.py`, Computer → System, topbar | Removes `system_*` tools and Sandbox/System split |
+| Fix provider URL doubling, add NVIDIA/OpenCode/Zen, minimisable providers | `resolver.py`, `agent.py`, `providers.py`, `CommandCenter.jsx` | Removes new providers; reverts to Groq SDK (may break model listing) |
 
 ## Feature summary (post-merge)
 
 - **Tools:** 30 builtins (sandbox computer, host system, Playwright, Exa, Tavily, Firecrawl, Browser Use CLI, CUA) + plugins + Composio
 - **Profiles:** `profiles/<bot>.md` for seeded Bots; `profiles/jobs/<id>.md` for each job template
-- **AI providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together (tau-inspired resolver); UI in Computer → AI; onboarding step 1
+- **AI providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen (OpenAI SDK adapter, tau-inspired resolver); UI in Computer → AI; onboarding step 1; minimisable provider panel
 - **Apps:** Composio + Exa + Tavily + Firecrawl keys in Computer → Apps; Browser Use CLI and CUA are local installs
 - **Security:** Bearer required on data reads; CORS allowlist; `X-Swarm-Client: web` for browser origins; first user is admin; optional admin password stored as PBKDF2 hash (never plain text)
 - **Frontend:** Slack-style sidebar (DMs, teams, channels, search); 3-step onboarding with API key save; Computer panel with Sandbox vs System file browser; Retry on agent error bubbles and failed human sends

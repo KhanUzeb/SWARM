@@ -134,6 +134,21 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "key_url": "https://www.perplexity.ai/settings/api", "models": ["sonar", "sonar-pro"], "default_model": "sonar",
         "env_fallback": "PERPLEXITY_API_KEY", "base_url": "https://api.perplexity.ai", "model_aliases": {},
     },
+    "nvidia": {
+        "id": "nvidia", "name": "NVIDIA NIM", "kind": "openai_compatible", "auth": "api_key", "priority": 13,
+        "key_url": "https://build.nvidia.com/explore/discover", "models": ["meta/llama-3.1-70b-instruct", "meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"], "default_model": "meta/llama-3.1-70b-instruct",
+        "env_fallback": "NVIDIA_API_KEY", "base_url": "https://integrate.api.nvidia.com/v1", "model_aliases": {"openai/gpt-oss-120b": "meta/llama-3.3-70b-instruct", "openai/gpt-oss-20b": "meta/llama-3.1-70b-instruct"},
+    },
+    "opencode": {
+        "id": "opencode", "name": "OpenCode", "kind": "openai_compatible", "auth": "api_key", "priority": 14,
+        "key_url": "https://opencode.ai/settings/api-keys", "models": ["opencode/gpt-oss-120b", "opencode/gpt-oss-20b"], "default_model": "opencode/gpt-oss-120b",
+        "env_fallback": "OPENCODE_API_KEY", "base_url": "https://api.opencode.ai/v1", "model_aliases": {"openai/gpt-oss-120b": "opencode/gpt-oss-120b", "openai/gpt-oss-20b": "opencode/gpt-oss-20b"},
+    },
+    "zen": {
+        "id": "zen", "name": "Zen", "kind": "openai_compatible", "auth": "api_key", "priority": 15,
+        "key_url": "https://zen.ai/settings/api-keys", "models": ["zen-large", "zen-small", "zen-reasoning"], "default_model": "zen-large",
+        "env_fallback": "ZEN_API_KEY", "base_url": "https://api.zen.ai/v1", "model_aliases": {"openai/gpt-oss-120b": "zen-large", "openai/gpt-oss-20b": "zen-small"},
+    },
     "anthropic": {
         "id": "anthropic",
         "name": "Anthropic",
