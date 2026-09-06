@@ -202,13 +202,19 @@ Indexed on `(agent_name, created_at)`. Notes are written by the
 Personal CRUD at `/api/knowledge` (+ `/search?q=`, owner-isolated).
 Agents use `knowledge_save` / `knowledge_search` (scoped to
 `agent:<name>` + channel). The reply-time context builder injects top
-hits, so saved docs improve everyday answers.
+hits, so saved docs improve everyday answers. When those tools are
+allowed, the system prompt adds an explicit knowledge habit
+(search before factual answers, save durable learnings), and
+channel-scoped hits are boosted: they sort first and are the last KB
+entries dropped under the char budget.
 
 ### `work_sessions` / `work_events` / `work_message_links`
 
 Unified view over chat replies, v2 runs, routines, and handoffs.
 `GET /api/work`, `GET /api/work/{id}`,
-`GET /api/work/{id}/events?after=`, `POST /api/work/{id}/cancel`.
+`GET /api/work/{id}/events?after=`, `GET /api/work/{id}/messages`
+(full linked message objects for the detail panel),
+`POST /api/work/{id}/cancel`.
 Events are replayable envelopes
 `{work_id, seq, type, step_id, payload, created_at}`; secrets and hidden
 prompts are stripped before storage. Run-backed sessions re-use v2 run
