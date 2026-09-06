@@ -17,6 +17,9 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 | Seed ten /commands | `skills/*.md`, `backend/bundled_skills.py` | Removes bundled standup/digest/research/… skills |
 | Add host-system tools + Computer panel UX | `backend/tools/system.py`, Computer → System, topbar | Removes `system_*` tools and Sandbox/System split |
 | Fix provider URL doubling, add NVIDIA/OpenCode/Zen, minimisable providers | `resolver.py`, `agent.py`, `providers.py`, `CommandCenter.jsx` | Removes new providers; reverts to Groq SDK (may break model listing) |
+| Add unified work sessions + workspace rail | `backend/work.py`, `WorkRail.jsx`, `sessionStore.js`, chat/v2 hooks | Removes `/api/work` + rail; chat/v2 keep working standalone |
+| Add memory/knowledge/context + chat management | `backend/{context,knowledge}.py`, `forget`/`knowledge_*` tools, `KnowledgeView.jsx`, delete authz | Removes KB endpoints, context meter, forget; deletes revert to author-only checks removed |
+| Pinterest-2026 accents + taste pass + KaTeX removal | plum/persimmon/jade tokens, aurora+grain backdrop, serif hero, `ui.jsx` | Reverts palette; re-adding katex restores math rendering |
 
 ## Feature summary (post-merge)
 
@@ -29,5 +32,9 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 - **Bots:** Custom `display_name`; group chats; `@core` team; archive instead of hard-delete
 - **People:** Private 1:1s; JSON/CSV audit export per channel
 - **Slash commands:** `/standup` `/digest` `/decide` `/research` `/page` `/repro` `/draft` `/review` `/plan` `/brief`
+- **Work sessions:** unified `/api/work` over chat replies, v2 runs, routines, handoffs; replayable events; startup recovery; live Work rail with approvals
+- **Memory & knowledge:** `forget` tool, per-agent memory endpoints, FTS5 knowledge base + agent tools, budget-aware context builder with composer meter + compact endpoint
+- **Chat management:** own-message thread/delete actions, channel delete with live removal, thread delete, author-or-admin delete rule
+- **Design:** Pinterest-2026 accents (Plum Noir intelligence, Persimmon attention, Jade success) on warm charcoal; aurora+grain backdrop; serif display hero; KaTeX dropped (JS −45%)
 
 Reference: [Hugging Face tau `src/tau_ai`](https://github.com/huggingface/tau/tree/main/src/tau_ai)

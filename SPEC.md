@@ -73,8 +73,9 @@ a duplicate row or an error.
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
 | archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
-Allowed tool names include **30 builtins** (`read_only_shell`,
-`search_channel_history`, `remember`, `recall`, `list_workspace`,
+Allowed tool names include **33 builtins** (`read_only_shell`,
+`search_channel_history`, `remember`, `recall`, `forget`,
+`knowledge_search`, `knowledge_save`, `list_workspace`,
 `read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
 `save_skill`, `request_approval`, computer-use `computer_run` /
 `computer_open` / `computer_screenshot`, browser-use
@@ -183,6 +184,36 @@ Env vars (`GROQ_API_KEY`, `HF_TOKEN`, …) remain fallbacks.
 Indexed on `(agent_name, created_at)`. Notes are written by the
 `remember` tool. At most one `summary` row is kept per
 `(agent_name, channel_id)`: a new summary replaces the previous.
+`forget(target)` deletes one note by id or several by keyword query.
+`GET /api/agents/{name}/memory` lists notes;
+`DELETE /api/agents/{name}/memory/{id}` forgets one.
+
+### `knowledge_docs` (+ `knowledge_fts` when SQLite ships FTS5)
+
+| column     | type    | notes |
+|------------|---------|-------|
+| id         | TEXT    | PK, `kb_…` |
+| owner      | TEXT    | user handle, or `agent:<name>` for agent-saved docs |
+| channel_id | TEXT    | nullable scope; channel-scoped docs rank first |
+| title/body/tags | TEXT | body cap 32000 chars |
+| source     | TEXT    | `manual` \| `agent` |
+| created_at / updated_at | REAL | |
+
+Personal CRUD at `/api/knowledge` (+ `/search?q=`, owner-isolated).
+Agents use `knowledge_save` / `knowledge_search` (scoped to
+`agent:<name>` + channel). The reply-time context builder injects top
+hits, so saved docs improve everyday answers.
+
+### `work_sessions` / `work_events` / `work_message_links`
+
+Unified view over chat replies, v2 runs, routines, and handoffs.
+`GET /api/work`, `GET /api/work/{id}`,
+`GET /api/work/{id}/events?after=`, `POST /api/work/{id}/cancel`.
+Events are replayable envelopes
+`{work_id, seq, type, step_id, payload, created_at}`; secrets and hidden
+prompts are stripped before storage. Run-backed sessions re-use v2 run
+events through the same envelope. Startup recovery settles sessions left
+active by a dead process (runs resume via v2 recovery instead).
 
 ### `skills`
 
@@ -486,6 +517,20 @@ reply whose `parent_id` equals that id, oldest-first, each with
 }
 ```
 404 if the message doesn't exist.
+
+### `DELETE /api/messages/{message_id}`
+Auth required. Only the message author or an admin may delete.
+Deletes the message, its direct replies, and their reactions, then
+broadcasts `message_deleted` with all removed ids.
+
+### `GET /api/channels/{channel_id}/context` · `POST /api/channels/{channel_id}/compact`
+Auth required. Context inspects the budgeted reply package for a channel
+(`?agent=` adds memory/summary/knowledge counts and the char meter);
+compact rolls older history into the channel summary now (409 when there
+is not enough history yet). Replies are assembled by
+`backend/context.py`: recent history first, then memory notes, summary,
+and knowledge hits, trimmed oldest-first to a 12k-char budget with
+drop counts reported.
 
 ### `GET /api/status`
 No auth. Reports whether inference keys are loaded — booleans only,

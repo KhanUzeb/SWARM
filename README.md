@@ -19,7 +19,7 @@ Human posts in #general, a Bot 1:1, or a group chat
 | No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
 | `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
 
-**Status:** Swarm has admin-managed Bots, human DMs, `@team` groups, audit export, computer-use, browser-use, Composio apps, optional admin password hashing (PBKDF2), and chat retry on provider/network failures. See [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
+**Status:** Swarm has admin-managed Bots, human DMs, `@team` groups, audit export, computer-use, browser-use, Composio apps, optional admin password hashing (PBKDF2), chat retry on provider/network failures, unified work sessions with a live Work rail, agent memory + knowledge base with a context meter, and message/channel management (author-or-admin delete). See [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 ```
 swarm/
@@ -106,6 +106,7 @@ pytest -q
 | File | Purpose |
 |------|---------|
 | [`VISION.md`](VISION.md) | Product thesis, competitors, V3 scope, demo script |
+| [`docs/PRODUCT-APPROACH.md`](docs/PRODUCT-APPROACH.md) | Product approach: problem, core loop, principles, success criteria |
 | [`PROBLEM.md`](PROBLEM.md) | Problem statement and hypothesis |
 | [`PROJECT.md`](PROJECT.md) | Stack, phase status, risks |
 | [`SPEC.md`](SPEC.md) | API + agent contract (source of truth) |
@@ -116,5 +117,6 @@ pytest -q
 
 No cloud VM or remote desktop. Browser-use is optional local Playwright
 or the Browser Use CLI / CUA driver if installed. Composio, Exa, Tavily,
-and Firecrawl need their own keys. Semantic search is still gated.
-See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.
+and Firecrawl need their own keys. Knowledge search is keyword (FTS5 +
+LIKE), not vector/semantic. Provider credentials are workspace-global,
+not per-user. See [`VISION.md` § V3](VISION.md) for what's planned vs permanently out of scope.
