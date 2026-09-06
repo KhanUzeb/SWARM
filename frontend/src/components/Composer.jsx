@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Avatar } from "../ui.jsx";
 
-export function Composer({ onSend, placeholder, channelName, agents, compact, threadParent, workingWith, offline, sendFailed, contextStats, onRefreshContext }) {
+export function Composer({ onSend, placeholder, channelName, agents, compact, threadParent, workingWith, offline, sendFailed, contextStats, contextError, onRefreshContext }) {
   const [draft, setDraft] = useState("");
   const [mention, setMention] = useState({ open: false, index: 0, items: [], query: "" });
   const [slash, setSlash] = useState({ open: false, index: 0 });
@@ -123,6 +123,11 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
           <span className="context-meter-label">
             Context {ctxPct}%{contextStats.memory_notes ? ` · ${contextStats.memory_notes} notes` : ""}{contextStats.kb_docs ? ` · ${contextStats.kb_docs} kb` : ""}
           </span>
+        </button>
+      )}
+      {ctxPct === null && contextError && (
+        <button type="button" className="context-meter unavailable" onClick={onRefreshContext} title="Context unavailable — click to retry">
+          <span className="context-meter-label">Context unavailable — retry</span>
         </button>
       )}
       {offline && (

@@ -20,6 +20,12 @@ export async function fetchWorkEvents(token, workId, after = 0) {
   return res.data;
 }
 
+export async function fetchWorkMessages(token, workId) {
+  const res = await apiJson(`/api/work/${encodeURIComponent(workId)}/messages`, { token });
+  if (!res.ok) throw new Error(res.data?.detail || "work messages failed");
+  return res.data;
+}
+
 export async function cancelWork(token, workId) {
   const res = await apiJson(`/api/work/${encodeURIComponent(workId)}/cancel`, { token, method: "POST" });
   if (!res.ok) throw new Error(res.data?.detail || "cancel failed");
@@ -57,14 +63,19 @@ export function useWorkSessions(token, { pollMs = 4000 } = {}) {
       setSessions(groupWorkByAttention(list));
       setConnected(true);
       setError(null);
-      // Replay any missed events for active sessions.
-      for (const s of list.filter(x => WORK_ACTIVE.has(x.status))) {
+      // Replay any missed events for active sessions — plus terminal ones
+      // we have never fetched (e.g. finished while the socket was down).
+      const needsReplay = list.filter(x =>
+        WORK_ACTIVE.has(x.status) || !cursors.current.has(x.id));
+      for (const s of needsReplay) {
         try {
           const after = cursors.current.get(s.id) || 0;
           const incoming = await fetchWorkEvents(tokenRef.current, s.id, after);
           if (incoming.length) {
             cursors.current.set(s.id, Math.max(after, ...incoming.map(e => e.seq)));
             setEventsByWork(prev => ({ ...prev, [s.id]: mergeWorkEvents(prev[s.id], incoming) }));
+          } else if (!cursors.current.has(s.id)) {
+            cursors.current.set(s.id, after); // fetched once; no events to replay
           }
         } catch { /* per-session replay must not fail the whole refresh */ }
       }

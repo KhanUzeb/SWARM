@@ -16,8 +16,8 @@ import { CommandPalette } from "./components/CommandPalette.jsx";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { CommandCenter, RunMonitor } from "./components/CommandCenter.jsx";
 import { KnowledgeView } from "./components/KnowledgeView.jsx";
-import { WorkRail } from "./components/WorkRail.jsx";
-import { useWorkSessions, WORK_ACTIVE } from "./work/sessionStore.js";
+import { WorkRail, WorkRailSheet, WorkDetail } from "./components/WorkRail.jsx";
+import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js";
 
 const PANEL_GROUPS = [
   { id: "places", label: "Places", tabs: [
@@ -67,6 +67,7 @@ export default function App() {
   const [retryingId, setRetryingId] = useState(null);
   const [sendFailure, setSendFailure] = useState(null);
   const [contextStats, setContextStats] = useState(null);
+  const [contextError, setContextError] = useState(false);
   const [workRailOpen, setWorkRailOpen] = useState(() => localStorage.getItem("swarm_work_rail") !== "0");
   const [selectedWork, setSelectedWork] = useState(null);
   const [streamingAgents, setStreamingAgents] = useState({});
@@ -91,7 +92,7 @@ export default function App() {
   const roots = order.map(id => messages[id]).filter(Boolean);
   const pendingHere = approvals.filter(a => a.status === "pending" && a.channel_id === channel);
 
-  const { sessions: workSessions, eventsByWork, connected: workConnected, refresh: refreshWork, ingestWorkEvent } = useWorkSessions(token);
+  const { sessions: workSessions, eventsByWork, connected: workConnected, error: workError, refresh: refreshWork, ingestWorkEvent } = useWorkSessions(token);
   const activeWork = workSessions.filter(s => WORK_ACTIVE.has(s.status));
   const workAttention = workSessions.filter(s => s.requires_action || s.status === "waiting_for_approval");
   const activeWorkHere = activeWork.filter(s => !s.channel_id || s.channel_id === channel);
@@ -229,8 +230,9 @@ export default function App() {
       const agentName = bot?.name || allAgents[0]?.name;
       const path = `/api/channels/${channelId}/context${agentName ? `?agent=${encodeURIComponent(agentName)}` : ""}`;
       const res = await apiJson(path, { token: tokenRef.current });
-      if (res.ok) setContextStats(res.data);
-    } catch { /* meter is best-effort */ }
+      if (res.ok) { setContextStats(res.data); setContextError(false); }
+      else setContextError(true);
+    } catch { setContextError(true); }
   }
 
   async function loadTeams() {
@@ -413,7 +415,11 @@ export default function App() {
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdOpen(true); }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c" && user) { e.preventDefault(); setComputerOpen(o => !o); }
-      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "w" && user) {
+        e.preventDefault();
+        setWorkRailOpen(o => { localStorage.setItem("swarm_work_rail", o ? "0" : "1"); return !o; });
+      }
+      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); setSelectedWork(null); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -649,6 +655,7 @@ export default function App() {
               offline={wsStatus === "offline"}
               sendFailed={!!sendFailure && !threadId}
               contextStats={contextStats}
+              contextError={contextError}
               onRefreshContext={() => loadContextStats(channelRef.current)}
             />
           </>
@@ -676,14 +683,45 @@ export default function App() {
         }}
         onOpenThread={onReply}
         collapsed={!workRailOpen}
+        connected={workConnected}
+        error={workError}
+        onRetry={refreshWork}
         onToggle={() => setWorkRailOpen(o => {
           localStorage.setItem("swarm_work_rail", o ? "0" : "1");
           return !o;
         })}
-        connected={workConnected}
       />
 
       {selectedRun && <RunMonitor token={token} run={selectedRun} onClose={() => setSelectedRun(null)} />}
+      {selectedWork && (() => {
+        const detail = workSessions.find(s => s.id === selectedWork);
+        if (!detail) return null;
+        return (
+          <WorkRailSheet open onClose={() => setSelectedWork(null)}>
+            <WorkDetail
+              session={detail}
+              events={eventsByWork[detail.id] || []}
+              token={token}
+              agents={allAgents}
+              approvals={approvals}
+              onCancel={async () => {
+                try { await cancelWork(tokenRef.current, detail.id); refreshWork(); }
+                catch { flash("Could not cancel work", "error"); }
+              }}
+              onResolveApproval={async (approvalId, decision, session) => {
+                if (!approvalId) return;
+                const res = await apiJson(`/api/approvals/${approvalId}/resolve`, {
+                  token: tokenRef.current, method: "POST", body: { status: decision },
+                });
+                if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); refreshWork(); }
+                else flash(res.data?.detail || "Approval failed", "error");
+              }}
+              onOpenThread={onReply}
+              onClose={() => setSelectedWork(null)}
+            />
+          </WorkRailSheet>
+        );
+      })()}
       {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) setChannel(id); flash("Created", "success"); }} />}
 
       {computerOpen && (

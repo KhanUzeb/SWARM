@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { Avatar, Badge, Button, EmptyState } from "../ui.jsx";
-import { WORK_ACTIVE, cancelWork, workStatusLabel, workStatusTone } from "../work/sessionStore.js";
+import { useEffect, useState } from "react";
+import { Avatar, Badge, Button, EmptyState, fmtTime } from "../ui.jsx";
+import { WORK_ACTIVE, cancelWork, fetchWorkMessages, workStatusLabel, workStatusTone } from "../work/sessionStore.js";
 
 const EVENT_LABEL = {
   work_queued: "Queued", work_started: "Started", agent_started: "Agent working",
@@ -13,9 +13,10 @@ const EVENT_LABEL = {
 export function WorkRail({
   sessions, eventsByWork, agents, approvals, token, channelId,
   selectedWork, onSelectWork, onCancelWork, onResolveApproval, onOpenThread,
-  collapsed, onToggle, connected,
+  collapsed, onToggle, connected, error, onRetry,
 }) {
   const [filter, setFilter] = useState("active");
+  const [source, setSource] = useState("all");
   const [busy, setBusy] = useState(null);
 
   if (collapsed) {
@@ -33,6 +34,7 @@ export function WorkRail({
   }
 
   const visible = (sessions || []).filter(s => {
+    if (source !== "all" && (s.source || "chat") !== source) return false;
     if (filter === "active") return WORK_ACTIVE.has(s.status);
     if (filter === "attention") return s.requires_action || s.status === "failed";
     if (filter === "mine") return channelId ? s.channel_id === channelId : true;
@@ -59,12 +61,36 @@ export function WorkRail({
             {label}
           </button>
         ))}
+        <select className="work-source-filter" value={source} onChange={e => setSource(e.target.value)} aria-label="Filter by source">
+          <option value="all">All sources</option>
+          <option value="chat">Chat</option>
+          <option value="run">Workflow</option>
+          <option value="routine">Routine</option>
+          <option value="handoff">Handoff</option>
+        </select>
       </div>
 
       <div className="work-rail-body">
-        {visible.length === 0 && (
+        {error && (
+          <div className="work-error" role="alert">
+            <span>Work feed failed{error ? `: ${String(error).slice(0, 120)}` : ""}</span>
+            <button className="work-retry" onClick={onRetry}>Retry</button>
+          </div>
+        )}
+        {visible.length === 0 && !error && (
           <EmptyState kind="work" title={filter === "attention" ? "Nothing needs you" : "No active work"}
             message={filter === "attention" ? "Approvals and failures will surface here." : "Mention an agent in chat or launch a run to see live progress."} />
+        )}
+        {!connected && !error && (sessions || []).length === 0 && (
+          <div className="work-skeletons" aria-label="Loading work">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="work-skeleton-card" aria-hidden>
+                <span className="work-skeleton-line short" />
+                <span className="work-skeleton-line" />
+                <span className="work-skeleton-line half" />
+              </div>
+            ))}
+          </div>
         )}
         {visible.map(s => (
           <WorkCard key={s.id} session={s} events={eventsByWork[s.id] || []}
@@ -163,8 +189,11 @@ function WorkCard({ session, events, agents, approvals, selected, onSelect, onCa
           {events.map(e => (
             <li key={e.seq} className={`work-timeline-row type-${e.type}`}>
               <span className="work-timeline-seq">#{e.seq}</span>
-              <span className="work-timeline-label">{EVENT_LABEL[e.type] || e.type}</span>
-              {e.step_id && <span className="work-timeline-step">{e.step_id}</span>}
+              <span className="work-timeline-main">
+                <span className="work-timeline-label">{EVENT_LABEL[e.type] || e.type}</span>
+                {eventDetail(e) && <span className="work-timeline-detail">{eventDetail(e)}</span>}
+              </span>
+              <span className="work-timeline-time">{e.created_at ? fmtTime(e.created_at) : ""}</span>
             </li>
           ))}
         </ol>
@@ -192,6 +221,99 @@ function uniqueTools(events) {
 function sourceLabel(source) {
   const map = { chat: "Chat", run: "Workflow", routine: "Routine", handoff: "Handoff" };
   return map[source] || source || "Work";
+}
+
+function eventDetail(e) {
+  const p = e.payload || {};
+  if (e.type === "tool_started" || e.type === "tool_finished") {
+    return [p.tool || e.step_id, p.result ? `→ ${String(p.result).slice(0, 160)}` : ""].filter(Boolean).join(" ");
+  }
+  if (e.type === "agent_started") return p.role ? `${p.agent || ""} · ${p.role}` : (p.agent || "");
+  if (e.type === "approval_requested") return p.label || "";
+  if (e.type === "approval_resolved") return p.decision || "";
+  if (e.type === "work_failed") return (p.error || "").slice(0, 200);
+  if (e.type === "work_completed") return (p.summary || "").slice(0, 200);
+  if (e.type === "work_started") return (p.objective || "").slice(0, 160);
+  return "";
+}
+
+export function WorkDetail({ session, events, token, agents, approvals, busy, onCancel, onResolveApproval, onOpenThread, onClose }) {
+  const [messages, setMessages] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const tone = workStatusTone(session.status);
+  const agentName = agentOf(session, events || []);
+  const agent = (agents || []).find(a => a.name === agentName);
+  const pendingApproval = (approvals || []).find(a =>
+    a.status === "pending" && a.channel_id === session.channel_id && (!agentName || a.agent_name === agentName));
+
+  useEffect(() => {
+    let live = true;
+    setMessages(null); setFailed(false);
+    fetchWorkMessages(token, session.id)
+      .then(data => { if (live) setMessages(data || []); })
+      .catch(() => { if (live) setFailed(true); });
+    return () => { live = false; };
+  }, [token, session.id]);
+
+  return (
+    <div className="work-detail">
+      <div className="work-detail-head">
+        <Badge variant={tone}>{workStatusLabel(session.status)}</Badge>
+        <span className="work-source">{sourceLabel(session.source)}</span>
+        <span className="work-detail-time">{session.created_at ? fmtTime(session.created_at) : ""}</span>
+      </div>
+      <h2 className="work-detail-objective">{session.objective || "Working…"}</h2>
+      {agentName && (
+        <div className="work-agent">
+          <Avatar name={agent?.display_name || agentName} kind="agent" size="sm" />
+          <span className="work-agent-name">{agent?.display_name || agentName}</span>
+          {agent?.job && <span className="work-agent-role">{agent.job}</span>}
+        </div>
+      )}
+      {session.requires_action && (
+        <div className="work-attention" role="alert">
+          <span className="attention-dot" aria-hidden />
+          {session.status === "waiting_for_approval" ? "Waiting on your approval" : "Needs your attention"}
+        </div>
+      )}
+      <div className="work-detail-actions">
+        {session.status === "waiting_for_approval" && (
+          <>
+            <button className="work-approve" onClick={() => onResolveApproval?.(pendingApproval?.id, "approved", session)} disabled={!pendingApproval}>Approve</button>
+            <button className="work-deny" onClick={() => onResolveApproval?.(pendingApproval?.id, "denied", session)} disabled={!pendingApproval}>Deny</button>
+          </>
+        )}
+        {WORK_ACTIVE.has(session.status) && (
+          <button className="work-cancel" onClick={onCancel} disabled={busy}>{busy ? "Cancelling…" : "Cancel"}</button>
+        )}
+      </div>
+      <h3 className="work-detail-section">Replies</h3>
+      {messages === null && !failed && <p className="work-timeline-empty">Loading replies…</p>}
+      {failed && <p className="work-timeline-empty">Could not load replies.</p>}
+      {messages && messages.length === 0 && <p className="work-timeline-empty">No replies yet.</p>}
+      {(messages || []).map(m => (
+        <button key={m.id} className="work-detail-reply" onClick={() => { onOpenThread?.(m.parent_id || m.id); onClose?.(); }}>
+          <span className="work-detail-reply-author">{m.author}</span>
+          <span className="work-detail-reply-body">{(m.body || "").slice(0, 240)}</span>
+          <span className="work-detail-reply-time">{m.created_at ? fmtTime(m.created_at) : ""}</span>
+        </button>
+      ))}
+      <h3 className="work-detail-section">Timeline ({(events || []).length})</h3>
+      <ol className="work-timeline">
+        {(events || []).length === 0 && <li className="work-timeline-empty">No events yet — replaying…</li>}
+        {(events || []).map(e => (
+          <li key={e.seq} className={`work-timeline-row type-${e.type}`}>
+            <span className="work-timeline-seq">#{e.seq}</span>
+            <span className="work-timeline-main">
+              <span className="work-timeline-label">{EVENT_LABEL[e.type] || e.type}</span>
+              {eventDetail(e) && <span className="work-timeline-detail">{eventDetail(e)}</span>}
+            </span>
+            <span className="work-timeline-time">{e.created_at ? fmtTime(e.created_at) : ""}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 }
 
 export function WorkRailSheet({ open, onClose, children }) {

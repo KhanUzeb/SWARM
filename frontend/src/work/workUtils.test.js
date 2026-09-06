@@ -80,4 +80,19 @@ describe("event-driven transitions", () => {
     expect(WORK_ACTIVE.has("running")).toBe(true);
     expect(WORK_ACTIVE.has("completed")).toBe(false);
   });
+
+  test("start events move a session to running", () => {
+    const started = applyWorkEventToSession(base, { work_id: "work_1", seq: 1, type: "work_started" });
+    expect(started.status).toBe("running");
+    const agentStarted = applyWorkEventToSession(base, { work_id: "work_1", seq: 2, type: "agent_started", step_id: "swarm" });
+    expect(agentStarted.status).toBe("running");
+    expect(agentStarted.active_step).toBe("swarm");
+  });
+
+  test("replayed events merge without duplicates", () => {
+    const first = [{ seq: 1, type: "work_started" }, { seq: 2, type: "agent_started" }];
+    const replay = [{ seq: 2, type: "agent_started" }, { seq: 3, type: "work_completed" }];
+    const merged = mergeWorkEvents(first, replay);
+    expect(merged.map(e => e.seq)).toEqual([1, 2, 3]);
+  });
 });
