@@ -15,7 +15,8 @@
   font-family: var(--font-display);
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.02em;
+  padding-left: 2px;
   color: var(--color-text-primary);
 }
 .brand-mark::first-letter { color: var(--color-brand); }
@@ -239,6 +240,18 @@
 }
 .msg-actions button:hover { color: var(--color-text-primary); background: rgba(255, 255, 255, 0.08); }
 .msg-actions button.danger:hover { color: var(--color-error); }
+
+/* Own-message text actions must not inherit the 28px icon-box above. */
+.msg-actions.own .msg-mini-action {
+  width: auto; height: auto;
+  display: inline-flex; align-items: center;
+  font-size: 11.5px; font-weight: 550; line-height: 1.4;
+  padding: 3px 10px; border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.06); border: 1px solid transparent;
+  color: var(--color-bubble-user-muted);
+}
+.msg-actions.own .msg-mini-action:hover { border-color: rgba(0, 0, 0, 0.15); color: var(--color-bubble-user-text); background: rgba(0, 0, 0, 0.1); }
+.msg-actions.own .msg-mini-action.danger { color: var(--color-error); }
 
 .msg-row.failed .agent-bubble.error-bubble {
   border: 1px solid rgba(239, 68, 68, 0.35);
@@ -903,6 +916,19 @@
   border-left: 1px solid var(--color-border);
 }
 #work-rail.collapsed { align-items: stretch; justify-content: flex-start; padding: var(--space-3); }
+/* No "work" grid area when closed — float the expand pill instead of
+   squeezing into an implicit grid sliver. */
+.app.workspace:not(.work-rail-open) #work-rail.collapsed {
+  position: fixed; right: 14px; bottom: 14px; z-index: 50;
+  padding: 0; background: none; border: none; overflow: visible;
+}
+.app.workspace:not(.work-rail-open) .work-rail-expand {
+  flex-direction: row; align-items: center;
+  padding: 9px 14px; border-radius: var(--radius-full);
+  box-shadow: var(--shadow-lg);
+}
+.app.workspace:not(.work-rail-open) .work-rail-expand-icon { transform: none; }
+.app.workspace:not(.work-rail-open) .work-rail-expand-label { writing-mode: horizontal-tb; }
 .work-rail-expand {
   display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
   padding: var(--space-3) var(--space-2); color: var(--color-text-muted);
@@ -1014,7 +1040,11 @@
   background: var(--color-violet-bg); border: 1px solid rgba(182,120,194,0.35);
   padding: 2px 8px; border-radius: var(--radius-full);
 }
-.msg-work-link { font-size: 11px; color: var(--color-violet); }
+.msg-work-link {
+  font-size: 11px; font-weight: 600; color: var(--color-violet);
+  background: var(--color-violet-bg); border: 1px solid rgba(182,120,194,0.3);
+  padding: 1px 8px; border-radius: var(--radius-full); white-space: nowrap;
+}
 .streaming-placeholder { padding: 4px 0; }
 .agent-trace { margin-top: var(--space-2); border-top: 1px solid var(--color-border-subtle); padding-top: var(--space-2); }
 .agent-trace-summary { cursor: pointer; display: flex; align-items: center; gap: var(--space-2); font-size: 12px; color: var(--color-text-muted); }
