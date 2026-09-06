@@ -62,3 +62,10 @@ Three rules make the loop trustworthy:
 - Every agent reply links to its work session, tools used, and context cost.
 - Full backend suite green, production frontend build under ~350KB JS.
 - No provider secret, hidden prompt, or internal path ever reaches the UI.
+
+## 7. Definition of best (ADR 001)
+
+"Best" means **daily-driver ready**: real work, real agents, every day.
+Four frontiers in order — Talk view defects, onboarding flow, work rail
+depth, agent quality — all inside `VISION.md` scope. See
+[`docs/adr/001-daily-driver-best.md`](adr/001-daily-driver-best.md).
