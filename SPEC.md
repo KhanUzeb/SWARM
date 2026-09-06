@@ -66,7 +66,7 @@ a duplicate row or an error.
 | channel_scope   | TEXT    | nullable FK-ish → channels.id. NULL = every channel |
 | created_at      | REAL    | |
 | history_window  | INTEGER | last N channel messages injected; default 12, cap 50 |
-| max_tool_calls  | INTEGER | cap per trigger; default 3, cap 8 |
+| max_tool_calls  | INTEGER | cap per trigger; default 6, hard cap 12 |
 | tools           | TEXT    | JSON array of allowed tool names |
 | job             | TEXT    | primary job title; default `Teammate` |
 | status          | TEXT    | `idle` \| `working` \| `needs_approval` |
@@ -827,6 +827,8 @@ Live `message` events from a human/agent/system write may omit
   - Each reply injects `profiles/<name>.md` or `profiles/jobs/<id>.md`.
   - Capped at the agent's `max_tool_calls` per single trigger (not
     per message — if two agents are mentioned, each gets its own cap).
+    Hitting the cap triggers one final no-tools round so the reply
+    summarizes instead of dead-ending on a cap notice.
   - Every tool call is persisted as a `system`-kind message
     (`"<agent> ran: <tool>(<args>) -> <truncated result>"`) and
     broadcast before the agent's final reply is posted. This is the
@@ -881,7 +883,7 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR1.4 | No bare 500s leaking stack traces | ✅ (all known error paths return structured JSON) |
 | FR2.1 | Shell + history-search tools via Groq function calling | ✅ |
 | FR2.2 | Every tool call posted as a channel system message | ✅ |
-| FR2.3 | 10s tool timeout, per-agent tool-call cap | ✅ (default 3, cap 8) |
+| FR2.3 | 10s tool timeout, per-agent tool-call cap | ✅ (default 6, hard cap 12) |
 | FR3.1 | `parent_id` threading | ✅ |
 | FR3.2 | Idempotent reactions | ✅ |
 | FR4.1 | `agents` table replaces hardcoded persona | ✅ |

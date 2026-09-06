@@ -37,6 +37,7 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 - **Chat management:** own-message thread/delete actions, channel delete with live removal, thread delete, author-or-admin delete rule
 - **Work detail:** `/api/work/{id}/messages` full-message endpoint, slide-out detail sheet (timeline with timestamps + payload detail, linked replies, in-context approve/cancel), `Ctrl+Shift+W` rail shortcut, source filter, skeleton cards, error banner with retry
 - **Knowledge that gets used:** explicit knowledge-habit + memory-hygiene prompt blocks when those tools are allowed; channel-scoped KB hits boosted in ranking and budget trimming
+- **Tool budget:** default 3 → 6 calls per reply, hard cap 8 → 12 (seeds: swarm/ledger 6, coder 8); hitting the cap runs one final no-tools round so the agent summarizes instead of dead-ending. Existing stored per-agent values are untouched.
 - **Robustness:** composer context meter shows an explicit retry state instead of failing silently; work-event replay also covers sessions that finished while disconnected
 - **Design:** Pinterest-2026 accents (Plum Noir intelligence, Persimmon attention, Jade success) on warm charcoal; aurora+grain backdrop; serif display hero; KaTeX dropped (JS −45%)
 

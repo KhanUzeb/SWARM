@@ -27,7 +27,8 @@ from .models import DEFAULT_TOOLS, resolve_groq_model
 from .tools.registry import BUILTIN_SCHEMAS, get_registry, reload_registry
 
 HISTORY_WINDOW = 12
-MAX_TOOL_CALLS = 3
+MAX_TOOL_CALLS = 6
+TOOL_CALL_HARD_CAP = 12
 SHELL_TIMEOUT_SECONDS = 10
 SHELL_OUTPUT_CAP = 4000
 MEMORY_INJECT_LIMIT = 12
@@ -393,7 +394,7 @@ def max_tool_calls_of(agent_row: dict[str, Any]) -> int:
         cap = int(agent_row.get("max_tool_calls") or MAX_TOOL_CALLS)
     except (TypeError, ValueError):
         cap = MAX_TOOL_CALLS
-    return max(1, min(cap, 8))
+    return max(1, min(cap, TOOL_CALL_HARD_CAP))
 
 
 def _build_messages(
@@ -728,7 +729,8 @@ async def _run_with_client(
         if remaining <= 0:
             await announce_tools()
             return {
-                "reply": f"hit the {cap}-tool-call cap for this reply, stopping here.",
+                "reply": await _closing_after_cap(
+                    client, model, messages, stream_start_after_tools, on_token, cap),
                 "tool_events": tool_events, "usage": usage_total,
             }
 
@@ -765,7 +767,8 @@ async def _run_with_client(
         if len(selected_tool_calls) < len(tool_calls):
             await announce_tools()
             return {
-                "reply": f"hit the {cap}-tool-call cap for this reply, stopping here.",
+                "reply": await _closing_after_cap(
+                    client, model, messages, stream_start_after_tools, on_token, cap),
                 "tool_events": tool_events, "usage": usage_total,
             }
 
@@ -774,6 +777,25 @@ async def _run_with_client(
         "reply": "(gave up after too many tool-call rounds)",
         "tool_events": tool_events, "usage": usage_total,
     }
+
+
+async def _closing_after_cap(
+    client: Any,
+    model: str,
+    messages: list[dict[str, Any]],
+    on_stream_start: OnStreamStart | None,
+    on_token: OnToken | None,
+    cap: int,
+) -> str:
+    """One final no-tools round so a capped reply summarizes instead of
+    dead-ending on a cap notice. Falls back to the notice when empty."""
+    closing, _, _ = await _complete_stream(
+        client, model,
+        [*messages, {"role": "user", "content": "Summarize what you did and what is still left, briefly."}],
+        on_stream_start, on_token, tool_schemas=None,
+    )
+    reply = (closing or "").strip()
+    return reply or f"hit the {cap}-tool-call cap for this reply, stopping here."
 
 
 def demo_mode_enabled() -> bool:
