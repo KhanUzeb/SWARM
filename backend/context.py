@@ -58,6 +58,12 @@ async def build_context(
         except Exception:  # noqa: BLE001 — knowledge is best-effort
             kb_hits = []
 
+    # Channel-scoped hits are boosted: they sort first and are the last
+    # KB entries dropped when the budget bites.
+    for hit in kb_hits:
+        hit["boosted"] = bool(channel_id) and hit.get("channel_id") == channel_id
+    kb_hits.sort(key=lambda h: (not h.get("boosted"), -(h.get("updated_at") or 0)))
+
     # Enforce the char budget: history first, then notes, then KB.
     history_chars = sum(_chars(m.get("body")) + _chars(m.get("author")) for m in recent)
     notes_chars = sum(_chars(n.get("body")) for n in (notes or []))
@@ -70,7 +76,14 @@ async def build_context(
     trimmed_history = list(recent)
     extra_dropped = 0
     while total > budget_chars and (len(trimmed_history) > 1 or trimmed_notes or trimmed_kb):
-        if trimmed_kb:
+        if any(not h.get("boosted") for h in trimmed_kb):
+            # Drop an unboosted hit first (last one).
+            for idx in range(len(trimmed_kb) - 1, -1, -1):
+                if not trimmed_kb[idx].get("boosted"):
+                    dropped_hit = trimmed_kb.pop(idx)
+                    total -= _chars(dropped_hit.get("body"))
+                    break
+        elif trimmed_kb:
             dropped_hit = trimmed_kb.pop()
             total -= _chars(dropped_hit.get("body"))
         elif trimmed_notes:

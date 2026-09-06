@@ -443,6 +443,21 @@ def _build_messages(
     if invoked_skills:
         for s in invoked_skills:
             blocks.append(f"Invoked skill /{s['name']}:\n{s['body']}")
+    tool_set = set(tools or [])
+    if "knowledge_search" in tool_set or "knowledge_save" in tool_set:
+        blocks.append(
+            "Knowledge habit: before answering a factual question, call "
+            "knowledge_search with the key terms (channel-scoped docs are "
+            "checked first). When you learn a durable fact, preference, or "
+            "decision worth reusing, call knowledge_save with a short title "
+            "and body."
+        )
+    if "forget" in tool_set:
+        blocks.append(
+            "Memory hygiene: when the user asks to remove a note, or a "
+            "remembered fact is clearly stale, call forget with the note id "
+            "or a keyword query."
+        )
     if notes:
         lines = []
         for n in notes:

@@ -257,3 +257,42 @@ def test_message_delete_requires_author_or_admin(client, auth):
     ).json()
     _clear_rate()
     assert client.delete(f"/api/messages/{own['id']}", headers=foreign).status_code == 200
+
+
+# --------------------------------------------------------------- agent guidance ---
+def test_build_messages_guides_knowledge_tools():
+    system_with = main.agent._build_messages(
+        "prompt", [], allowed_tools=["knowledge_search", "knowledge_save"])[0]["content"]
+    assert "Knowledge habit" in system_with
+    system_without = main.agent._build_messages(
+        "prompt", [], allowed_tools=["remember"])[0]["content"]
+    assert "Knowledge habit" not in system_without
+    system_forget = main.agent._build_messages(
+        "prompt", [], allowed_tools=["forget"])[0]["content"]
+    assert "Memory hygiene" in system_forget
+
+
+# --------------------------------------------------------------- kb boost ---
+def test_context_boosts_channel_kb_and_trims_global_first():
+    import backend.context as ctx_mod
+    import backend.knowledge as kb_mod
+
+    async def seed():
+        await kb_mod.create_doc(
+            "agent:swarm", "Deploy runbook", "deploy checklist for general channel",
+            channel_id="general")
+        await kb_mod.create_doc(
+            "agent:swarm", "Deploy notes", "deploy checklist global fallback")
+
+    asyncio.run(seed())
+    history = [{"author_kind": "human", "author": "uzeb", "body": "deploy checklist?"}]
+    full = asyncio.run(ctx_mod.build_context("swarm", "general", history, kb_limit=5))
+    assert full["kb_hits"], "expected KB hits for the deploy query"
+    assert full["kb_hits"][0].get("boosted") is True
+    assert full["kb_hits"][0].get("channel_id") == "general"
+
+    starved = asyncio.run(
+        ctx_mod.build_context("swarm", "general", history, kb_limit=5, budget_chars=65))
+    kept = [h for h in starved["kb_hits"] if h.get("boosted")]
+    assert kept, "channel-scoped hit should survive trimming"
+    assert all(h.get("boosted") for h in starved["kb_hits"])

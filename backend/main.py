@@ -477,6 +477,24 @@ async def api_get_work(work_id: str, handle: str = Depends(require_auth)):
     return session
 
 
+@app.get("/api/work/{work_id}/messages")
+async def api_work_messages(work_id: str, handle: str = Depends(require_auth)):
+    """Full message objects linked to a session, for the detail panel."""
+    if not await work.get_session(work_id, handle):
+        raise HTTPException(status_code=404, detail="work not found")
+    out = []
+    for msg_id in await work.linked_messages(work_id, handle):
+        row = await db.get_message(msg_id)
+        if not row:
+            continue
+        channel = await db.get_channel(row.get("channel_id"))
+        if not db.can_view_channel(channel, handle):
+            continue
+        row["reactions"] = await db.get_reactions(msg_id)
+        out.append(row)
+    return out
+
+
 @app.get("/api/work/{work_id}/events")
 async def api_work_events(
     work_id: str, after: int = Query(default=0, ge=0), handle: str = Depends(require_auth)

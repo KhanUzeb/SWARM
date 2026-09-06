@@ -295,3 +295,44 @@ def test_restart_recovery_settles_interrupted_sessions(client, auth, monkeypatch
     assert synced["status"] == "completed"
     # …after which recovery is idempotent — second pass settles nothing new.
     assert asyncio.run(work.recover_interrupted()) == 0
+
+
+def test_ws_receives_work_lifecycle_events(client, auth, monkeypatch):
+    """A chat-triggered reply fans work events out on the channel socket."""
+    _mock_agent(monkeypatch, reply="rail reply")
+    _clear_rate()
+    with client.websocket_connect("/ws/dm-swarm") as ws:
+        ws.send_json({"token": auth["Authorization"].removeprefix("Bearer ")})
+        ws.send_json({"body": "hey swarm, status update"})
+        seen: dict[str, dict] = {}
+        for _ in range(60):
+            event = ws.receive_json()
+            if event.get("type") == "work" and isinstance(event.get("event"), dict):
+                seen[event["event"]["type"]] = event["event"]
+                if "work_completed" in seen:
+                    break
+        assert {"work_started", "agent_started", "message_linked", "work_completed"} <= set(seen)
+        assert seen["work_completed"]["work_id"].startswith("work_")
+        work_id = seen["work_completed"]["work_id"]
+    # The same session is listed with its message link.
+    sessions = [s for s in client.get("/api/work", headers=auth).json() if s["id"] == work_id]
+    assert sessions and sessions[0]["status"] == "completed"
+
+
+def test_work_messages_endpoint_returns_full_messages(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="linked reply body")
+    _clear_rate()
+    client.post(
+        "/api/channels/dm-swarm/messages",
+        json={"author": "uzeb", "body": "link me"},
+        headers=auth,
+    )
+    sessions = _wait_for(
+        lambda: [s for s in client.get("/api/work", headers=auth).json()
+                 if s["status"] == "completed"] or None)
+    work_id = sessions[0]["id"]
+    msgs = client.get(f"/api/work/{work_id}/messages", headers=auth)
+    assert msgs.status_code == 200
+    assert any(m.get("author") == "swarm" and m.get("body") == "linked reply body"
+               and "reactions" in m for m in msgs.json())
+    assert client.get("/api/work/work_nope/messages", headers=auth).status_code == 404
