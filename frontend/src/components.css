@@ -192,9 +192,9 @@
   margin-bottom: 8px;
   flex-wrap: wrap;
 }
-.msg-author { font-size: 14px; font-weight: 600; color: var(--color-text-primary); letter-spacing: -0.01em; }
-.msg-role { font-size: 12px; color: var(--color-brand-hover); }
-.msg-time { margin-left: auto; font-size: 11px; color: var(--color-text-subtle); }
+.msg-author { font-size: 14px; font-weight: 600; color: var(--color-text-primary); letter-spacing: -0.01em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-role { font-size: 12px; color: var(--color-brand-hover); overflow-wrap: anywhere; }
+.msg-time { margin-left: auto; font-size: 11px; color: var(--color-text-subtle); flex-shrink: 0; }
 
 .msg-row .body,
 .msg-bubble .body {
@@ -228,6 +228,14 @@
   backdrop-filter: blur(12px);
 }
 .agent-bubble:hover .msg-actions { display: flex; }
+.agent-bubble:focus-within .msg-actions { display: flex; }
+@media (pointer: coarse) {
+  .agent-bubble .msg-actions {
+    display: flex; position: static;
+    margin-top: 8px; padding: 0;
+    background: none; backdrop-filter: none;
+  }
+}
 .msg-actions button {
   width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
@@ -767,7 +775,9 @@
 /* ── Code Block ── */
 .code-block { margin: var(--space-3) 0; border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; background: var(--color-bg-elevated); }
 .code-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: var(--color-bg-surface); border-bottom: 1px solid var(--color-border-subtle); }
-.code-head button { font-size: 11px; }
+.code-head button { font-size: 11px; padding: 3px 10px; border-radius: var(--radius-full); }
+/* Generic .msg-actions button sizing must never leak onto text controls;
+   see .msg-actions.own .msg-mini-action above for the defended case. */
 .code-block pre { margin: 0; padding: var(--space-3); overflow-x: auto; }
 .code-block code { font-family: var(--font-mono); font-size: 13px; line-height: 1.6; color: var(--color-text-secondary); white-space: pre; }
 
@@ -1045,7 +1055,7 @@
   background: var(--color-violet-bg); border: 1px solid rgba(182,120,194,0.3);
   padding: 1px 8px; border-radius: var(--radius-full); white-space: nowrap;
 }
-.streaming-placeholder { padding: 4px 0; }
+.streaming-placeholder { padding: 4px 0; min-height: 24px; display: flex; align-items: center; }
 .agent-trace { margin-top: var(--space-2); border-top: 1px solid var(--color-border-subtle); padding-top: var(--space-2); }
 .agent-trace-summary { cursor: pointer; display: flex; align-items: center; gap: var(--space-2); font-size: 12px; color: var(--color-text-muted); }
 .agent-trace-summary:hover { color: var(--color-text-primary); }
