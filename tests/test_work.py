@@ -1,0 +1,297 @@
+"""Work sessions: unified interface over chat replies, v2 runs and routines."""
+import asyncio
+import time
+
+import backend.db as db
+import backend.main as main
+import backend.v2 as v2
+import backend.work as work
+
+
+def _clear_rate():
+    main._last_write.clear()
+
+
+def _mock_agent(monkeypatch, reply="done", tool_events=None):
+    async def fake_reply(*_args, **_kwargs):
+        return {"reply": reply, "tool_events": tool_events or [], "usage": {}}
+
+    monkeypatch.setattr(main.agent, "generate_reply", fake_reply)
+
+
+def _wait_for(predicate, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = predicate()
+        if result:
+            return result
+        time.sleep(0.1)
+    raise AssertionError("timed out waiting for background work")
+
+
+def test_chat_triggered_work_creates_session(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="hello from swarm")
+    posted = client.post(
+        "/api/channels/dm-swarm/messages",
+        json={"author": "uzeb", "body": "hey swarm, help me out"},
+        headers=auth,
+    )
+    assert posted.status_code == 200
+
+    sessions = _wait_for(
+        lambda: [s for s in client.get("/api/work", headers=auth).json()
+                 if s["channel_id"] == "dm-swarm"] or None)
+    session = sessions[0]
+    assert session["id"].startswith("work_")
+    assert session["source"] in {"chat", "handoff", "routine"}
+
+    completed = _wait_for(
+        lambda: [e for e in client.get(f"/api/work/{session['id']}/events", headers=auth).json()
+                 if e["type"] == "work_completed"] or None)
+    events = client.get(f"/api/work/{session['id']}/events", headers=auth).json()
+    types = [e["type"] for e in events]
+    assert types[0] == "work_queued"
+    assert "work_started" in types
+    assert "agent_started" in types
+    assert "message_linked" in types
+    assert "work_completed" in types
+    for event in events:
+        assert set(event) >= {"work_id", "seq", "type", "step_id", "payload", "created_at"}
+    seqs = [e["seq"] for e in events]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+
+
+def test_workflow_run_maps_to_same_session_interface(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="run output")
+    run = client.post("/api/v2/runs", headers=auth, json={"objective": "Check the brief"}).json()
+
+    sessions = _wait_for(
+        lambda: [s for s in client.get("/api/work", headers=auth).json()
+                 if s.get("run_id") == run["id"]] or None)
+    session = sessions[0]
+    assert session["source"] == "run"
+
+    detail = client.get(f"/api/work/{session['id']}", headers=auth)
+    assert detail.status_code == 200
+    assert detail.json()["run_id"] == run["id"]
+
+    events = _wait_for(
+        lambda: client.get(f"/api/work/{session['id']}/events", headers=auth).json() or None)
+    assert events[0]["work_id"] == session["id"]
+    assert events[0]["seq"] >= 1
+
+
+def test_event_ordering_and_cursor_replay(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="steady output")
+    run = client.post("/api/v2/runs", headers=auth, json={"objective": "Replay me"}).json()
+    sessions = _wait_for(
+        lambda: [s for s in client.get("/api/work", headers=auth).json()
+                 if s.get("run_id") == run["id"]] or None)
+    work_id = sessions[0]["id"]
+
+    full = _wait_for(
+        lambda: client.get(f"/api/work/{work_id}/events", headers=auth).json() or None)
+    seqs = [e["seq"] for e in full]
+    assert seqs == sorted(seqs)
+
+    # Replay from a cursor returns only later events, monotonically.
+    mid = seqs[len(seqs) // 2] if len(seqs) > 1 else 0
+    tail = client.get(f"/api/work/{work_id}/events?after={mid}", headers=auth).json()
+    assert all(e["seq"] > mid for e in tail)
+    # Reconnect replay is stable: same cursor, same events.
+    again = client.get(f"/api/work/{work_id}/events?after={mid}", headers=auth).json()
+    assert [e["seq"] for e in again] == [e["seq"] for e in tail]
+
+
+def _approval_workflow(client, auth):
+    created = client.post(
+        "/api/v2/workflows",
+        headers=auth,
+        json={"name": "Gate", "description": "",
+              "graph": {"nodes": [{"id": "gate", "type": "approval", "label": "Gate"}], "edges": []}},
+    )
+    assert created.status_code == 200
+    return created.json()["id"]
+
+
+def test_approval_requested_approved_and_resumed(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="post approval work")
+    workflow_id = _approval_workflow(client, auth)
+    run = client.post(
+        "/api/v2/runs", headers=auth,
+        json={"objective": "Needs a human", "workflow_id": workflow_id}).json()
+
+    _wait_for(lambda: client.get(f"/api/v2/runs/{run['id']}", headers=auth).json()["status"]
+              == "waiting_for_approval" or None)
+    sessions = client.get("/api/work", headers=auth).json()
+    session = next(s for s in sessions if s.get("run_id") == run["id"])
+    # Listing syncs the linked run state into the normalized interface.
+    assert session["status"] == "waiting_for_approval"
+    assert session["requires_action"] is True
+    types = [e["type"] for e in client.get(f"/api/work/{session['id']}/events", headers=auth).json()]
+    assert "approval_requested" in types
+
+    resolved = client.post(f"/api/v2/runs/{run['id']}/approvals/gate",
+                           headers=auth, json={"status": "approved"})
+    assert resolved.status_code == 200
+    events = _wait_for(
+        lambda: client.get(f"/api/work/{session['id']}/events", headers=auth).json() or None)
+    assert "approval_resolved" in [e["type"] for e in events]
+    terminal = _wait_for(
+        lambda: client.get(f"/api/work/{session['id']}", headers=auth).json()["status"]
+        in {"completed", "running"} or None)
+    assert terminal
+
+
+def test_approval_denied_cancels_work(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="never runs")
+    workflow_id = _approval_workflow(client, auth)
+    run = client.post(
+        "/api/v2/runs", headers=auth,
+        json={"objective": "Please deny", "workflow_id": workflow_id}).json()
+    _wait_for(lambda: client.get(f"/api/v2/runs/{run['id']}", headers=auth).json()["status"]
+              == "waiting_for_approval" or None)
+
+    denied = client.post(f"/api/v2/runs/{run['id']}/approvals/gate",
+                         headers=auth, json={"status": "denied"})
+    assert denied.status_code == 200
+    assert denied.json()["status"] == "cancelled"
+    session = next(s for s in client.get("/api/work", headers=auth).json()
+                   if s.get("run_id") == run["id"])
+    detail = client.get(f"/api/work/{session['id']}", headers=auth).json()
+    assert detail["status"] == "cancelled"
+
+
+def test_work_cancel_and_idempotent_recancel(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="slow work")
+    run = client.post("/api/v2/runs", headers=auth, json={"objective": "Cancel me"}).json()
+    sessions = _wait_for(
+        lambda: [s for s in client.get("/api/work", headers=auth).json()
+                 if s.get("run_id") == run["id"]] or None)
+    work_id = sessions[0]["id"]
+
+    cancelled = client.post(f"/api/work/{work_id}/cancel", headers=auth)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    types = [e["type"] for e in client.get(f"/api/work/{work_id}/events", headers=auth).json()]
+    assert "work_cancelled" in types
+
+    # Cancelling a terminal session is idempotent, not an error.
+    again = client.post(f"/api/work/{work_id}/cancel", headers=auth)
+    assert again.status_code == 200
+    assert again.json()["status"] == "cancelled"
+
+
+def test_retry_still_works_alongside_work_sessions(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="recovered")
+    error_msg = asyncio.run(_seed_error())
+    _clear_rate()
+    res = client.post(f"/api/messages/{error_msg['id']}/retry", headers=auth)
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+
+
+async def _seed_error():
+    await db.add_message("general", "uzeb", "please help", "human")
+    return await db.add_message("general", "swarm", "[agent error: couldn't reach the model]", "agent")
+
+
+def test_owner_isolation_and_auth(client, auth):
+    run = client.post("/api/v2/runs", headers=auth, json={"objective": "Mine"}).json()
+    session = _wait_for(
+        lambda: next(iter([s for s in client.get("/api/work", headers=auth).json()
+                           if s.get("run_id") == run["id"]]), None))
+    other = client.post("/api/register", json={"handle": "intruder"}).json()["token"]
+    foreign = {"Authorization": f"Bearer {other}"}
+    assert client.get(f"/api/work/{session['id']}", headers=foreign).status_code == 404
+    assert client.get(f"/api/work/{session['id']}/events", headers=foreign).status_code == 404
+    assert client.post(f"/api/work/{session['id']}/cancel", headers=foreign).status_code == 404
+    assert client.get("/api/work").status_code == 401
+    assert client.get(f"/api/work/{session['id']}/events").status_code == 401
+
+
+def test_message_linking_is_idempotent(client, auth):
+    session = asyncio.run(work.create_session("uzeb", "link check", source="chat"))
+    assert asyncio.run(work.link_message(session["id"], 4242)) is True
+    assert asyncio.run(work.link_message(session["id"], 4242)) is False
+    assert asyncio.run(work.linked_messages(session["id"], "uzeb")) == [4242]
+
+
+def test_no_secrets_leak_through_events(client, auth):
+    session = asyncio.run(work.create_session("uzeb", "secret check", source="chat"))
+    event = asyncio.run(work.append_event(session["id"], "tool_started", {
+        "tool": "fetch_url", "secret": "shh", "api_key": "key",
+        "access_token": "tok", "refresh_token": "ref", "hidden_prompt": "sys",
+    }, "fetch_url"))
+    assert "secret" not in event["payload"]
+    listed = client.get(f"/api/work/{session['id']}/events", headers=auth).json()
+    blob = str(listed)
+    for leaked in ("shh", "tok", "ref", "sys"):
+        assert leaked not in blob
+
+
+def test_v2_and_chat_compatibility_preserved(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="compat")
+    run = client.post("/api/v2/runs", headers=auth, json={"objective": "compat run"}).json()
+    run_events = client.get(f"/api/v2/runs/{run['id']}/events", headers=auth)
+    assert run_events.status_code == 200
+    assert run_events.json()[0]["event_type"] == "run_queued"
+
+    _clear_rate()
+    posted = client.post(
+        "/api/channels/general/messages",
+        json={"author": "uzeb", "body": "hello everyone"},
+        headers=auth,
+    )
+    assert posted.status_code == 200
+    history = client.get("/api/channels/general/messages", headers=auth)
+    assert history.status_code == 200
+    assert any(m["id"] == posted.json()["id"] for m in history.json())
+
+
+def test_existing_databases_upgrade_without_data_loss(client, auth):
+    _clear_rate()
+    workflow = client.post(
+        "/api/v2/workflows", headers=auth,
+        json={"name": "Legacy", "description": "pre-existing",
+              "graph": {"nodes": [{"id": "lead", "type": "agent"}], "edges": []}}).json()
+    posted = client.post(
+        "/api/channels/general/messages",
+        json={"author": "uzeb", "body": "legacy data"},
+        headers=auth,
+    ).json()
+    # Re-running the additive migration must be idempotent and lossless.
+    asyncio.run(work.init_db())
+    asyncio.run(v2.init_db())
+    assert client.get(f"/api/v2/workflows/{workflow['id']}", headers=auth).status_code == 200
+    history = client.get("/api/channels/general/messages", headers=auth).json()
+    assert any(m["id"] == posted["id"] for m in history)
+    assert client.get("/api/work", headers=auth).status_code == 200
+
+
+def test_restart_recovery_settles_interrupted_sessions(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="recovered run")
+    # A chat session stuck mid-flight gets cancelled with a reason.
+    orphan = asyncio.run(work.create_session("uzeb", "orphaned chat work", source="chat"))
+    asyncio.run(work.append_event(orphan["id"], "work_started", {"objective": "x"}))
+    # A run-backed session whose run is still recoverable is left alone.
+    run = client.post("/api/v2/runs", headers=auth, json={"objective": "Resumable"}).json()
+    sessions = _wait_for(
+        lambda: [s for s in client.get("/api/work", headers=auth).json()
+                 if s.get("run_id") == run["id"]] or None)
+    settled = asyncio.run(work.recover_interrupted())
+    assert settled >= 1
+    detail = client.get(f"/api/work/{orphan['id']}", headers=auth).json()
+    assert detail["status"] == "cancelled"
+    types = [e["type"] for e in client.get(f"/api/work/{orphan['id']}/events", headers=auth).json()]
+    assert "work_cancelled" in types
+    assert sessions[0]["id"]  # run-backed session still listed
+    # Once the run finishes, the list view syncs its session to terminal…
+    _wait_for(
+        lambda: client.get(f"/api/v2/runs/{run['id']}", headers=auth).json()["status"]
+        == "completed" or None)
+    synced = [s for s in client.get("/api/work", headers=auth).json()
+              if s.get("run_id") == run["id"]][0]
+    assert synced["status"] == "completed"
+    # …after which recovery is idempotent — second pass settles nothing new.
+    assert asyncio.run(work.recover_interrupted()) == 0

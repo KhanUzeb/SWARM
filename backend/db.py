@@ -1294,6 +1294,66 @@ async def search_memory(
         return [dict(r) for r in reversed(rows)]
 
 
+async def delete_memory(memory_id: int, agent_name: str) -> bool:
+    """Delete one memory note by id. Returns True when a row was removed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM agent_memory WHERE id = ? AND agent_name = ? AND kind = 'note'",
+            (memory_id, agent_name),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def forget_memory_by_query(
+    agent_name: str, query: str, channel_id: str | None = None
+) -> int:
+    """Delete notes matching a keyword query. Returns the removed count."""
+    needle = (query or "").strip()
+    if not needle:
+        return 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        if channel_id:
+            cur = await db.execute(
+                "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+                "AND (channel_id IS NULL OR channel_id = ?) AND body LIKE ?",
+                (agent_name, channel_id, f"%{needle}%"),
+            )
+        else:
+            cur = await db.execute(
+                "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+                "AND body LIKE ?",
+                (agent_name, f"%{needle}%"),
+            )
+        await db.commit()
+        return cur.rowcount
+
+
+async def count_memories(agent_name: str, channel_id: str | None = None) -> dict[str, int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        if channel_id:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+                "AND (channel_id IS NULL OR channel_id = ?)",
+                (agent_name, channel_id),
+            )
+            (notes,) = await cur.fetchone()
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND channel_id = ? "
+                "AND kind = 'summary'",
+                (agent_name, channel_id),
+            )
+            (summaries,) = await cur.fetchone()
+        else:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND kind = 'note'",
+                (agent_name,),
+            )
+            (notes,) = await cur.fetchone()
+            summaries = 0
+    return {"notes": notes, "summaries": summaries}
+
+
 async def set_agent_status(name: str, status: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE agents SET status = ? WHERE name = ?", (status, name))

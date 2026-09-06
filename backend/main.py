@@ -16,7 +16,7 @@ import io
 import logging
 import os
 import time
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, db, v2
+from . import agent, context, db, knowledge, v2, work
 from .ai_support import store as ai_store
 from .ai_support.agent_templates import get_agent_templates
 from .ai_support.catalog import list_all_models, list_provider_models
@@ -133,22 +133,23 @@ ROUTINE_TICK_SECONDS = 20
 HANDOFF_DEPTH = 2
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global _routine_task
     await db.init_db()
     await v2.init_db()
+    await work.init_db()
+    await knowledge.init_db()
     for recoverable in await v2.recoverable_runs():
         v2.start_run(recoverable["id"], recoverable["owner"])
+    recovered_work = await work.recover_interrupted()
+    if recovered_work:
+        _logger.info("work sessions settled after restart: %d", recovered_work)
     from .tools import system as system_mod
     await system_mod.hydrate_root()
     await reload_registry()
     _routine_task = _track_task(_routine_loop(), "routine scheduler")
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
-    global _routine_task
+    yield
     if _routine_task is not None:
         _routine_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -161,6 +162,9 @@ async def on_shutdown() -> None:
         await asyncio.gather(*pending, return_exceptions=True)
     _background_tasks.clear()
     await v2.shutdown()
+
+
+app.router.lifespan_context = lifespan
 
 
 def _track_task(coro: Any, label: str) -> asyncio.Task:
@@ -330,6 +334,9 @@ async def api_v2_create_run(payload: RunCreate, handle: str = Depends(require_au
     if payload.workflow_id and not await v2.get_workflow(payload.workflow_id, handle):
         raise HTTPException(status_code=404, detail="workflow not found")
     run = await v2.create_run(handle, payload.objective, payload.workflow_id, payload.policy, payload.model)
+    session = await work.create_session(
+        handle, payload.objective, source="run", run_id=run["id"])
+    await work.append_event(session["id"], "work_started", {"objective": payload.objective})
     v2.start_run(run["id"], handle)
     return run
 
@@ -407,12 +414,86 @@ async def api_v2_resolve_run_approval(run_id: str, step_id: str, payload: Approv
     if run["status"] != "waiting_for_approval":
         raise HTTPException(status_code=409, detail="run is not waiting for approval")
     await v2.append_event(run_id, "approval_resolved", {"decision": payload.status}, step_id)
+    session = await work.find_by_run(run_id, handle)
+    if session:
+        await work.append_event(
+            session["id"], "approval_resolved",
+            {"decision": payload.status, "step_id": step_id}, step_id)
     if payload.status == "approved":
         v2.start_run(run_id, handle)
     else:
         await v2.update_run(run_id, handle, "cancelled")
         await v2.append_event(run_id, "run_denied", {"step_id": step_id})
+        if session:
+            await work.append_event(session["id"], "work_cancelled", {"step_id": step_id}, step_id)
     return await v2.get_run(run_id, handle)
+
+
+# --------------------------------------------------------------- work sessions ---
+# Normalized interface unifying chat replies, v2 runs, routines and handoffs.
+
+async def _sync_work_with_run(session: dict[str, Any], owner: str) -> dict[str, Any]:
+    """Mirror a linked run's terminal/waiting state into the work session."""
+    run_id = session.get("run_id")
+    if not run_id or session.get("status") in work.TERMINAL:
+        return session
+    run = await v2.get_run(run_id, owner)
+    if not run:
+        return session
+    status = run.get("status")
+    if status == "waiting_for_approval" and session.get("status") != "waiting_for_approval":
+        await work.append_event(session["id"], "approval_requested",
+                                {"label": "Workflow checkpoint requires review"}, "approval")
+    elif status == "completed" and session.get("status") != "completed":
+        report = run.get("report") or {}
+        await work.append_event(session["id"], "work_completed",
+                                {"summary": str(report.get("summary") or "")[:1000]})
+    elif status in {"failed", "cancelled"} and session.get("status") not in work.TERMINAL:
+        if status == "failed":
+            report = run.get("report") or {}
+            await work.append_event(session["id"], "work_failed",
+                                    {"error": str(report.get("error") or "run failed")[:500]})
+        else:
+            await work.append_event(session["id"], "work_cancelled", {})
+    return await work.get_session(session["id"], owner) or session
+
+
+@app.get("/api/work")
+async def api_list_work(limit: int = Query(default=50, ge=1, le=100), handle: str = Depends(require_auth)):
+    sessions = await work.list_sessions(handle, limit)
+    synced = []
+    for session in sessions:
+        synced.append(await _sync_work_with_run(session, handle))
+    return synced
+
+
+@app.get("/api/work/{work_id}")
+async def api_get_work(work_id: str, handle: str = Depends(require_auth)):
+    session = await work.get_session(work_id, handle)
+    if not session:
+        raise HTTPException(status_code=404, detail="work not found")
+    session = await _sync_work_with_run(session, handle)
+    session["messages"] = await work.linked_messages(work_id, handle)
+    return session
+
+
+@app.get("/api/work/{work_id}/events")
+async def api_work_events(
+    work_id: str, after: int = Query(default=0, ge=0), handle: str = Depends(require_auth)
+):
+    session = await work.get_session(work_id, handle)
+    if not session:
+        raise HTTPException(status_code=404, detail="work not found")
+    await _sync_work_with_run(session, handle)
+    return await work.list_events(work_id, handle, after)
+
+
+@app.post("/api/work/{work_id}/cancel")
+async def api_cancel_work(work_id: str, handle: str = Depends(require_auth)):
+    session = await work.cancel_session(work_id, handle)
+    if not session:
+        raise HTTPException(status_code=404, detail="work not found")
+    return session
 
 
 @app.websocket("/api/v2/ws/runs/{run_id}")
@@ -717,6 +798,8 @@ async def api_delete_message(message_id: int, handle: str = Depends(require_auth
     if msg is None:
         raise HTTPException(404, "no such message")
     await _require_channel(msg["channel_id"], handle)
+    if msg.get("author") != handle and await db.get_user_role(handle) != "admin":
+        raise HTTPException(403, "only the author or an admin can delete this message")
     ids = await db.delete_message(message_id)
     await hub.broadcast(msg["channel_id"], {
         "type": "message_deleted",
@@ -1231,8 +1314,119 @@ async def api_resolve_approval(
     msg = await db.add_message(row["channel_id"], handle, body, "human")
     await hub.broadcast(row["channel_id"], {"type": "message", "message": msg})
     await hub.broadcast_all({"type": "approval", "approval": updated})
+    for candidate in await work.list_sessions(handle, 50):
+        if (candidate.get("channel_id") == row["channel_id"]
+                and candidate.get("status") == "waiting_for_approval"):
+            await _emit_work_event(
+                row["channel_id"], candidate, "approval_resolved",
+                {"decision": payload.status, "approval_id": approval_id},
+                candidate.get("active_step"))
+            break
     await _maybe_trigger_agents(row["channel_id"], msg)
     return updated
+
+
+# --------------------------------------------------------------- memory ---
+@app.get("/api/agents/{agent_name}/memory")
+async def api_list_memory(agent_name: str, limit: int = Query(default=20, ge=1, le=100),
+                          handle: str = Depends(require_auth)):
+    if not await db.fetch_agent(agent_name):
+        raise HTTPException(status_code=404, detail="agent not found")
+    return await db.list_memories(agent_name, limit)
+
+
+@app.delete("/api/agents/{agent_name}/memory/{memory_id}")
+async def api_forget_memory(agent_name: str, memory_id: int, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await db.fetch_agent(agent_name):
+        raise HTTPException(status_code=404, detail="agent not found")
+    if not await db.delete_memory(memory_id, agent_name):
+        raise HTTPException(status_code=404, detail="no such memory")
+    return {"ok": True, "id": memory_id}
+
+
+# --------------------------------------------------------------- knowledge ---
+@app.get("/api/knowledge")
+async def api_list_knowledge(limit: int = Query(default=50, ge=1, le=100),
+                             handle: str = Depends(require_auth)):
+    return await knowledge.list_docs(handle, limit)
+
+
+@app.post("/api/knowledge")
+async def api_create_knowledge(payload: dict, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    try:
+        return await knowledge.create_doc(
+            handle, str(payload.get("title") or ""), str(payload.get("body") or ""),
+            tags=str(payload.get("tags") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/knowledge/search")
+async def api_search_knowledge(q: str = "", limit: int = Query(default=5, ge=1, le=20),
+                               handle: str = Depends(require_auth)):
+    if len((q or "").strip()) < 2:
+        raise HTTPException(status_code=400, detail="query must be at least 2 characters")
+    return await knowledge.search_docs(q, owners=[handle], limit=limit)
+
+
+@app.get("/api/knowledge/{doc_id}")
+async def api_get_knowledge(doc_id: str, handle: str = Depends(require_auth)):
+    row = await knowledge.get_doc(doc_id, handle)
+    if not row:
+        raise HTTPException(status_code=404, detail="knowledge doc not found")
+    return row
+
+
+@app.patch("/api/knowledge/{doc_id}")
+async def api_patch_knowledge(doc_id: str, payload: dict, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    row = await knowledge.update_doc(doc_id, handle, payload or {})
+    if not row:
+        raise HTTPException(status_code=404, detail="knowledge doc not found")
+    return row
+
+
+@app.delete("/api/knowledge/{doc_id}")
+async def api_delete_knowledge(doc_id: str, handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    if not await knowledge.delete_doc(doc_id, handle):
+        raise HTTPException(status_code=404, detail="knowledge doc not found")
+    return {"ok": True, "id": doc_id}
+
+
+# --------------------------------------------------------------- context ---
+@app.get("/api/channels/{channel_id}/context")
+async def api_context_stats(channel_id: str, agent: str | None = None,
+                            handle: str = Depends(require_auth)):
+    await _require_channel(channel_id, handle)
+    agent_name = agent
+    if agent_name and not await db.fetch_agent(agent_name):
+        raise HTTPException(status_code=404, detail="agent not found")
+    return await context.context_stats(channel_id, agent_name)
+
+
+@app.post("/api/channels/{channel_id}/compact")
+async def api_compact_channel(channel_id: str, payload: dict | None = None,
+                              handle: str = Depends(require_auth)):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    await _require_channel(channel_id, handle)
+    agent_name = (payload or {}).get("agent") if payload else None
+    if agent_name and not await db.fetch_agent(agent_name):
+        raise HTTPException(status_code=404, detail="agent not found")
+    if not agent_name:
+        channel = await db.get_channel(channel_id)
+        agent_name = (channel or {}).get("owner_agent") or "swarm"
+    summary = await context.compact_channel(channel_id, agent_name)
+    if not summary:
+        raise HTTPException(status_code=409, detail="not enough history to compact yet")
+    return summary
 
 
 @app.get("/api/computer")
@@ -1590,7 +1784,42 @@ async def _set_status(name: str, status: str) -> None:
     await hub.broadcast_all({"type": "bot_status", "name": name, "status": status})
 
 
-async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dict:
+async def _emit_work_event(
+    channel_id: str | None, session: dict[str, Any],
+    event_type: str, payload: dict[str, Any] | None = None,
+    step_id: str | None = None,
+) -> dict[str, Any]:
+    """Append a work event and fan it out on the channel socket (compat adapter).
+
+    Existing chat WS clients ignore unknown `type` values, so broadcasting
+    `{"type": "work", "event": {...}}` preserves their behavior while the new
+    workspace rail gets live updates without a second socket.
+    """
+    event = await work.append_event(session["id"], event_type, payload, step_id)
+    if channel_id:
+        with suppress(Exception):
+            await hub.broadcast(channel_id, {"type": "work", "event": event})
+    return event
+
+
+def _work_owner_from_history(history: list[dict[str, Any]]) -> tuple[str, str]:
+    objective = ""
+    owner = "system"
+    for entry in reversed(history):
+        if entry.get("author_kind") == "human" and (entry.get("body") or "").strip():
+            owner = str(entry.get("author") or "system")
+            objective = str(entry.get("body") or "")[:500]
+            break
+    if not objective:
+        for entry in reversed(history):
+            if (entry.get("body") or "").strip():
+                objective = str(entry.get("body") or "")[:500]
+                break
+    return owner, objective
+
+
+async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
+                   source: str | None = None) -> dict:
     if agent_row.get("archived"):
         return {"reply": "", "tool_events": []}
     name = agent_row["name"]
@@ -1600,6 +1829,14 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dic
     history = await db.get_history(channel_id, limit=max(window * 2, window))
     tools_posted = False
     pending_approvals: list[dict] = []
+    owner, objective = _work_owner_from_history(history)
+    session = await work.create_session(
+        owner, objective or f"@{name}",
+        source=source or ("handoff" if depth > 0 else "chat"), channel_id=channel_id)
+    await _emit_work_event(channel_id, session, "work_started",
+                           {"objective": objective or f"@{name}", "agent": name})
+    await _emit_work_event(channel_id, session, "agent_started",
+                           {"agent": name, "role": agent_row.get("role") or "agent"}, name)
 
     async def persist_tools(events: list[dict]) -> None:
         nonlocal tools_posted
@@ -1610,12 +1847,22 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dic
             note = f"{name} ran: {event['tool']}({event['args']}) -> {event['result'][:200]}"
             sys_msg = await db.add_message(channel_id, name, note, "system")
             await hub.broadcast(channel_id, {"type": "message", "message": sys_msg})
+            tool_name = str(event.get("tool") or "tool")
+            await _emit_work_event(channel_id, session, "tool_started",
+                                   {"tool": tool_name}, tool_name)
+            await _emit_work_event(channel_id, session, "tool_finished",
+                                   {"tool": tool_name,
+                                    "result": str(event.get("result") or "")[:500]}, tool_name)
             if event["tool"] == "request_approval":
                 pending = await db.list_approvals(channel_id=channel_id, status="pending")
                 for row in pending:
                     if row["agent_name"] == name and row not in pending_approvals:
                         pending_approvals.append(row)
                         await hub.broadcast_all({"type": "approval", "approval": row})
+                        await _emit_work_event(
+                            channel_id, session, "approval_requested",
+                            {"label": row.get("action") or "Approval requested",
+                             "approval_id": row.get("id")}, tool_name)
 
     async def on_stream_start() -> None:
         await hub.broadcast(channel_id, {"type": "agent_stream_start", "author": name})
@@ -1634,12 +1881,24 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dic
 
         msg = await db.add_message(channel_id, name, result["reply"], "agent")
         await hub.broadcast(channel_id, {"type": "message", "message": msg})
+        await work.link_message(session["id"], int(msg["id"]))
+        await _emit_work_event(channel_id, session, "message_linked",
+                               {"message_id": msg["id"], "agent": name}, name)
         asked = any(e["tool"] == "request_approval" for e in result["tool_events"])
         await _set_status(name, "needs_approval" if asked else "idle")
+        if not asked:
+            completed_payload: dict[str, Any] = {
+                "summary": str(result["reply"] or "")[:1000]}
+            if isinstance(result.get("context"), dict):
+                completed_payload["context"] = result["context"]
+            await _emit_work_event(channel_id, session, "work_completed",
+                                   completed_payload, name)
         if depth < HANDOFF_DEPTH:
             await _maybe_trigger_agents(channel_id, msg, depth=depth + 1)
         return result
     except asyncio.CancelledError:
+        with suppress(Exception):
+            await _emit_work_event(channel_id, session, "work_cancelled", {}, name)
         raise
     except Exception as exc:  # noqa: BLE001
         _logger.error(
@@ -1651,6 +1910,9 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0) -> dic
         try:
             failure = await db.add_message(channel_id, name, detail, "agent")
             await hub.broadcast(channel_id, {"type": "message", "message": failure})
+            await work.link_message(session["id"], int(failure["id"]))
+            await _emit_work_event(channel_id, session, "work_failed",
+                                   {"error": str(detail)[:500]}, name)
         finally:
             await _set_status(name, "idle")
         return {"reply": detail, "tool_events": [], "usage": {}}
@@ -1676,7 +1938,7 @@ async def _execute_routine(row: dict, *, test_run: bool = False) -> None:
         )
         msg = await db.add_message(channel_id, "routine", body, "system")
         await hub.broadcast(channel_id, {"type": "message", "message": msg})
-        result = await _run_agent(channel_id, agent_row)
+        result = await _run_agent(channel_id, agent_row, source="routine")
         excerpt = (result.get("reply") or "")[:240]
         await db.mark_routine_run(
             row["id"], status="ok", excerpt=excerpt,

@@ -67,6 +67,7 @@ _TOOL_HINT = re.compile(
     r"inspect|look\s+up|search(?:\s+the)?\s+history|earlier\s+messages?|"
     r"what\s+did\s+we|last\s+time|"
     r"remember|recall|forget|notes?|memor(?:y|ies)|"
+    r"knowledge|kb\b|docs?|facts?|learn(?:ed|ing)?|"
     r"workspace|write|read|fetch|url|digest|save|skill|routine|schedule|approv|"
     r"computer|screenshot|browser|navigate|click|type|press|"
     r"composio|gmail|github|slack|notion|toolkit|"
@@ -92,6 +93,8 @@ _TOOL_POLICY = (
     "For sending, publishing, deleting, purchasing, or production changes, call "
     "request_approval and wait. Put durable sandbox files in the shared workspace; "
     "put repo/code work on the system root. "
+    "Check knowledge_search before answering from memory; save durable facts with "
+    "knowledge_save; drop stale notes with forget. "
     "You may @mention another bot to hand off work. Follow your profile.md."
 )
 
@@ -401,6 +404,7 @@ def _build_messages(
     allowed_tools: list[str] | None = None,
     notes: list[dict[str, Any]] | None = None,
     summary: dict[str, Any] | None = None,
+    knowledge: list[dict[str, Any]] | None = None,
     job: str | None = None,
     skills: list[dict[str, Any]] | None = None,
     invoked_skills: list[dict[str, Any]] | None = None,
@@ -447,6 +451,13 @@ def _build_messages(
         blocks.append("Known notes:\n" + "\n".join(lines))
     if summary and summary.get("body"):
         blocks.append("Channel summary:\n" + summary["body"])
+    if knowledge:
+        chunks = []
+        for hit in knowledge[:3]:
+            excerpt = (hit.get("body") or "").replace("\n", " ").strip()[:400]
+            chunks.append(f"- [{hit.get('title') or 'note'}] {excerpt}")
+        if chunks:
+            blocks.append("Knowledge base (use when relevant):\n" + "\n".join(chunks))
     messages = [{"role": "system", "content": "\n\n".join(blocks)}]
     for m in history[-window:]:
         if m["author_kind"] == "system":
@@ -847,6 +858,11 @@ async def generate_reply(
     window = history_window_of(agent_row)
     allowed = agent_tools(agent_row)
     notes, summary = await db.get_context_memories(name, channel_id, MEMORY_INJECT_LIMIT)
+    from . import context as context_mod
+    package = await context_mod.build_context(
+        name, channel_id, history, window=window, kb_limit=3)
+    context_history = package["history"]
+    kb_hits = package["kb_hits"]
     channel = await db.get_channel(channel_id)
     channel_kind = (channel or {}).get("kind") or "room"
     skills = await db.list_skills()
@@ -863,8 +879,9 @@ async def generate_reply(
     from .profiles import load_agent_profile
     profile = load_agent_profile(name, agent_row.get("job"))
     messages = _build_messages(
-        agent_row["system_prompt"], history,
-        window=window, allowed_tools=allowed, notes=notes, summary=summary,
+        agent_row["system_prompt"], context_history,
+        window=max(len(context_history), 1), allowed_tools=allowed, notes=notes, summary=summary,
+        knowledge=kb_hits,
         job=agent_row.get("job"), skills=skills, invoked_skills=invoked,
         group_mates=group_mates, display_name=agent_row.get("display_name"),
         profile=profile,
@@ -931,6 +948,7 @@ async def generate_reply(
         try:
             result = await attempt(client, used_model)
             await _maybe_write_summary(name, channel_id, history, window)
+            result["context"] = package["stats"]
             return result
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
@@ -939,6 +957,7 @@ async def generate_reply(
                 try:
                     result = await attempt(client, used_model)
                     await _maybe_write_summary(name, channel_id, history, window)
+                    result["context"] = package["stats"]
                     return result
                 except Exception as retry_exc:  # noqa: BLE001
                     last_exc = retry_exc

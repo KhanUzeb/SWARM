@@ -66,6 +66,46 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "forget": {
+        "type": "function",
+        "function": {
+            "name": "forget",
+            "description": "Delete this agent's saved notes by id (e.g. '42') or keyword query.",
+            "parameters": {
+                "type": "object",
+                "properties": {"target": {"type": "string"}},
+                "required": ["target"],
+            },
+        },
+    },
+    "knowledge_search": {
+        "type": "function",
+        "function": {
+            "name": "knowledge_search",
+            "description": "Search this agent's knowledge base (saved docs, channel-scoped first).",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    },
+    "knowledge_save": {
+        "type": "function",
+        "function": {
+            "name": "knowledge_save",
+            "description": "Save a durable knowledge doc (title + body) for future turns in this channel.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "tags": {"type": "string"},
+                },
+                "required": ["title", "body"],
+            },
+        },
+    },
     "list_workspace": {
         "type": "function",
         "function": {
@@ -414,7 +454,8 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
 BUILTIN_TOOL_NAMES = tuple(BUILTIN_SCHEMAS.keys())
 DEFAULT_BUILTIN_TOOLS = list(BUILTIN_TOOL_NAMES)
 LEDGER_BUILTIN_TOOLS = [
-    "search_channel_history", "remember", "recall", "channel_digest",
+    "search_channel_history", "remember", "recall", "forget",
+    "knowledge_search", "knowledge_save", "channel_digest",
 ]
 COMPUTER_USE_TOOLS = [
     "computer_run", "computer_open", "computer_screenshot",
@@ -614,8 +655,43 @@ class ToolRegistry:
             lines = []
             for r in rows:
                 scope = "global" if r["channel_id"] is None else f"#{r['channel_id']}"
-                lines.append(f"[{scope}] {r['body'][:200]}")
+                lines.append(f"(id {r['id']}) [{scope}] {r['body'][:200]}")
             return "\n".join(lines)
+        if name == "forget":
+            target = (args.get("target") or "").strip()
+            if not target:
+                return "(need a note id or keyword query)"
+            try:
+                forgotten = await db.delete_memory(int(target), agent_name)
+                return f"forgot note {target}" if forgotten else f"(no note {target})"
+            except (TypeError, ValueError):
+                removed = await db.forget_memory_by_query(agent_name, target, channel_id=channel_id)
+                return f"forgot {removed} note(s) matching '{target[:80]}'" if removed else "(no matching notes)"
+        if name == "knowledge_search":
+            from .. import knowledge as kb_mod
+            query = (args.get("query") or "").strip()
+            if not query:
+                return "(need a query)"
+            hits = await kb_mod.search_docs(
+                query, owners=[f"agent:{agent_name}"], channel_id=channel_id, limit=5)
+            if not hits:
+                return "(knowledge base has no matches)"
+            return "\n".join(
+                f"[{h['title']}] {(h.get('body') or '')[:300]}" for h in hits)
+        if name == "knowledge_save":
+            from .. import knowledge as kb_mod
+            title = (args.get("title") or "").strip()[:200]
+            body = (args.get("body") or "").strip()
+            if not title or not body:
+                return "(need a title and a body)"
+            try:
+                doc = await kb_mod.create_doc(
+                    f"agent:{agent_name}", title, body,
+                    tags=(args.get("tags") or "")[:500],
+                    channel_id=channel_id, source="agent")
+            except ValueError as exc:
+                return f"({exc})"
+            return f"saved knowledge '{doc['title']}' (id {doc['id']})"
         if name == "list_workspace":
             return await workspace_helpers["list"]()
         if name == "read_workspace":
