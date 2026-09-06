@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import katex from "katex";
 
 // ── API & Utilities (ported from lib.js) ──
 
@@ -81,11 +80,12 @@ function statusLabel(s) {
 }
 
 // ── Math Rendering ──
-
+// KaTeX was dropped from the bundle (258KB, never reached: the tokenizer
+// below emits text only). If math parts return, load KaTeX lazily via
+// `await import("katex")` inside the math branch instead of a top import.
 function renderMath(tex, display) {
-  try {
-    return katex.renderToString(tex, { throwOnError: false, displayMode: !!display });
-  } catch { return escapeHtml(tex); }
+  void display;
+  return `<code class="math-fallback">${escapeHtml(tex)}</code>`;
 }
 
 // ── Rich Text Tokenizer (simplified) ──

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Avatar, Badge, Tooltip, ScrollArea, Dropdown } from "../ui.jsx";
 import { initials, statusLabel } from "../lib.js";
 
-export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings }) {
+export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings, onDeleteChannel }) {
   const [search, setSearch] = useState("");
   const [section, setSection] = useState("channels");
 
@@ -25,7 +25,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
       <div className="sidebar-search">
         <input
           type="search"
-          placeholder="Search channels, people, messages"
+          placeholder="Search…"
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="input input-search"
@@ -46,6 +46,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
                 channel={c}
                 active={activeChannel === c.id}
                 onClick={() => onSelectChannel(c.id)}
+                onDelete={onDeleteChannel ? () => onDeleteChannel(c.id) : null}
               />
             ))}
           </Section>
@@ -53,7 +54,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
           {groups.length > 0 && (
             <Section title="Groups" action={onNewGroup} actionLabel="New group">
               {groups.map(c => (
-                <ChannelItem key={c.id} channel={c} active={activeChannel === c.id} onClick={() => onSelectChannel(c.id)} />
+                <ChannelItem key={c.id} channel={c} active={activeChannel === c.id} onClick={() => onSelectChannel(c.id)} onDelete={onDeleteChannel ? () => onDeleteChannel(c.id) : null} />
               ))}
             </Section>
           )}
@@ -120,13 +121,23 @@ function Section({ title, children, action, actionLabel }) {
   );
 }
 
-function ChannelItem({ channel, active, onClick, dm }) {
+function ChannelItem({ channel, active, onClick, dm, onDelete }) {
   return (
     <li className="channel-item">
       <button className={`channel-link ${active ? "active" : ""}`} onClick={onClick}>
         <span className={`channel-dot ${dm ? "dm" : ""}`} />
         <span className="channel-name truncate">{channel.name}</span>
       </button>
+      {onDelete && !dm && (
+        <button
+          className="channel-delete"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          title={`Delete #${channel.name}`}
+          aria-label={`Delete channel ${channel.name}`}
+        >
+          ×
+        </button>
+      )}
     </li>
   );
 }

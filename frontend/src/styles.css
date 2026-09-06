@@ -1,50 +1,54 @@
 /*
  * swarm — Design System
- * Premium dark UI: Apple clarity, Stripe polish, OpenAI restraint
+ * Premium dark UI: Apple clarity, Stripe polish, OpenAI restraint.
+ * Accent direction from Pinterest's 2026 Palette research (Cool Blue /
+ * Jade / Plum Noir / Wasabi / Persimmon): Plum Noir carries agent
+ * intelligence, Persimmon carries approvals and attention, Jade carries
+ * success — all on a warmed charcoal base instead of generic zinc+indigo.
  */
 
 :root {
   /* ── Color Primitives ── */
-  --color-bg: #030303;
-  --color-bg-elevated: #111114;
-  --color-bg-surface: #1a1a1f;
-  --color-bg-hover: #242429;
-  --color-bg-glass: rgba(17, 17, 20, 0.82);
-  --color-border-subtle: rgba(255, 255, 255, 0.035);
-  --color-border: rgba(255, 255, 255, 0.06);
-  --color-border-strong: rgba(255, 255, 255, 0.09);
-  --color-bubble-agent: #222228;
-  --color-bubble-agent-hover: #282830;
-  --color-bubble-user: #f2f0ea;
-  --color-bubble-user-text: #171717;
-  --color-bubble-user-muted: #5c5c5c;
+  --color-bg: #0e0a0d;
+  --color-bg-elevated: #161016;
+  --color-bg-surface: #1e141d;
+  --color-bg-hover: #281a27;
+  --color-bg-glass: rgba(22, 16, 22, 0.82);
+  --color-border-subtle: rgba(255, 235, 240, 0.045);
+  --color-border: rgba(255, 235, 240, 0.075);
+  --color-border-strong: rgba(255, 235, 240, 0.11);
+  --color-bubble-agent: #251824;
+  --color-bubble-agent-hover: #2e1d2c;
+  --color-bubble-user: linear-gradient(135deg, #f2822e 0%, #d1541f 100%);
+  --color-bubble-user-text: #2b1206;
+  --color-bubble-user-muted: rgba(43, 18, 6, 0.62);
   
-  --color-text-primary: #fafafa;
-  --color-text-secondary: #c8c8d0;
-  --color-text-muted: #8b8b96;
-  --color-text-subtle: #5c5c66;
+  --color-text-primary: #f6f1ec;
+  --color-text-secondary: #c9bcae;
+  --color-text-muted: #8d7f76;
+  --color-text-subtle: #61565a;
   
-  --color-brand: #8b8aff;
-  --color-brand-bg: #6366f1;
-  --color-brand-hover: #a5a4ff;
-  --color-brand-subtle: rgba(99, 102, 241, 0.14);
-  --color-brand-glow: rgba(99, 102, 241, 0.35);
+  --color-brand: #b678c2;
+  --color-brand-bg: #7c3f7e;
+  --color-brand-hover: #c892d1;
+  --color-brand-subtle: rgba(182, 120, 194, 0.14);
+  --color-brand-glow: rgba(124, 63, 126, 0.4);
   
-  --color-success: #10b981;
-  --color-success-bg: rgba(16, 185, 129, 0.15);
-  --color-warning: #f2b84b;
-  --color-warning-bg: rgba(242, 184, 75, 0.15);
+  --color-success: #6fa287;
+  --color-success-bg: rgba(111, 162, 135, 0.15);
+  --color-warning: #ef7d3c;
+  --color-warning-bg: rgba(239, 125, 60, 0.15);
   --color-error: #ff6363;
   --color-error-bg: rgba(255, 99, 99, 0.15);
   
-  --color-online: #10b981;
-  --color-busy: #f2b84b;
+  --color-online: #6fa287;
+  --color-busy: #ef7d3c;
   --color-offline: #62666d;
   
   /* ── Typography ── */
   --font-sans: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   --font-mono: 'Geist Mono', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, monospace;
-  --font-display: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
   
   /* ── Spacing ── */
   --space-1: 4px;
@@ -68,11 +72,11 @@
   --radius-bubble: 20px;
   --radius-full: 9999px;
   
-  /* ── Shadows ── */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.04);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  /* ── Shadows (inset top hairline = premium depth on every surface) ── */
+  --shadow-sm: inset 0 1px 0 rgba(255, 236, 226, 0.07), 0 1px 2px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-md: inset 0 1px 0 rgba(255, 236, 226, 0.07), 0 8px 24px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-lg: inset 0 1px 0 rgba(255, 236, 226, 0.07), 0 16px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-xl: inset 0 1px 0 rgba(255, 236, 226, 0.08), 0 24px 64px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-ring: 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-ring-brand: 0 0 0 1px var(--color-brand);
   --shadow-focus: 0 0 0 3px var(--color-brand-subtle), 0 0 0 1px var(--color-brand);
@@ -144,9 +148,33 @@ body {
   font-size: 15px;
   line-height: 1.6;
   color: var(--color-text-primary);
-  background: var(--color-bg);
+  background: #080509;
   font-feature-settings: "cv01", "ss03", "liga", "kern", "calt";
 }
+
+/* Ambient aurora backdrop (Pinterest-2026 hues, whisper-quiet) + film grain.
+   App surfaces stay translucent so depth reads at the margins. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(900px 520px at 10% -6%, rgba(124, 63, 126, 0.30), transparent 62%),
+    radial-gradient(760px 520px at 96% 108%, rgba(239, 125, 60, 0.13), transparent 60%),
+    radial-gradient(680px 560px at 88% -8%, rgba(111, 162, 135, 0.09), transparent 60%),
+    radial-gradient(1000px 700px at 50% 55%, rgba(46, 20, 44, 0.35), transparent 70%);
+}
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.055;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+}
+#root { position: relative; z-index: 1; }
 
 :focus-visible {
   outline: none;
@@ -173,7 +201,7 @@ body {
   height: 100dvh;
   min-height: 600px;
   overflow: hidden;
-  background: var(--color-bg);
+  background: rgba(14, 10, 13, 0.72);
 }
 
 .app.thread-open {
@@ -191,6 +219,29 @@ body {
   grid-template-areas: "sidebar workspace panel";
 }
 
+/* Hybrid workspace: persistent optional work rail beside the conversation. */
+.app.workspace.work-rail-open {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 340px;
+  grid-template-areas: "sidebar workspace work";
+}
+.app.workspace.work-rail-open.thread-open {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 320px 400px;
+  grid-template-areas: "sidebar workspace work thread";
+}
+.app.workspace.work-rail-open.computer-open {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 320px 400px;
+  grid-template-areas: "sidebar workspace work panel";
+}
+.app.workspace.work-rail-open.thread-open.computer-open {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 320px 400px;
+  grid-template-areas: "sidebar workspace work panel";
+}
+.app.workspace.work-rail-open.thread-open.computer-open #thread-panel {
+  position: fixed; inset: 0 0 0 auto; z-index: 60;
+  width: min(420px, 100vw); box-shadow: var(--shadow-xl);
+}
+#work-rail { grid-area: work; }
+
 .workspace-shell {
   grid-area: workspace;
   display: flex;
@@ -199,9 +250,11 @@ body {
   min-height: 0;
   margin: var(--workspace-inset) var(--workspace-inset) var(--workspace-inset) 0;
   border-radius: var(--radius-window);
-  background: var(--color-bg-elevated);
+  background: rgba(22, 16, 22, 0.9);
+  backdrop-filter: blur(10px);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.05),
+    inset 0 1px 0 rgba(255, 236, 226, 0.08),
+    0 0 0 1px rgba(255, 235, 240, 0.07),
     0 24px 80px rgba(0, 0, 0, 0.55);
   overflow: hidden;
 }
@@ -242,10 +295,18 @@ body {
 }
 .cc-hero h1 {
   margin: 6px 0 12px;
-  font-size: clamp(28px, 4vw, 40px);
-  line-height: 1.08;
-  letter-spacing: -0.04em;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: clamp(30px, 4.4vw, 44px);
+  line-height: 1.04;
+  letter-spacing: -0.015em;
+  font-weight: 500;
+}
+.cc-hero h1 em {
+  font-style: italic;
+  background: linear-gradient(120deg, var(--color-brand-hover), var(--color-warning));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .cc-hero p {
   max-width: 480px;
@@ -261,10 +322,11 @@ body {
   display: grid;
   place-items: center;
   border-radius: var(--radius-xl);
-  background: rgba(99, 102, 241, 0.14);
-  color: var(--color-brand);
+  background: linear-gradient(135deg, rgba(124, 63, 126, 0.4), rgba(239, 125, 60, 0.22));
+  color: var(--color-brand-hover);
   font-size: 22px;
-  opacity: 0.85;
+  opacity: 0.9;
+  box-shadow: inset 0 1px 0 rgba(255, 236, 226, 0.12), 0 6px 20px rgba(124, 63, 126, 0.25);
 }
 .eyebrow {
   display: block;
@@ -478,16 +540,17 @@ body {
 .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 
 .btn-primary, .btn.primary {
-  background: var(--color-bubble-user);
-  color: var(--color-bubble-user-text);
+  background: linear-gradient(135deg, #f2822e 0%, #cf501f 100%);
+  color: #2b1206;
   border-color: transparent;
   border-radius: var(--radius-full);
-  box-shadow: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 6px 20px rgba(209, 84, 31, 0.28);
+  font-weight: 600;
 }
 .btn-primary:hover:not(:disabled), .btn.primary:hover:not(:disabled) {
-  background: #fff;
-  color: var(--color-bubble-user-text);
-  box-shadow: 0 4px 16px rgba(255, 255, 255, 0.08);
+  background: linear-gradient(135deg, #ff8f3d 0%, #dd5f24 100%);
+  color: #2b1206;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 8px 26px rgba(209, 84, 31, 0.38);
 }
 .btn-primary:active:not(:disabled), .btn.primary:active:not(:disabled) { transform: scale(0.98); }
 
@@ -566,7 +629,7 @@ body {
 .input:hover { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
 .input:focus {
   outline: none;
-  box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.45), 0 0 0 3px rgba(99, 102, 241, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(182, 120, 194, 0.5), 0 0 0 3px rgba(182, 120, 194, 0.13);
   background: rgba(255, 255, 255, 0.05);
 }
 .input:disabled { opacity: 0.5; cursor: not-allowed; }

@@ -111,7 +111,7 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
       <div className="cc-hero">
         <div>
           <span className="eyebrow">Overview</span>
-          <h1>Make the work legible.</h1>
+          <h1>Make the work <em>legible.</em></h1>
           <p>Design a team, launch a supervised run, and keep the result after the agents are done.</p>
         </div>
         <div className="cc-hero-mark" aria-hidden>✦</div>
