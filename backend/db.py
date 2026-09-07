@@ -91,7 +91,8 @@ CREATE TABLE IF NOT EXISTS agents (
     job             TEXT NOT NULL DEFAULT '{DEFAULT_JOB}',
     status          TEXT NOT NULL DEFAULT 'idle',
     display_name    TEXT NOT NULL DEFAULT '',
-    archived_at     REAL
+    archived_at     REAL,
+    tools_locked    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS channel_members (
@@ -376,6 +377,8 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
             )
     if "archived_at" not in cols:
         await db.execute("ALTER TABLE agents ADD COLUMN archived_at REAL")
+    if "tools_locked" not in cols:
+        await db.execute("ALTER TABLE agents ADD COLUMN tools_locked INTEGER NOT NULL DEFAULT 0")
     await db.execute(
         "CREATE TABLE IF NOT EXISTS channel_members ("
         "channel_id TEXT NOT NULL, agent_name TEXT NOT NULL, "
@@ -504,7 +507,12 @@ async def _seed_bundled_skills(db: aiosqlite.Connection) -> None:
 
 
 async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:
-    """Give existing full-tool Bots computer/browser/Composio without wiping custom lists."""
+    """Give existing full-tool Bots computer/browser/Composio without wiping custom lists.
+
+    Agents with tools_locked set (e.g. need-bots spawned with a deliberate
+    minimal set) are never touched — the grant must not silently re-expand
+    a curated list on every boot or agent creation.
+    """
     from .tools.registry import COMPOSIO_PLUGIN_TOOLS, COMPUTER_USE_TOOLS, RESEARCH_TOOLS, SYSTEM_TOOLS
 
     extras = (
@@ -513,10 +521,10 @@ async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:
         + list(COMPOSIO_PLUGIN_TOOLS)
         + list(RESEARCH_TOOLS)
     )
-    cur = await db.execute("SELECT name, tools FROM agents")
+    cur = await db.execute("SELECT name, tools, tools_locked FROM agents")
     rows = await cur.fetchall()
-    for name, tools_raw in rows:
-        if name == "ledger":
+    for name, tools_raw, locked in rows:
+        if name == "ledger" or locked:
             continue
         names = parse_tools(tools_raw)
         if "write_workspace" not in names and "read_only_shell" not in names:
@@ -1166,6 +1174,7 @@ async def create_agent(
     tools: list[str] | None = None,
     job: str = DEFAULT_JOB,
     display_name: str | None = None,
+    tools_locked: bool = False,
 ) -> dict[str, Any]:
     tool_names = tools if tools is not None else list(DEFAULT_TOOLS)
     job_title = (job or DEFAULT_JOB).strip() or DEFAULT_JOB
@@ -1174,11 +1183,12 @@ async def create_agent(
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO agents (name, system_prompt, model, channel_scope, "
-            "created_at, history_window, max_tool_calls, tools, job, status, display_name) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?)",
+            "created_at, history_window, max_tool_calls, tools, job, status, display_name, tools_locked) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
             (
                 name, system_prompt, model, channel_scope, time.time(),
                 history_window, max_tool_calls, json.dumps(tool_names), job_title, label,
+                1 if tools_locked else 0,
             ),
         )
         await db.commit()
@@ -1197,6 +1207,7 @@ async def create_agent(
         "status": "idle",
         "dm_channel_id": dm_channel_id(name),
         "archived": False,
+        "tools_locked": tools_locked,
     }
 
 
@@ -1370,19 +1381,16 @@ async def search_memory(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         like = f"%{_like_escape(query)}%"
-        if channel_id:
-            cur = await db.execute(
-                "SELECT * FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND (channel_id IS NULL OR channel_id = ?) AND body LIKE ? ESCAPE '\\' "
-                "ORDER BY created_at DESC LIMIT ?",
-                (agent_name, channel_id, like, limit),
-            )
-        else:
-            cur = await db.execute(
-                "SELECT * FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND body LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?",
-                (agent_name, like, limit),
-            )
+        scope, params = (
+            ("AND (channel_id IS NULL OR channel_id = ?) ", (agent_name, channel_id, like, limit))
+            if channel_id else
+            ("", (agent_name, like, limit))
+        )
+        cur = await db.execute(
+            "SELECT * FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+            f"{scope}AND body LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?",
+            params,
+        )
         rows = await cur.fetchall()
         return [dict(r) for r in reversed(rows)]
 
@@ -1406,45 +1414,42 @@ async def forget_memory_by_query(
     if not needle:
         return 0
     like = f"%{_like_escape(needle)}%"
+    scope, params = (
+        ("AND (channel_id IS NULL OR channel_id = ?) ", (agent_name, channel_id, like))
+        if channel_id else
+        ("", (agent_name, like))
+    )
     async with aiosqlite.connect(DB_PATH) as db:
-        if channel_id:
-            cur = await db.execute(
-                "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND (channel_id IS NULL OR channel_id = ?) AND body LIKE ? ESCAPE '\\'",
-                (agent_name, channel_id, like),
-            )
-        else:
-            cur = await db.execute(
-                "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND body LIKE ? ESCAPE '\\'",
-                (agent_name, like),
-            )
+        cur = await db.execute(
+            "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+            f"{scope}AND body LIKE ? ESCAPE '\\'",
+            params,
+        )
         await db.commit()
         return cur.rowcount
 
 
 async def count_memories(agent_name: str, channel_id: str | None = None) -> dict[str, int]:
+    scope, params = (
+        ("AND (channel_id IS NULL OR channel_id = ?) ", (agent_name, channel_id))
+        if channel_id else
+        ("", (agent_name,))
+    )
     async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+            f"{scope}".rstrip(),
+            params,
+        )
+        (notes,) = await cur.fetchone()
+        summaries = 0
         if channel_id:
-            cur = await db.execute(
-                "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND (channel_id IS NULL OR channel_id = ?)",
-                (agent_name, channel_id),
-            )
-            (notes,) = await cur.fetchone()
             cur = await db.execute(
                 "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND channel_id = ? "
                 "AND kind = 'summary'",
                 (agent_name, channel_id),
             )
             (summaries,) = await cur.fetchone()
-        else:
-            cur = await db.execute(
-                "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND kind = 'note'",
-                (agent_name,),
-            )
-            (notes,) = await cur.fetchone()
-            summaries = 0
     return {"notes": notes, "summaries": summaries}
 
 

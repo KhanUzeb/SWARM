@@ -126,6 +126,10 @@ export default function App() {
     });
   }, []);
 
+  const patchReactions = useCallback((messageId, fn) => {
+    setReactions(prev => ({ ...prev, [messageId]: fn(prev[messageId] || []) }));
+  }, []);
+
   const ingestLive = useCallback((raw) => {
     if (raw?.type === "message_deleted") {
       const deleted = new Set(raw.ids || [raw.message_id]);
@@ -135,19 +139,13 @@ export default function App() {
       return;
     }
     if (raw?.type === "reaction") {
-      setReactions(prev => {
-        const list = prev[raw.message_id] || [];
-        if (list.some(r => r.author === raw.author && r.emoji === raw.emoji)) return prev;
-        return { ...prev, [raw.message_id]: [...list, { author: raw.author, emoji: raw.emoji }] };
-      });
+      patchReactions(raw.message_id, (list, r = { author: raw.author, emoji: raw.emoji }) =>
+        list.some(x => x.author === r.author && x.emoji === r.emoji) ? list : [...list, r]);
       return;
     }
     if (raw?.type === "reaction_removed") {
-      setReactions(prev => ({
-        ...prev,
-        [raw.message_id]: (prev[raw.message_id] || []).filter(
-          r => !(r.author === raw.author && r.emoji === raw.emoji)),
-      }));
+      patchReactions(raw.message_id, (list) =>
+        list.filter(r => !(r.author === raw.author && r.emoji === raw.emoji)));
       return;
     }
     const m = { reactions: [], ...raw };
@@ -176,7 +174,7 @@ export default function App() {
     }
     setOrder(prev => (prev.includes(m.id) ? prev : [...prev, m.id]));
     if (m.author_kind === "system") loadComputer();
-  }, []);
+  }, [patchReactions]);
 
   // ── Data Loaders ──
   function authError(message, status) {
@@ -510,10 +508,9 @@ export default function App() {
       body: { author: user.handle, emoji },
     });
     if (res.ok) {
-      setReactions(prev => {
-        const mine = prev[messageId] || [];
-        if (mine.some(r => r.author === user.handle && r.emoji === emoji)) return prev;
-        return { ...prev, [messageId]: [...mine, { author: user.handle, emoji }] };
+      patchReactions(messageId, (mine) => {
+        const r = { author: user.handle, emoji };
+        return mine.some(x => x.author === r.author && x.emoji === r.emoji) ? mine : [...mine, r];
       });
     }
     else flash("Could not add reaction", "error");
@@ -524,11 +521,8 @@ export default function App() {
       { token: tokenRef.current, method: "DELETE" },
     );
     if (res.ok) {
-      setReactions(prev => ({
-        ...prev,
-        [messageId]: (prev[messageId] || []).filter(
-          r => !(r.author === user.handle && r.emoji === emoji)),
-      }));
+      patchReactions(messageId, (mine) =>
+        mine.filter(r => !(r.author === user.handle && r.emoji === emoji)));
     }
     else flash("Could not remove reaction", "error");
   }

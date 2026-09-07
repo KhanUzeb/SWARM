@@ -121,6 +121,26 @@ function ReactPicker({ onPick, onClose }) {
   );
 }
 
+function ReactionChips({ counts, byEmoji, myHandle, onToggle }) {
+  const emojis = Object.keys(counts);
+  if (!emojis.length) return null;
+  return (
+    <div className="msg-reactions inline">
+      {emojis.map((emoji) => {
+        const mine = (byEmoji[emoji] || []).includes(myHandle);
+        return (
+          <button key={emoji} className={`reaction-chip${mine ? " mine" : ""}`}
+            onClick={() => onToggle(emoji)}
+            title={(byEmoji[emoji] || []).join(", ")}
+            aria-pressed={mine}>
+            {emoji} {counts[emoji] > 1 && <span className="reaction-count">{counts[emoji]}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, retrying, myHandle, streaming, work, workEvents, canDelete }) {
   const [pickOpen, setPickOpen] = useState(false);
   const counts = {};
@@ -158,17 +178,8 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
       <div className={`msg-row human me ${grouped ? "grouped" : ""} ${m.streaming ? "streaming" : ""}`}>
         <div className="msg-bubble user-bubble">
           <RichBody body={m.body || ""} />
-          {!m.streaming && m.id != null && Object.keys(counts).length > 0 && (
-            <div className="msg-reactions inline">
-              {Object.entries(counts).map(([emoji, count]) => (
-                <button key={emoji} className={`reaction-chip${(byEmoji[emoji] || []).includes(myHandle) ? " mine" : ""}`}
-                  onClick={() => toggleReact(emoji)}
-                  title={(byEmoji[emoji] || []).join(", ")}
-                  aria-pressed={(byEmoji[emoji] || []).includes(myHandle)}>
-                  {emoji} {count > 1 && <span className="reaction-count">{count}</span>}
-                </button>
-              ))}
-            </div>
+          {!m.streaming && m.id != null && (
+            <ReactionChips counts={counts} byEmoji={byEmoji} myHandle={myHandle} onToggle={toggleReact} />
           )}
           {!m.streaming && m.id != null && (
             <div className="msg-actions own">
@@ -270,17 +281,8 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
           </div>
         )}
 
-        {!m.streaming && m.id != null && Object.keys(counts).length > 0 && (
-          <div className="msg-reactions inline">
-            {Object.entries(counts).map(([emoji, count]) => (
-              <button key={emoji} className={`reaction-chip${(byEmoji[emoji] || []).includes(myHandle) ? " mine" : ""}`}
-                onClick={() => toggleReact(emoji)}
-                title={(byEmoji[emoji] || []).join(", ")}
-                aria-pressed={(byEmoji[emoji] || []).includes(myHandle)}>
-                {emoji} {count > 1 && <span className="reaction-count">{count}</span>}
-              </button>
-            ))}
-          </div>
+        {!m.streaming && m.id != null && (
+          <ReactionChips counts={counts} byEmoji={byEmoji} myHandle={myHandle} onToggle={toggleReact} />
         )}
       </div>
 
