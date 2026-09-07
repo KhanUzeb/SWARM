@@ -23,8 +23,9 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import agent, context, db, knowledge, v2, work
 from .ai_support import store as ai_store
@@ -49,6 +50,20 @@ from .tools.registry import get_registry, reload_registry
 
 app = FastAPI(title="swarm")
 install_api_guard(app)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_json(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    # Keep the default {"detail": ...} shape (tests + UI read it) and add
+    # ok:false so clients can branch without sniffing status codes.
+    return JSONResponse(status_code=exc.status_code, content={"ok": False, "detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_json(request: Request, exc: Exception) -> JSONResponse:
+    _logger = logging.getLogger("swarm.backend")
+    _logger.error("unhandled error on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=500, content={"ok": False, "message": "internal error"})
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,8 +94,9 @@ def _rate_limited(handle: str) -> bool:
 
 
 async def _with_reactions(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = await db.get_reactions_many([m["id"] for m in messages])
     for m in messages:
-        m["reactions"] = await db.get_reactions(m["id"])
+        m["reactions"] = grouped.get(m["id"], [])
     return messages
 
 

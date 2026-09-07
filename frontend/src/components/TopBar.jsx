@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { Badge, Button, Tooltip } from "../ui.jsx";
+import { Badge, Button, Dropdown, Tooltip } from "../ui.jsx";
 
 export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpenCommandPalette, onViewChange, currentView, approvals, onResolveApproval, wsStatus, workActive, workAttention, workConnected, onToggleWorkRail, workRailOpen, participants }) {
   const pendingApprovals = approvals.filter(a => a.status === "pending" && a.channel_id === channel?.id);
@@ -65,6 +64,7 @@ export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpen
 
         {pendingApprovals.length > 0 && (
           <Dropdown
+            label={`${pendingApprovals.length} pending approvals`}
             trigger={
               <Badge variant="warning" className="status-chip clickable">
                 {pendingApprovals.length} approval{pendingApprovals.length !== 1 ? "s" : ""}
@@ -106,20 +106,4 @@ export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpen
   );
 }
 
-function Dropdown({ trigger, items, align = "right" }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="dropdown" style={{ position: "relative" }}>
-      <span onClick={() => setOpen(!open)} style={{ cursor: "pointer" }}>{trigger}</span>
-      {open && (
-        <div className="dropdown-menu" style={{ [align]: 0, position: "absolute", top: "calc(100% + 8px)" }}>
-          {items.map(item => (
-            <button key={item.id} className="dropdown-item" onClick={() => { item.onClick?.(); setOpen(false); }}>
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+

@@ -143,6 +143,17 @@ async def context_stats(
             out["kb_docs"] = await kb_mod.count_docs(f"agent:{agent_name}")
         except Exception:  # noqa: BLE001
             out["kb_docs"] = 0
+        # Count what build_context counts so the meter tracks the real
+        # package: memory note + summary bodies on top of history.
+        try:
+            notes, summary = await db.get_context_memories(agent_name, channel_id, 12)
+        except Exception:  # noqa: BLE001
+            notes, summary = [], None
+        notes_chars = sum(_chars(n.get("body")) for n in (notes or []))
+        summary_chars = _chars((summary or {}).get("body"))
+        out["notes_chars"] = notes_chars
+        out["summary_chars"] = summary_chars
+        chars += notes_chars + summary_chars
     out["total_chars"] = chars
     return out
 

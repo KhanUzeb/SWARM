@@ -1,16 +1,32 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar, RichBody, Tooltip } from "../ui.jsx";
 import { fmtTime, isAgentError } from "../lib.js";
 
 export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, workByMessage, eventsByWork, canModerate }) {
   const endRef = useRef(null);
   const logRef = useRef(null);
+  const [pinned, setPinned] = useState(true);
+
+  // Stick-to-bottom: only auto-scroll when the reader is already at the
+  // bottom; otherwise show a "jump to latest" pill.
+  useEffect(() => { setPinned(true); }, [channelId]);
+
+  function handleScroll() {
+    const el = logRef.current;
+    if (!el) return;
+    setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+  }
+
+  function jumpToLatest() {
+    setPinned(true);
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
 
   useEffect(() => {
-    if (endRef.current && !hasMore) {
+    if (endRef.current && pinned && !hasMore) {
       endRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
     }
-  }, [order.length, hasMore]);
+  }, [order.length, hasMore, pinned]);
 
   const roots = order.map(id => messages[id]).filter(Boolean);
 
@@ -31,7 +47,12 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
   }
 
   return (
-    <div id="log" ref={logRef}>
+    <div id="log" ref={logRef} onScroll={handleScroll}>
+      {!pinned && roots.length > 0 && (
+        <button type="button" className="jump-latest" onClick={jumpToLatest}>
+          ↓ Latest
+        </button>
+      )}
       <div className="log-inner">
         {hasMore && (
           <button className="load-earlier" onClick={onLoadMore} disabled={loadingMore}>
@@ -72,7 +93,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
         })}
 
         {typing && (
-          <div className="typing-indicator">
+          <div className="typing-indicator" role="status" aria-live="polite">
             <span className="typing-dots"><span /><span /><span /></span>
             <span className="typing-text">{typing} is typing…</span>
           </div>

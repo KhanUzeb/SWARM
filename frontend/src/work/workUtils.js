@@ -2,24 +2,22 @@
 export const WORK_ACTIVE = new Set(["queued", "running", "waiting_for_approval"]);
 export const WORK_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
+// One shared map drives tone + label so new statuses can't drift apart.
+const WORK_STATUS_META = {
+  queued: { tone: "subtle", label: "Queued" },
+  running: { tone: "intelligence", label: "Running" },
+  waiting_for_approval: { tone: "warning", label: "Needs approval" },
+  completed: { tone: "success", label: "Completed" },
+  failed: { tone: "danger", label: "Failed" },
+  cancelled: { tone: "subtle", label: "Cancelled" },
+};
+
 export function workStatusTone(status) {
-  switch (status) {
-    case "queued": return "subtle";
-    case "running": return "intelligence";
-    case "waiting_for_approval": return "warning";
-    case "completed": return "success";
-    case "failed": return "danger";
-    case "cancelled": return "subtle";
-    default: return "subtle";
-  }
+  return (WORK_STATUS_META[status] || {}).tone || "subtle";
 }
 
 export function workStatusLabel(status) {
-  const map = {
-    queued: "Queued", running: "Running", waiting_for_approval: "Needs approval",
-    completed: "Completed", failed: "Failed", cancelled: "Cancelled",
-  };
-  return map[status] || status || "Unknown";
+  return (WORK_STATUS_META[status] || {}).label || status || "Unknown";
 }
 
 /** Merge incoming replayed events into a sorted, deduped-by-seq list. */
@@ -45,15 +43,20 @@ export function groupWorkByAttention(sessions) {
 }
 
 /** Pure status transition for one incoming work event. */
+const WORK_EVENT_TRANSITIONS = {
+  work_started: { status: "running" },
+  agent_started: { status: "running" },
+  approval_requested: { status: "waiting_for_approval", requires_action: true },
+  approval_resolved: { status: "running", requires_action: false },
+  work_completed: { status: "completed", requires_action: false },
+  work_failed: { status: "failed", requires_action: true },
+  work_cancelled: { status: "cancelled", requires_action: false },
+};
+
 export function applyWorkEventToSession(session, event) {
   if (!session || session.id !== event?.work_id) return session;
-  const next = { ...session };
-  if (event.type === "work_started" || event.type === "agent_started") next.status = "running";
-  if (event.type === "approval_requested") { next.status = "waiting_for_approval"; next.requires_action = true; }
-  if (event.type === "approval_resolved") { next.status = "running"; next.requires_action = false; }
-  if (event.type === "work_completed") { next.status = "completed"; next.requires_action = false; }
-  if (event.type === "work_failed") { next.status = "failed"; next.requires_action = true; }
-  if (event.type === "work_cancelled") { next.status = "cancelled"; next.requires_action = false; }
+  const transition = WORK_EVENT_TRANSITIONS[event.type];
+  const next = transition ? { ...session, ...transition } : { ...session };
   if (event.step_id) next.active_step = event.step_id;
   return next;
 }

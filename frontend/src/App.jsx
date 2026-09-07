@@ -74,6 +74,8 @@ export default function App() {
 
   const wsRef = useRef(null);
   const wsGen = useRef(0);
+  const loadReq = useRef(0);
+  const toastTimer = useRef(null);
   const lastSeenId = useRef(0);
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef(null);
@@ -110,7 +112,8 @@ export default function App() {
 
   const flash = useCallback((msg, type = "info", title) => {
     setToast({ msg, type, title });
-    setTimeout(() => setToast(null), 3500);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null; }, 3500);
   }, []);
 
   const remember = useCallback((m) => {
@@ -271,6 +274,8 @@ export default function App() {
   }
 
   async function loadChannelMessages(channelId) {
+    const req = ++loadReq.current;
+    const fresh = () => req === loadReq.current;
     setLoadingLog(true);
     setMessages({});
     setOrder([]);
@@ -280,17 +285,20 @@ export default function App() {
     setThreadReplies([]);
     try {
       const history = await loadHistory(channelId);
+      if (!fresh()) return; // channel switched mid-flight — drop stale data
       applyHistory(history);
       await Promise.all([loadAgents(channelId), loadComputer(), loadApprovals()]);
+      if (!fresh()) return;
       loadContextStats(channelId);
     } catch (e) {
+      if (!fresh()) return;
       if (e?.status === 401) {
         flash("Session expired — please sign in again", "warning");
         handleLogout();
       } else {
         flash("Failed to load messages", "error");
       }
-    } finally { setLoadingLog(false); }
+    } finally { if (fresh()) setLoadingLog(false); }
   }
 
   // ── WebSocket ──
@@ -301,15 +309,18 @@ export default function App() {
     const url = `${proto}://${location.host}/ws/${encodeURIComponent(channelRef.current)}`;
     intentionalClose.current = false;
     setWsStatus("connecting");
+    const gen = ++wsGen.current;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (gen !== wsGen.current) { ws.close(); return; }
       reconnectAttempt.current = 0;
       setWsStatus("connected");
       ws.send(JSON.stringify({ token: t, last_seen_id: lastSeenId.current || null }));
     };
     ws.onmessage = (ev) => {
+      if (gen !== wsGen.current) return; // stale socket from a previous channel
       let msg; try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.type === "message" || msg.type === "live") ingestLive(msg.message || msg.data || msg);
       else if (msg.type === "message_deleted" || msg.type === "reaction") ingestLive(msg);
@@ -328,6 +339,7 @@ export default function App() {
       else if (msg.type === "error") flash(msg.detail || "Error", "error");
     };
     ws.onclose = (ev) => {
+      if (gen !== wsGen.current) return; // superseded by a newer connection
       if (intentionalClose.current || ev.code === 4001) { setWsStatus("offline"); return; }
       setWsStatus("offline");
       const delay = Math.min(1000 * 2 ** reconnectAttempt.current, 15000);
@@ -339,6 +351,7 @@ export default function App() {
 
   function disconnectWs() {
     intentionalClose.current = true;
+    wsGen.current++; // invalidate in-flight socket callbacks
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     if (wsRef.current) wsRef.current.close();
   }
@@ -623,8 +636,9 @@ export default function App() {
                 if (prev.author !== m.author) return false;
                 if (prev.author_kind !== m.author_kind) return false;
                 if (m.parent_id) return false;
-                const dt = (m.created_at - prev.created_at) * 1000;
-                return dt < 5 * 60 * 1000;
+                const toMs = (t) => typeof t === "number" ? t * 1000 : Date.parse(t) || 0;
+                const dt = toMs(m.created_at) - toMs(prev.created_at);
+                return dt >= 0 && dt < 5 * 60 * 1000;
               }}
             />
           )}
@@ -760,7 +774,7 @@ export default function App() {
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} commands={commands} onCommand={(c) => c.action?.()} />
 
       {toast && (
-        <div className={`toast-container ${toast.type === "error" ? "error" : ""}`}>
+        <div className={`toast-container ${toast.type === "error" ? "error" : ""}`} role="status" aria-live="polite">
           <div className={`toast ${toast.type}`}>
             {toast.title && <div className="toast-title">{toast.title}</div>}
             <div className="toast-message">{toast.msg}</div>

@@ -143,30 +143,19 @@ async def find_by_run(run_id: str, owner: str) -> dict[str, Any] | None:
     return _public(row) if row else None
 
 
-async def _set_status(work_id: str, status: str, **fields: Any) -> None:
-    now = time.time()
-    started = now if status == "running" else None
-    finished = now if status in TERMINAL else None
-    cols = {"status": status}
-    cols.update(fields)
-    async with aiosqlite.connect(db.DB_PATH) as conn:
-        if started is not None:
-            await conn.execute(
-                "UPDATE work_sessions SET status=?, started_at=COALESCE(started_at, ?),"
-                " finished_at=NULL WHERE id=?",
-                (status, started, work_id),
-            )
-        elif finished is not None:
-            await conn.execute(
-                "UPDATE work_sessions SET status=?, finished_at=? WHERE id=?",
-                (status, finished, work_id),
-            )
-        else:
-            await conn.execute("UPDATE work_sessions SET status=? WHERE id=?", (status, work_id))
-        for key, value in fields.items():
-            if key in {"active_step", "summary", "requires_action", "root_message_id", "channel_id", "run_id"}:
-                await conn.execute(f"UPDATE work_sessions SET {key}=? WHERE id=?", (value, work_id))
-        await conn.commit()
+# Payload keys that must never leak to the UI event stream.
+_SENSITIVE_KEYS = frozenset({
+    "secret", "api_key", "api_secret", "access_token", "refresh_token",
+    "hidden_prompt", "password", "token", "authorization", "client_secret",
+    "set_cookie",
+})
+
+
+def _strip_sensitive(payload: dict[str, Any] | None) -> dict[str, Any]:
+    safe = dict(payload or {})
+    for key in _SENSITIVE_KEYS:
+        safe.pop(key, None)
+    return safe
 
 
 async def append_event(
@@ -178,12 +167,7 @@ async def append_event(
     if event_type not in ALLOWED_TYPES:
         raise ValueError(f"unsupported work event type: {event_type}")
     # Strip anything that must never leak to the UI.
-    safe = dict(payload or {})
-    safe.pop("secret", None)
-    safe.pop("api_key", None)
-    safe.pop("access_token", None)
-    safe.pop("refresh_token", None)
-    safe.pop("hidden_prompt", None)
+    safe = _strip_sensitive(payload)
     async with _event_lock:
         async with aiosqlite.connect(db.DB_PATH) as conn:
             cur = await conn.execute(
@@ -272,7 +256,8 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
                 wtype = mapping.get(re.get("event_type", ""), "tool_finished")
                 events.append({
                     "work_id": work_id, "seq": base + idx, "type": wtype,
-                    "step_id": re.get("step_id"), "payload": re.get("payload") or {},
+                    "step_id": re.get("step_id"),
+                    "payload": _strip_sensitive(re.get("payload")),
                     "created_at": re.get("created_at"), "via_run": run_id,
                 })
             events = [e for e in events if e["seq"] > after]
@@ -282,7 +267,6 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
 
 async def link_message(work_id: str, message_id: int) -> bool:
     """Idempotent message-to-work linking. Returns True if newly linked."""
-    from . import v2 as _v2  # noqa: F401  (keeps import surface stable)
     async with aiosqlite.connect(db.DB_PATH) as conn:
         cur = await conn.execute(
             "INSERT OR IGNORE INTO work_message_links(work_id, message_id) VALUES(?,?)",

@@ -5,6 +5,7 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
   const [draft, setDraft] = useState("");
   const [mention, setMention] = useState({ open: false, index: 0, items: [], query: "" });
   const [slash, setSlash] = useState({ open: false, index: 0 });
+  const [sending, setSending] = useState(false);
   const inputRef = useRef(null);
   const mentionRef = useRef(null);
 
@@ -80,13 +81,26 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
 
   async function send() {
     const text = draft.trim();
-    if (!text) return;
-    const ok = await onSend(text);
-    if (ok === false) return;
-    setDraft("");
-    setMention({ open: false, index: 0, items: [], query: "" });
-    setSlash({ open: false, index: 0 });
+    if (!text || sending) return; // lock while the send is in flight
+    setSending(true);
+    try {
+      const ok = await onSend(text);
+      if (ok === false) return;
+      setDraft("");
+      setMention({ open: false, index: 0, items: [], query: "" });
+      setSlash({ open: false, index: 0 });
+    } finally {
+      setSending(false);
+    }
   }
+
+  // Auto-grow the input up to a cap instead of a fixed single row.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [draft]);
 
   useEffect(() => {
     if (mention.open && mentionRef.current) {
@@ -168,8 +182,8 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
           type="button"
           className={`composer-send-btn ${canSend ? "ready" : ""}`}
           onClick={send}
-          disabled={!canSend}
-          aria-label={canSend ? "Send message" : "Voice input"}
+          disabled={!canSend || sending}
+          aria-label={sending ? "Sending…" : canSend ? "Send message" : "Voice input"}
         >
           {canSend ? (
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">

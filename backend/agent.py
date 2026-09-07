@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -35,16 +36,7 @@ MEMORY_INJECT_LIMIT = 12
 RETRY_DELAY_SECONDS = 0.8
 CUTOFF_NOTE = "\n\n[reply cut off]"
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEMO_STREAM_DELAY = 0.012
-_GROQ_TO_OPENROUTER = {
-    "openai/gpt-oss-120b": "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b": "openai/gpt-oss-20b",
-    "qwen/qwen3.6-27b": "qwen/qwen3.6-27b",
-    "llama-3.3-70b-versatile": "meta-llama/llama-3.3-70b-instruct",
-    "llama-3.1-8b-instant": "meta-llama/llama-3.1-8b-instruct",
-    "llama-3.1-70b-versatile": "meta-llama/llama-3.1-70b-instruct",
-}
 
 
 def _default_sandbox_dir() -> str:
@@ -164,60 +156,6 @@ def find_mentioned_teams(body: str, teams: list[dict[str, Any]]) -> list[dict[st
     return [t for _, t in hits]
 
 
-def _env_key(name: str) -> str:
-    return (os.environ.get(name) or "").strip().strip('"').strip("'")
-
-
-async def _groq_api_key() -> str | None:
-    key = _env_key("GROQ_API_KEY")
-    if key:
-        return key
-    try:
-        from .ai_support.store import resolve_key
-        return await resolve_key("groq", env_fallback="GROQ_API_KEY")
-    except Exception:  # noqa: BLE001
-        return None
-
-
-async def _openrouter_api_key() -> str | None:
-    key = _env_key("OPENROUTER_API_KEY")
-    if key:
-        return key
-    try:
-        from .ai_support.store import resolve_key
-        return await resolve_key("openrouter", env_fallback="OPENROUTER_API_KEY")
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _groq_client(api_key: str):
-    # Use OpenAI SDK with Groq's OpenAI-compatible base to avoid the
-    # Groq SDK's hardcoded /openai/v1 prefix doubling (was /openai/v1/openai/v1/models).
-    from openai import AsyncOpenAI
-
-    return AsyncOpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
-
-
-def _openrouter_client(api_key: str):
-    from openai import AsyncOpenAI
-
-    return AsyncOpenAI(
-        api_key=api_key,
-        base_url=OPENROUTER_BASE_URL,
-        default_headers={
-            "HTTP-Referer": "http://localhost:8000",
-            "X-Title": "swarm",
-        },
-    )
-
-
-def openrouter_model(groq_model: str) -> str:
-    override = _env_key("OPENROUTER_MODEL")
-    if override:
-        return override
-    return _GROQ_TO_OPENROUTER.get(groq_model, groq_model)
-
-
 def _langfuse_client():
     if not os.environ.get("LANGFUSE_PUBLIC_KEY") or not os.environ.get("LANGFUSE_SECRET_KEY"):
         return None
@@ -264,37 +202,6 @@ def _run_shell_tool(command: str) -> str:
         return f"(timed out after {SHELL_TIMEOUT_SECONDS}s)"
     except Exception as exc:  # noqa: BLE001
         return f"(shell error: {exc})"
-
-
-async def _run_search_tool(query: str, channel_id: str) -> str:
-    rows = await db.search_history(channel_id, query, limit=10)
-    if not rows:
-        return "(no matches)"
-    lines = [f"[{r['author']}] {r['body'][:200]}" for r in rows]
-    return "\n".join(lines)
-
-
-async def _run_remember_tool(
-    agent_name: str, channel_id: str, body: str, scope: str
-) -> str:
-    text = (body or "").strip()
-    if not text:
-        return "(nothing to remember)"
-    scoped = None if scope == "global" else channel_id
-    row = await db.add_memory(agent_name, text[:2000], channel_id=scoped, kind="note")
-    where = "globally" if scoped is None else f"in #{channel_id}"
-    return f"remembered {where} (id {row['id']})"
-
-
-async def _run_recall_tool(agent_name: str, channel_id: str, query: str) -> str:
-    rows = await db.search_memory(agent_name, query, channel_id=channel_id, limit=10)
-    if not rows:
-        return "(no matching notes)"
-    lines = []
-    for r in rows:
-        scope = "global" if r["channel_id"] is None else f"#{r['channel_id']}"
-        lines.append(f"[{scope}] {r['body'][:200]}")
-    return "\n".join(lines)
 
 
 def list_workspace_files(limit: int = 100) -> list[dict[str, Any]]:
@@ -555,11 +462,12 @@ async def _complete_stream(
     *,
     tool_schemas: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]], Any]:
-    """Stream one completion. If the model emits tool calls, tokens are not
-    forwarded and assembled tool_calls are returned. Otherwise tokens are
-    forwarded live and content is returned. A mid-stream failure with
-    partial content returns that content plus a cutoff note instead of
-    raising."""
+    """Stream one completion. If the model emits tool calls, live token
+    forwarding stops but narration is still accumulated so the assistant
+    message keeps it. Tool calls with a missing id get a synthesized one so
+    the follow-up `tool` message always has a valid `tool_call_id`.
+    A mid-stream failure with partial content returns that content plus a
+    cutoff note instead of raising."""
     kwargs: dict[str, Any] = dict(
         model=model, messages=messages, temperature=0.4, stream=True,
     )
@@ -604,12 +512,16 @@ async def _complete_stream(
                             slot["name"] += fn.name
                         if fn.arguments:
                             slot["arguments"] += fn.arguments
-            elif delta.content and not saw_tools:
+            elif delta.content:
+                content += delta.content
+                if saw_tools:
+                    # Narration alongside tool calls: keep it for the
+                    # assistant message, but don't stream it live.
+                    continue
                 if not started:
                     if on_stream_start is not None:
                         await on_stream_start()
                     started = True
-                content += delta.content
                 if on_token is not None:
                     await on_token(delta.content)
     except Exception:
@@ -621,7 +533,11 @@ async def _complete_stream(
         raise
 
     tool_calls = [
-        {"id": slot["id"], "name": slot["name"], "arguments": slot["arguments"]}
+        {
+            "id": slot["id"] or f"tc_{uuid.uuid4().hex[:12]}",
+            "name": slot["name"],
+            "arguments": slot["arguments"],
+        }
         for _, slot in sorted(tool_acc.items())
         if slot["name"]
     ]
@@ -727,12 +643,11 @@ async def _run_with_client(
 
         remaining = cap - len(tool_events)
         if remaining <= 0:
-            await announce_tools()
-            return {
-                "reply": await _closing_after_cap(
-                    client, model, messages, stream_start_after_tools, on_token, cap),
-                "tool_events": tool_events, "usage": usage_total,
-            }
+            return await _finish_at_cap(
+                announce_tools, client, model, messages,
+                stream_start_after_tools, on_token, cap,
+                tool_events, usage_total,
+            )
 
         selected_tool_calls = tool_calls[:remaining]
         messages.append({
@@ -753,6 +668,12 @@ async def _run_with_client(
                 args = _json.loads(tc["arguments"] or "{}")
             except _json.JSONDecodeError:
                 args = {}
+                result = "(malformed tool arguments: not valid JSON)"
+                tool_events.append({"tool": tc["name"], "args": {}, "result": result})
+                messages.append({
+                    "role": "tool", "tool_call_id": tc["id"], "content": result,
+                })
+                continue
             result = await _execute_tool(
                 tc["name"], args,
                 agent_name=agent_row["name"],
@@ -765,16 +686,35 @@ async def _run_with_client(
             })
 
         if len(selected_tool_calls) < len(tool_calls):
-            await announce_tools()
-            return {
-                "reply": await _closing_after_cap(
-                    client, model, messages, stream_start_after_tools, on_token, cap),
-                "tool_events": tool_events, "usage": usage_total,
-            }
+            return await _finish_at_cap(
+                announce_tools, client, model, messages,
+                stream_start_after_tools, on_token, cap,
+                tool_events, usage_total,
+            )
 
     await announce_tools()
     return {
         "reply": "(gave up after too many tool-call rounds)",
+        "tool_events": tool_events, "usage": usage_total,
+    }
+
+
+async def _finish_at_cap(
+    announce_tools: Any,
+    client: Any,
+    model: str,
+    messages: list[dict[str, Any]],
+    on_stream_start: OnStreamStart | None,
+    on_token: OnToken | None,
+    cap: int,
+    tool_events: list[dict[str, Any]],
+    usage_total: dict[str, Any],
+) -> dict[str, Any]:
+    """Shared cap-hit exit: announce tools, run the final no-tools round."""
+    await announce_tools()
+    return {
+        "reply": await _closing_after_cap(
+            client, model, messages, on_stream_start, on_token, cap),
         "tool_events": tool_events, "usage": usage_total,
     }
 
