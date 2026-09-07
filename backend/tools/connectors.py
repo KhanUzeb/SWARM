@@ -202,7 +202,10 @@ async def exa_search(query: str, *, num_results: int = 5) -> str:
     q = (query or "").strip()
     if len(q) < 2:
         return "(need a search query)"
-    n = max(1, min(int(num_results or 5), 10))
+    try:
+        n = max(1, min(int(num_results or 5), 10))
+    except (TypeError, ValueError):
+        n = 5
     try:
         data = _http_json(
             "POST",
@@ -246,7 +249,10 @@ async def tavily_search(query: str, *, max_results: int = 5) -> str:
     q = (query or "").strip()
     if len(q) < 2:
         return "(need a search query)"
-    n = max(1, min(int(max_results or 5), 10))
+    try:
+        n = max(1, min(int(max_results or 5), 10))
+    except (TypeError, ValueError):
+        n = 5
     try:
         data = _http_json(
             "POST",

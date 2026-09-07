@@ -701,7 +701,10 @@ class ToolRegistry:
         if name == "fetch_url":
             return _fetch_url_text(args.get("url", ""))
         if name == "channel_digest":
-            limit = int(args.get("limit") or 12)
+            try:
+                limit = int(args.get("limit") or 12)
+            except (TypeError, ValueError):
+                limit = 12
             limit = max(1, min(limit, 30))
             rows = await db.get_history(channel_id, limit)
             lines = []
@@ -806,7 +809,11 @@ class ToolRegistry:
             except (KeyError, ValueError) as exc:
                 return f"(template error: {exc})"
         if handler == "http_get":
-            url = (config.get("url") or "").format(**{k: str(v) for k, v in args.items()})
+            try:
+                url = (config.get("url") or "").format(
+                    **{k: str(v) for k, v in args.items()})
+            except (KeyError, IndexError, ValueError) as exc:
+                return f"(template error: {exc})"
             return _fetch_url_text(url)
         if handler == "echo":
             return json.dumps(args, ensure_ascii=False)[:4000]
@@ -829,10 +836,18 @@ class ToolRegistry:
             except (KeyError, ValueError) as exc:
                 return f"(plugin template error: {exc})"
         if htype == "http_get":
-            url = (handler.get("url") or "").format(**{k: str(v) for k, v in args.items()})
+            try:
+                url = (handler.get("url") or "").format(
+                    **{k: str(v) for k, v in args.items()})
+            except (KeyError, IndexError, ValueError) as exc:
+                return f"(plugin template error: {exc})"
             return _fetch_url_text(url)
         if htype == "shell":
-            cmd = (handler.get("command") or "").format(**{k: str(v) for k, v in args.items()})
+            try:
+                cmd = (handler.get("command") or "").format(
+                    **{k: str(v) for k, v in args.items()})
+            except (KeyError, IndexError, ValueError) as exc:
+                return f"(plugin template error: {exc})"
             try:
                 result = subprocess.run(
                     cmd, shell=True, capture_output=True, text=True, timeout=10,
