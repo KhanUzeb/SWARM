@@ -336,3 +336,16 @@ def test_work_messages_endpoint_returns_full_messages(client, auth, monkeypatch)
     assert any(m.get("author") == "swarm" and m.get("body") == "linked reply body"
                and "reactions" in m for m in msgs.json())
     assert client.get("/api/work/work_nope/messages", headers=auth).status_code == 404
+
+
+def test_work_event_payloads_strip_sensitive_keys():
+    dirty = {
+        "summary": "ok", "secret": "s", "api_key": "k", "api_secret": "k2",
+        "access_token": "a", "refresh_token": "r", "hidden_prompt": "h",
+        "password": "p", "token": "t", "authorization": "auth",
+        "client_secret": "c", "set_cookie": "ck",
+    }
+    clean = work._strip_sensitive(dirty)
+    assert clean == {"summary": "ok"}
+    assert set(dirty) - {"summary"}  # input untouched in shape (all keys still present)
+

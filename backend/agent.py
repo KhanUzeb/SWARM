@@ -727,12 +727,11 @@ async def _run_with_client(
 
         remaining = cap - len(tool_events)
         if remaining <= 0:
-            await announce_tools()
-            return {
-                "reply": await _closing_after_cap(
-                    client, model, messages, stream_start_after_tools, on_token, cap),
-                "tool_events": tool_events, "usage": usage_total,
-            }
+            return await _finish_at_cap(
+                announce_tools, client, model, messages,
+                stream_start_after_tools, on_token, cap,
+                tool_events, usage_total,
+            )
 
         selected_tool_calls = tool_calls[:remaining]
         messages.append({
@@ -765,16 +764,35 @@ async def _run_with_client(
             })
 
         if len(selected_tool_calls) < len(tool_calls):
-            await announce_tools()
-            return {
-                "reply": await _closing_after_cap(
-                    client, model, messages, stream_start_after_tools, on_token, cap),
-                "tool_events": tool_events, "usage": usage_total,
-            }
+            return await _finish_at_cap(
+                announce_tools, client, model, messages,
+                stream_start_after_tools, on_token, cap,
+                tool_events, usage_total,
+            )
 
     await announce_tools()
     return {
         "reply": "(gave up after too many tool-call rounds)",
+        "tool_events": tool_events, "usage": usage_total,
+    }
+
+
+async def _finish_at_cap(
+    announce_tools: Any,
+    client: Any,
+    model: str,
+    messages: list[dict[str, Any]],
+    on_stream_start: OnStreamStart | None,
+    on_token: OnToken | None,
+    cap: int,
+    tool_events: list[dict[str, Any]],
+    usage_total: dict[str, Any],
+) -> dict[str, Any]:
+    """Shared cap-hit exit: announce tools, run the final no-tools round."""
+    await announce_tools()
+    return {
+        "reply": await _closing_after_cap(
+            client, model, messages, on_stream_start, on_token, cap),
         "tool_events": tool_events, "usage": usage_total,
     }
 
