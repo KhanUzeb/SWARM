@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import backend.agent as agent
 import backend.db as db
@@ -44,6 +45,11 @@ def test_retry_agent_message_deletes_error_and_reruns(client, auth, monkeypatch)
 
     history = client.get("/api/channels/general/messages", headers=auth).json()
     assert not any(m["id"] == error_msg["id"] for m in history)
+    # The re-run happens on a background task after durable session
+    # bookkeeping, so poll instead of assuming instant completion.
+    deadline = time.time() + 10.0
+    while ran["count"] == 0 and time.time() < deadline:
+        time.sleep(0.1)
     assert ran["count"] == 1
 
 

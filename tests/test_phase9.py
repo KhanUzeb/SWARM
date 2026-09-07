@@ -27,7 +27,7 @@ def test_seeded_harness(client, auth):
     assert "read_only_shell" not in agents["ledger"]["tools"]
     assert "computer_run" not in agents["ledger"]["tools"]
     assert agents["swarm"]["history_window"] == 12
-    assert agents["ledger"]["max_tool_calls"] == 3
+    assert agents["ledger"]["max_tool_calls"] == 6
     assert agents["swarm"]["model"] == DEFAULT_GROQ_MODEL
     assert agents["ledger"]["model"] == DEFAULT_GROQ_MODEL
 
@@ -192,6 +192,47 @@ def test_tool_cap_applies_to_batched_calls(monkeypatch):
     assert len(executed) == 1
     assert len(result["tool_events"]) == 1
     assert "tool-call cap" in result["reply"]
+
+
+def test_tool_budget_defaults_and_hard_cap():
+    from backend.models import AgentPatch
+    assert agent.max_tool_calls_of({}) == agent.MAX_TOOL_CALLS == 6
+    assert agent.max_tool_calls_of({"max_tool_calls": 2}) == 2
+    assert agent.max_tool_calls_of({"max_tool_calls": 99}) == agent.TOOL_CALL_HARD_CAP == 12
+    assert AgentCreate(name="x", system_prompt="hi").max_tool_calls == 6
+    assert AgentPatch(max_tool_calls=12).max_tool_calls == 12
+    try:
+        AgentPatch(max_tool_calls=13)
+    except Exception:  # noqa: BLE001 — pydantic ValidationError
+        pass
+    else:
+        raise AssertionError("max_tool_calls=13 should be rejected")
+
+
+def test_cap_hit_closes_with_summary(monkeypatch):
+    calls = []
+
+    async def fake_complete(client, model, messages, on_start=None, on_token=None, tool_schemas=None):
+        calls.append(bool(tool_schemas))
+        if len(calls) <= 2:
+            # Work round, then a capped round that still wants tools.
+            return "", [{"id": "1", "name": "read", "arguments": "{}"}], None
+        return "did the thing, one step left", [], None
+
+    async def fake_tool(*_args, **_kwargs):
+        return "ok"
+
+    monkeypatch.setattr(agent, "_complete_stream", fake_complete)
+    monkeypatch.setattr(agent, "_execute_tool", fake_tool)
+    row = {"name": "swarm", "max_tool_calls": 1}
+    result = asyncio.run(agent._run_with_client(
+        object(), "model", row, "general", [], use_tools=True,
+        allowed=["read"], on_tools_ready=None, on_stream_start=None,
+        on_token=None, trace=None,
+    ))
+    assert len(result["tool_events"]) == 1
+    assert result["reply"] == "did the thing, one step left"
+    assert len(calls) == 3  # work round, capped round, no-tools closing round
 
 
 def test_classified_error_when_no_provider(client, monkeypatch):

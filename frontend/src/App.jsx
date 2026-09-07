@@ -15,6 +15,9 @@ import { ComputerPanel } from "./components/ComputerPanel.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { CommandCenter, RunMonitor } from "./components/CommandCenter.jsx";
+import { KnowledgeView } from "./components/KnowledgeView.jsx";
+import { WorkRail, WorkRailSheet, WorkDetail } from "./components/WorkRail.jsx";
+import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js";
 
 const PANEL_GROUPS = [
   { id: "places", label: "Places", tabs: [
@@ -63,6 +66,11 @@ export default function App() {
   const [quickAction, setQuickAction] = useState(null);
   const [retryingId, setRetryingId] = useState(null);
   const [sendFailure, setSendFailure] = useState(null);
+  const [contextStats, setContextStats] = useState(null);
+  const [contextError, setContextError] = useState(false);
+  const [workRailOpen, setWorkRailOpen] = useState(() => localStorage.getItem("swarm_work_rail") !== "0");
+  const [selectedWork, setSelectedWork] = useState(null);
+  const [streamingAgents, setStreamingAgents] = useState({});
 
   const wsRef = useRef(null);
   const wsGen = useRef(0);
@@ -73,6 +81,8 @@ export default function App() {
   const tokenRef = useRef(token);
   const channelRef = useRef(channel);
   tokenRef.current = token; channelRef.current = channel;
+  const ingestWorkEventRef = useRef(null);
+  const handleChannelDeletedRef = useRef(null);
 
   const current = channels.find(c => c.id === channel) || { id: channel, name: channel, topic: "" };
   const bot = allAgents.find(a => a.dm_channel_id === channel);
@@ -81,6 +91,22 @@ export default function App() {
   const peopleDms = channels.filter(c => c.kind === "people");
   const roots = order.map(id => messages[id]).filter(Boolean);
   const pendingHere = approvals.filter(a => a.status === "pending" && a.channel_id === channel);
+
+  const { sessions: workSessions, eventsByWork, connected: workConnected, error: workError, refresh: refreshWork, ingestWorkEvent } = useWorkSessions(token);
+  const activeWork = workSessions.filter(s => WORK_ACTIVE.has(s.status));
+  const workAttention = workSessions.filter(s => s.requires_action || s.status === "waiting_for_approval");
+  const activeWorkHere = activeWork.filter(s => !s.channel_id || s.channel_id === channel);
+  const workingWith = [...new Set(
+    activeWorkHere.flatMap(s => (eventsByWork[s.id] || []).map(e => e.payload?.agent).filter(Boolean))
+  )];
+  const workByMessage = {};
+  for (const s of workSessions) {
+    for (const e of eventsByWork[s.id] || []) {
+      if (e.type === "message_linked" && e.payload?.message_id) workByMessage[e.payload.message_id] = s;
+    }
+  }
+  ingestWorkEventRef.current = ingestWorkEvent;
+  handleChannelDeletedRef.current = handleChannelDeleted;
 
   const flash = useCallback((msg, type = "info", title) => {
     setToast({ msg, type, title });
@@ -127,16 +153,30 @@ export default function App() {
       });
       return;
     }
-    if (m.author_kind === "agent") { setTyping(""); }
+    if (m.author_kind === "agent") {
+      setTyping("");
+      setStreamingAgents(prev => {
+        if (!prev[m.author]) return prev;
+        const next = { ...prev };
+        delete next[m.author];
+        return next;
+      });
+    }
     setOrder(prev => (prev.includes(m.id) ? prev : [...prev, m.id]));
     if (m.author_kind === "system") loadComputer();
   }, []);
 
   // ── Data Loaders ──
+  function authError(message, status) {
+    const err = new Error(message);
+    err.status = status;
+    return err;
+  }
+
   async function loadChannels() {
     if (!tokenRef.current) return [];
     const res = await apiJson("/api/channels", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
-    if (!res.ok) throw new Error("channels");
+    if (!res.ok) throw authError("channels", res.status);
     setChannels(res.data);
     return res.data;
   }
@@ -184,6 +224,17 @@ export default function App() {
     } catch { setComputer(null); }
   }
 
+  async function loadContextStats(channelId) {
+    if (!tokenRef.current) return;
+    try {
+      const agentName = bot?.name || allAgents[0]?.name;
+      const path = `/api/channels/${channelId}/context${agentName ? `?agent=${encodeURIComponent(agentName)}` : ""}`;
+      const res = await apiJson(path, { token: tokenRef.current });
+      if (res.ok) { setContextStats(res.data); setContextError(false); }
+      else setContextError(true);
+    } catch { setContextError(true); }
+  }
+
   async function loadTeams() {
     if (!tokenRef.current) return;
     try {
@@ -197,7 +248,7 @@ export default function App() {
     const params = new URLSearchParams({ limit: String(HISTORY_LIMIT) });
     if (beforeId) params.set("before_id", String(beforeId));
     const res = await apiJson(`/api/channels/${channelId}/messages?${params}`, { token: tokenRef.current });
-    if (!res.ok) throw new Error("history");
+    if (!res.ok) throw authError("history", res.status);
     return res.data;
   }
 
@@ -231,8 +282,14 @@ export default function App() {
       const history = await loadHistory(channelId);
       applyHistory(history);
       await Promise.all([loadAgents(channelId), loadComputer(), loadApprovals()]);
+      loadContextStats(channelId);
     } catch (e) {
-      flash("Failed to load messages", "error");
+      if (e?.status === 401) {
+        flash("Session expired — please sign in again", "warning");
+        handleLogout();
+      } else {
+        flash("Failed to load messages", "error");
+      }
     } finally { setLoadingLog(false); }
   }
 
@@ -256,7 +313,17 @@ export default function App() {
       let msg; try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.type === "message" || msg.type === "live") ingestLive(msg.message || msg.data || msg);
       else if (msg.type === "message_deleted" || msg.type === "reaction") ingestLive(msg);
+      else if (msg.type === "channel_deleted" && msg.channel_id) handleChannelDeletedRef.current?.(msg.channel_id);
       else if (msg.type === "typing") setTyping(msg.author);
+      else if (msg.type === "work" && msg.event) ingestWorkEventRef.current?.(msg.event);
+      else if (msg.type === "agent_stream_start" && msg.author) {
+        setStreamingAgents(prev => ({ ...prev, [msg.author]: true }));
+        setTyping(msg.author);
+      }
+      else if (msg.type === "agent_token" && msg.author) {
+        setStreamingAgents(prev => ({ ...prev, [msg.author]: true }));
+        setTyping(msg.author);
+      }
       else if (msg.type === "status") { /* agent status updates */ }
       else if (msg.type === "error") flash(msg.detail || "Error", "error");
     };
@@ -320,7 +387,16 @@ export default function App() {
           await Promise.all([loadChannels(), loadAllAgents(), loadTeams()]);
           await loadChannelMessages(channelRef.current);
           connectWs();
-        } catch (e) { flash("Failed to initialize", "error"); }
+        } catch (e) {
+          if (e?.status === 401) {
+            // Stored token is stale (rotated or DB reset) — drop it and
+            // send the user back to sign-in instead of a dead error state.
+            flash("Session expired — please sign in again", "warning");
+            handleLogout();
+          } else {
+            flash("Failed to initialize", "error");
+          }
+        }
       })();
     }
     return () => disconnectWs();
@@ -339,7 +415,11 @@ export default function App() {
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdOpen(true); }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c" && user) { e.preventDefault(); setComputerOpen(o => !o); }
-      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "w" && user) {
+        e.preventDefault();
+        setWorkRailOpen(o => { localStorage.setItem("swarm_work_rail", o ? "0" : "1"); return !o; });
+      }
+      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); setSelectedWork(null); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -359,6 +439,7 @@ export default function App() {
       }
       setSendFailure(prev => (prev?.text === text && prev?.parentId === parentId ? null : prev));
       remember(res.data);
+      loadContextStats(channelRef.current);
       return true;
     } catch {
       setSendFailure({ text, parentId, detail: "Network error — check your connection" });
@@ -408,12 +489,36 @@ export default function App() {
   async function onDelete(m) {
     const res = await apiJson(`/api/messages/${m.id}`, { token: tokenRef.current, method: "DELETE" });
     if (res.ok) flash("Message deleted", "info");
-    else flash("Could not delete message", "error");
+    else flash(res.data?.detail || "Could not delete message", "error");
+  }
+
+  async function onDeleteChannel(channelId) {
+    const target = channels.find(c => c.id === channelId);
+    if (!target || target.kind === "dm") return;
+    if (!window.confirm(`Delete #${target.name}? All of its messages will be removed.`)) return;
+    const res = await apiJson(`/api/channels/${channelId}`, { token: tokenRef.current, method: "DELETE" });
+    if (res.ok) {
+      flash(`Deleted #${target.name}`, "info");
+      handleChannelDeleted(channelId);
+    }
+    else flash(res.data?.detail || "Could not delete channel", "error");
+  }
+
+  function handleChannelDeleted(channelId) {
+    setChannels(prev => prev.filter(c => c.id !== channelId));
+    if (channelRef.current === channelId) {
+      setChannel(prev => {
+        if (prev !== channelId) return prev;
+        const fallback = channels.find(c => c.id !== channelId);
+        return fallback ? fallback.id : "general";
+      });
+    }
   }
 
   async function onResolveApproval(id, decision) {
-    const res = await apiJson(`/api/approvals/${id}`, { token: tokenRef.current, method: "PATCH", body: { status: decision } });
+    const res = await apiJson(`/api/approvals/${id}/resolve`, { token: tokenRef.current, method: "POST", body: { status: decision } });
     if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); }
+    else flash(res.data?.detail || "Approval failed", "error");
   }
 
   // ── Command palette commands ──
@@ -436,7 +541,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app ${threadId ? "thread-open" : ""} ${computerOpen ? "computer-open" : ""}`}>
+    <div className={`app workspace ${threadId ? "thread-open" : ""} ${computerOpen ? "computer-open" : ""} ${workRailOpen ? "work-rail-open" : ""}`}>
       <Sidebar
         user={user}
         channels={channels}
@@ -453,6 +558,7 @@ export default function App() {
         onNewAgent={() => setQuickAction("agent")}
         onLogout={handleLogout}
         onOpenSettings={() => setMainView("dashboard")}
+        onDeleteChannel={onDeleteChannel}
       />
 
       <div className="workspace-shell">
@@ -466,6 +572,16 @@ export default function App() {
           currentView={mainView}
           approvals={approvals}
           onResolveApproval={onResolveApproval}
+          wsStatus={wsStatus}
+          workActive={activeWorkHere}
+          workAttention={workAttention}
+          workConnected={workConnected}
+          workRailOpen={workRailOpen}
+          onToggleWorkRail={() => setWorkRailOpen(o => {
+            localStorage.setItem("swarm_work_rail", o ? "0" : "1");
+            return !o;
+          })}
+          participants={[...new Set(order.map(id => messages[id]?.author).filter(Boolean))]}
         />
 
         <main id="main">
@@ -486,6 +602,10 @@ export default function App() {
               replyCounts={replyCounts}
               reactions={reactions}
               channelId={channel}
+              streamingAgents={streamingAgents}
+              workByMessage={workByMessage}
+              eventsByWork={eventsByWork}
+              canModerate={meRole === "admin"}
               onLoadMore={async () => {
                 if (loadingLog || order.length === 0) return;
                 setLoadingLog(true);
@@ -512,6 +632,7 @@ export default function App() {
           {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
           {mainView === "files" && <FilesView computer={computer} />}
           {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => setChannel(id)} />}
+          {mainView === "knowledge" && <KnowledgeView token={token} flash={flash} />}
         </main>
 
         {mainView === "talk" && (
@@ -530,12 +651,77 @@ export default function App() {
               channelName={current.name}
               agents={agents}
               placeholder={`Message ${current.name}…`}
+              workingWith={workingWith}
+              offline={wsStatus === "offline"}
+              sendFailed={!!sendFailure && !threadId}
+              contextStats={contextStats}
+              contextError={contextError}
+              onRefreshContext={() => loadContextStats(channelRef.current)}
             />
           </>
         )}
       </div>
 
+      <WorkRail
+        sessions={mainView === "talk" ? workSessions.filter(s => !s.channel_id || s.channel_id === channel) : workSessions}
+        eventsByWork={eventsByWork}
+        agents={allAgents}
+        approvals={approvals}
+        token={token}
+        channelId={channel}
+        selectedWork={selectedWork}
+        onSelectWork={setSelectedWork}
+        onCancelWork={refreshWork}
+        onResolveApproval={async (approvalId, decision) => {
+          if (approvalId) {
+            const res = await apiJson(`/api/approvals/${approvalId}/resolve`, {
+              token: tokenRef.current, method: "POST", body: { status: decision },
+            });
+            if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); refreshWork(); }
+            else flash(res.data?.detail || "Approval failed", "error");
+          }
+        }}
+        onOpenThread={onReply}
+        collapsed={!workRailOpen}
+        connected={workConnected}
+        error={workError}
+        onRetry={refreshWork}
+        onToggle={() => setWorkRailOpen(o => {
+          localStorage.setItem("swarm_work_rail", o ? "0" : "1");
+          return !o;
+        })}
+      />
+
       {selectedRun && <RunMonitor token={token} run={selectedRun} onClose={() => setSelectedRun(null)} />}
+      {selectedWork && (() => {
+        const detail = workSessions.find(s => s.id === selectedWork);
+        if (!detail) return null;
+        return (
+          <WorkRailSheet open onClose={() => setSelectedWork(null)}>
+            <WorkDetail
+              session={detail}
+              events={eventsByWork[detail.id] || []}
+              token={token}
+              agents={allAgents}
+              approvals={approvals}
+              onCancel={async () => {
+                try { await cancelWork(tokenRef.current, detail.id); refreshWork(); }
+                catch { flash("Could not cancel work", "error"); }
+              }}
+              onResolveApproval={async (approvalId, decision, session) => {
+                if (!approvalId) return;
+                const res = await apiJson(`/api/approvals/${approvalId}/resolve`, {
+                  token: tokenRef.current, method: "POST", body: { status: decision },
+                });
+                if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); refreshWork(); }
+                else flash(res.data?.detail || "Approval failed", "error");
+              }}
+              onOpenThread={onReply}
+              onClose={() => setSelectedWork(null)}
+            />
+          </WorkRailSheet>
+        );
+      })()}
       {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) setChannel(id); flash("Created", "success"); }} />}
 
       {computerOpen && (
@@ -560,6 +746,8 @@ export default function App() {
           onClose={() => setThreadId(null)}
           onSend={(text) => sendMessage(text, threadId)}
           onReact={onReact}
+          onDelete={onDelete}
+          canModerate={meRole === "admin"}
           onRetry={onRetryAgent}
           retryingId={retryingId}
           sendFailure={sendFailure?.parentId === threadId ? sendFailure : null}
@@ -650,7 +838,7 @@ function AgentsView({ agents, onOpenChannel }) {
   );
 }
 
-function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions }) {
+function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions }) {
   const parent = messages[parentId];
   const replies = threadReplies.length > 0 ? threadReplies : Object.values(messages).filter(m => m.parent_id === parentId);
   const replyOrder = replies.map(r => r.id);
@@ -671,12 +859,12 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
       <ScrollArea className="thread-body">
         {parent && (
           <div className="thread-parent">
-            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onDelete={() => {}} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
           </div>
         )}
         <Divider />
         {replyOrder.length > 0 && (
-          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onDelete={() => {}} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
         )}
       </ScrollArea>
       {sendFailure && (

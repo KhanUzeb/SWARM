@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS agents (
     channel_scope   TEXT,   -- NULL = all channels, else a specific channel_id
     created_at      REAL NOT NULL,
     history_window  INTEGER NOT NULL DEFAULT 12,
-    max_tool_calls  INTEGER NOT NULL DEFAULT 3,
+    max_tool_calls  INTEGER NOT NULL DEFAULT 6,
     tools           TEXT NOT NULL DEFAULT '{_DEFAULT_TOOLS_JSON}',
     job             TEXT NOT NULL DEFAULT '{DEFAULT_JOB}',
     status          TEXT NOT NULL DEFAULT 'idle',
@@ -237,7 +237,7 @@ _DEFAULT_AGENTS = [
         DEFAULT_GROQ_MODEL,
         None,
         12,
-        3,
+        6,
         DEFAULT_TOOLS,
         "Generalist",
     ),
@@ -251,7 +251,7 @@ _DEFAULT_AGENTS = [
         DEFAULT_GROQ_MODEL,
         None,
         12,
-        3,
+        6,
         LEDGER_TOOLS,
         "Decision log",
     ),
@@ -261,7 +261,7 @@ _DEFAULT_AGENTS = [
         DEFAULT_GROQ_MODEL,
         None,
         20,
-        4,
+        8,
         DEFAULT_TOOLS,
         "Code",
     ),
@@ -311,7 +311,7 @@ def public_agent(row: dict[str, Any]) -> dict[str, Any]:
     out = dict(row)
     out["tools"] = parse_tools(out.get("tools"))
     out["history_window"] = int(out.get("history_window") or 12)
-    out["max_tool_calls"] = int(out.get("max_tool_calls") or 3)
+    out["max_tool_calls"] = int(out.get("max_tool_calls") or 6)
     out["job"] = (out.get("job") or DEFAULT_JOB).strip() or DEFAULT_JOB
     out["status"] = out.get("status") or "idle"
     handle = out.get("name") or "bot"
@@ -339,7 +339,7 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
         )
     if "max_tool_calls" not in cols:
         await db.execute(
-            "ALTER TABLE agents ADD COLUMN max_tool_calls INTEGER NOT NULL DEFAULT 3"
+            "ALTER TABLE agents ADD COLUMN max_tool_calls INTEGER NOT NULL DEFAULT 6"
         )
     if "tools" not in cols:
         await db.execute(
@@ -1109,7 +1109,7 @@ async def create_agent(
     model: str,
     channel_scope: str | None,
     history_window: int = 12,
-    max_tool_calls: int = 3,
+    max_tool_calls: int = 6,
     tools: list[str] | None = None,
     job: str = DEFAULT_JOB,
     display_name: str | None = None,
@@ -1292,6 +1292,66 @@ async def search_memory(
             )
         rows = await cur.fetchall()
         return [dict(r) for r in reversed(rows)]
+
+
+async def delete_memory(memory_id: int, agent_name: str) -> bool:
+    """Delete one memory note by id. Returns True when a row was removed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM agent_memory WHERE id = ? AND agent_name = ? AND kind = 'note'",
+            (memory_id, agent_name),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def forget_memory_by_query(
+    agent_name: str, query: str, channel_id: str | None = None
+) -> int:
+    """Delete notes matching a keyword query. Returns the removed count."""
+    needle = (query or "").strip()
+    if not needle:
+        return 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        if channel_id:
+            cur = await db.execute(
+                "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+                "AND (channel_id IS NULL OR channel_id = ?) AND body LIKE ?",
+                (agent_name, channel_id, f"%{needle}%"),
+            )
+        else:
+            cur = await db.execute(
+                "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+                "AND body LIKE ?",
+                (agent_name, f"%{needle}%"),
+            )
+        await db.commit()
+        return cur.rowcount
+
+
+async def count_memories(agent_name: str, channel_id: str | None = None) -> dict[str, int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        if channel_id:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
+                "AND (channel_id IS NULL OR channel_id = ?)",
+                (agent_name, channel_id),
+            )
+            (notes,) = await cur.fetchone()
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND channel_id = ? "
+                "AND kind = 'summary'",
+                (agent_name, channel_id),
+            )
+            (summaries,) = await cur.fetchone()
+        else:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND kind = 'note'",
+                (agent_name,),
+            )
+            (notes,) = await cur.fetchone()
+            summaries = 0
+    return {"notes": notes, "summaries": summaries}
 
 
 async def set_agent_status(name: str, status: str) -> None:

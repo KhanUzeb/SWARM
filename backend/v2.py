@@ -297,6 +297,17 @@ async def get_run(run_id: str, owner: str) -> dict[str, Any] | None:
     return row
 
 
+async def get_run_any_owner(run_id: str) -> dict[str, Any] | None:
+    """Owner-blind run lookup for startup recovery only (never exposed via API)."""
+    async with aiosqlite.connect(db.DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute("SELECT * FROM runs WHERE id=?", (run_id,))
+        row = _row(await cur.fetchone())
+    if row:
+        row["report"] = _decode(row.get("report"), None)
+    return row
+
+
 async def update_run(run_id: str, owner: str, status: str, *, report: dict[str, Any] | None = None) -> dict[str, Any] | None:
     now = time.time()
     started = now if status == "running" else None

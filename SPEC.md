@@ -66,15 +66,16 @@ a duplicate row or an error.
 | channel_scope   | TEXT    | nullable FK-ish → channels.id. NULL = every channel |
 | created_at      | REAL    | |
 | history_window  | INTEGER | last N channel messages injected; default 12, cap 50 |
-| max_tool_calls  | INTEGER | cap per trigger; default 3, cap 8 |
+| max_tool_calls  | INTEGER | cap per trigger; default 6, hard cap 12 |
 | tools           | TEXT    | JSON array of allowed tool names |
 | job             | TEXT    | primary job title; default `Teammate` |
 | status          | TEXT    | `idle` \| `working` \| `needs_approval` |
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
 | archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
-Allowed tool names include **30 builtins** (`read_only_shell`,
-`search_channel_history`, `remember`, `recall`, `list_workspace`,
+Allowed tool names include **33 builtins** (`read_only_shell`,
+`search_channel_history`, `remember`, `recall`, `forget`,
+`knowledge_search`, `knowledge_save`, `list_workspace`,
 `read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
 `save_skill`, `request_approval`, computer-use `computer_run` /
 `computer_open` / `computer_screenshot`, browser-use
@@ -183,6 +184,42 @@ Env vars (`GROQ_API_KEY`, `HF_TOKEN`, …) remain fallbacks.
 Indexed on `(agent_name, created_at)`. Notes are written by the
 `remember` tool. At most one `summary` row is kept per
 `(agent_name, channel_id)`: a new summary replaces the previous.
+`forget(target)` deletes one note by id or several by keyword query.
+`GET /api/agents/{name}/memory` lists notes;
+`DELETE /api/agents/{name}/memory/{id}` forgets one.
+
+### `knowledge_docs` (+ `knowledge_fts` when SQLite ships FTS5)
+
+| column     | type    | notes |
+|------------|---------|-------|
+| id         | TEXT    | PK, `kb_…` |
+| owner      | TEXT    | user handle, or `agent:<name>` for agent-saved docs |
+| channel_id | TEXT    | nullable scope; channel-scoped docs rank first |
+| title/body/tags | TEXT | body cap 32000 chars |
+| source     | TEXT    | `manual` \| `agent` |
+| created_at / updated_at | REAL | |
+
+Personal CRUD at `/api/knowledge` (+ `/search?q=`, owner-isolated).
+Agents use `knowledge_save` / `knowledge_search` (scoped to
+`agent:<name>` + channel). The reply-time context builder injects top
+hits, so saved docs improve everyday answers. When those tools are
+allowed, the system prompt adds an explicit knowledge habit
+(search before factual answers, save durable learnings), and
+channel-scoped hits are boosted: they sort first and are the last KB
+entries dropped under the char budget.
+
+### `work_sessions` / `work_events` / `work_message_links`
+
+Unified view over chat replies, v2 runs, routines, and handoffs.
+`GET /api/work`, `GET /api/work/{id}`,
+`GET /api/work/{id}/events?after=`, `GET /api/work/{id}/messages`
+(full linked message objects for the detail panel),
+`POST /api/work/{id}/cancel`.
+Events are replayable envelopes
+`{work_id, seq, type, step_id, payload, created_at}`; secrets and hidden
+prompts are stripped before storage. Run-backed sessions re-use v2 run
+events through the same envelope. Startup recovery settles sessions left
+active by a dead process (runs resume via v2 recovery instead).
 
 ### `skills`
 
@@ -487,6 +524,20 @@ reply whose `parent_id` equals that id, oldest-first, each with
 ```
 404 if the message doesn't exist.
 
+### `DELETE /api/messages/{message_id}`
+Auth required. Only the message author or an admin may delete.
+Deletes the message, its direct replies, and their reactions, then
+broadcasts `message_deleted` with all removed ids.
+
+### `GET /api/channels/{channel_id}/context` · `POST /api/channels/{channel_id}/compact`
+Auth required. Context inspects the budgeted reply package for a channel
+(`?agent=` adds memory/summary/knowledge counts and the char meter);
+compact rolls older history into the channel summary now (409 when there
+is not enough history yet). Replies are assembled by
+`backend/context.py`: recent history first, then memory notes, summary,
+and knowledge hits, trimmed oldest-first to a 12k-char budget with
+drop counts reported.
+
 ### `GET /api/status`
 No auth. Reports whether inference keys are loaded — booleans only,
 never the keys. `demo` is true when `SWARM_DEMO=1` (mock replies, no
@@ -776,6 +827,8 @@ Live `message` events from a human/agent/system write may omit
   - Each reply injects `profiles/<name>.md` or `profiles/jobs/<id>.md`.
   - Capped at the agent's `max_tool_calls` per single trigger (not
     per message — if two agents are mentioned, each gets its own cap).
+    Hitting the cap triggers one final no-tools round so the reply
+    summarizes instead of dead-ending on a cap notice.
   - Every tool call is persisted as a `system`-kind message
     (`"<agent> ran: <tool>(<args>) -> <truncated result>"`) and
     broadcast before the agent's final reply is posted. This is the
@@ -830,7 +883,7 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR1.4 | No bare 500s leaking stack traces | ✅ (all known error paths return structured JSON) |
 | FR2.1 | Shell + history-search tools via Groq function calling | ✅ |
 | FR2.2 | Every tool call posted as a channel system message | ✅ |
-| FR2.3 | 10s tool timeout, per-agent tool-call cap | ✅ (default 3, cap 8) |
+| FR2.3 | 10s tool timeout, per-agent tool-call cap | ✅ (default 6, hard cap 12) |
 | FR3.1 | `parent_id` threading | ✅ |
 | FR3.2 | Idempotent reactions | ✅ |
 | FR4.1 | `agents` table replaces hardcoded persona | ✅ |

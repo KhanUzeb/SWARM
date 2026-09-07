@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Avatar, RichBody, Tooltip } from "../ui.jsx";
 import { fmtTime, isAgentError } from "../lib.js";
 
-export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId }) {
+export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, workByMessage, eventsByWork, canModerate }) {
   const endRef = useRef(null);
   const logRef = useRef(null);
 
@@ -63,6 +63,10 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
               onRetry={onRetry}
               retrying={retryingId === m.id}
               myHandle={user?.handle}
+              streaming={!!(streamingAgents && streamingAgents[m.author])}
+              work={workByMessage?.[m.id]}
+              workEvents={(workByMessage?.[m.id] && eventsByWork?.[workByMessage[m.id].id]) || []}
+              canDelete={m.author === user?.handle || !!canModerate}
             />
           );
         })}
@@ -80,7 +84,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
   );
 }
 
-function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, onReact, onDelete, onOpenThread, onRetry, retrying, myHandle }) {
+function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, onReact, onDelete, onOpenThread, onRetry, retrying, myHandle, streaming, work, workEvents, canDelete }) {
   const counts = {};
   for (const r of reactions || []) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
   const isMe = m.author === myHandle;
@@ -116,6 +120,24 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
               ))}
             </div>
           )}
+          {!m.streaming && m.id != null && (
+            <div className="msg-actions own">
+              {!m.parent_id && (
+                <button className="msg-mini-action" onClick={() => onOpenThread(m.id)} aria-label="Open thread">
+                  Thread{replyCount > 0 ? ` (${replyCount})` : ""}
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  className="msg-mini-action danger"
+                  onClick={() => { if (window.confirm("Delete this message? Replies to it will also be removed.")) onDelete(m); }}
+                  aria-label="Delete message"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          )}
         </div>
         {!grouped && !m.parent_id && !m.streaming && replyCount > 0 && (
           <button className="thread-count" onClick={() => onOpenThread(m.id)}>
@@ -127,17 +149,36 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
   }
 
   return (
-    <div className={`msg-row ${kind} ${grouped ? "grouped" : ""} ${m.streaming ? "streaming" : ""} ${failedAgent ? "failed" : ""}`}>
+    <div className={`msg-row ${kind} ${grouped ? "grouped" : ""} ${m.streaming || streaming ? "streaming" : ""} ${failedAgent ? "failed" : ""}`}>
       <div className={`msg-bubble agent-bubble${failedAgent ? " error-bubble" : ""}`}>
         {!grouped && (
           <div className="msg-bubble-header">
             <Avatar name={label} kind={avatarKind} size="sm" />
             <span className="msg-author">{label}</span>
             {agent?.job && <span className="msg-role">{agent.job}</span>}
+            {(m.streaming || streaming) && (
+              <span className="streaming-badge" role="status" aria-label={`${label} is replying`}>
+                <span className="pulse-dot violet" aria-hidden /> streaming
+              </span>
+            )}
+            {work && (
+              <span className="msg-work-link" title={`Work: ${work.objective || work.id}`}>
+                {work.status === "waiting_for_approval" ? "· needs approval" : `· ${work.status}`}
+              </span>
+            )}
             <span className="msg-time">{fmtTime(m.created_at)}</span>
           </div>
         )}
+        {(m.streaming || streaming) && !m.body && (
+          <div className="streaming-placeholder" aria-hidden>
+            <span className="typing-dots"><span /><span /><span /></span>
+          </div>
+        )}
         <RichBody body={m.body || ""} />
+
+        {workEvents.length > 0 && (
+          <AgentTrace events={workEvents} />
+        )}
 
         {failedAgent && onRetry && (
           <div className="msg-retry-row">
@@ -159,9 +200,9 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
               </button>
             </Tooltip>
-            {onDelete && isMe && (
+            {onDelete && canDelete && (
               <Tooltip content="Delete">
-                <button className="danger" onClick={() => onDelete(m)} aria-label="Delete">
+                <button className="danger" onClick={() => { if (window.confirm("Delete this message? Replies to it will also be removed.")) onDelete(m); }} aria-label="Delete">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                 </button>
               </Tooltip>
@@ -187,4 +228,49 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
       )}
     </div>
   );
+}
+
+function AgentTrace({ events }) {
+  const tools = [];
+  const seen = new Set();
+  for (const e of events) {
+    const t = e.payload?.tool || (e.type.startsWith("tool_") ? e.step_id : null);
+    if (t && !seen.has(t)) { seen.add(t); tools.push(t); }
+  }
+  if (tools.length === 0 && events.length === 0) return null;
+  return (
+    <details className="agent-trace">
+      <summary className="agent-trace-summary">
+        {tools.length > 0 ? (
+          <span className="work-tools">
+            {tools.slice(0, 3).map(t => <span key={t} className="tool-chip">{t}</span>)}
+            {tools.length > 3 && <span className="tool-chip more">+{tools.length - 3}</span>}
+          </span>
+        ) : "Work trace"}
+        <span className="agent-trace-count">{events.length} event{events.length === 1 ? "" : "s"}</span>
+      </summary>
+      <ol className="work-timeline inline">
+        {events.map(e => (
+          <li key={e.seq} className={`work-timeline-row type-${e.type}`}>
+            <span className="work-timeline-seq">#{e.seq}</span>
+            <span className="work-timeline-label">{traceLabel(e)}</span>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+function traceLabel(e) {
+  const map = {
+    work_queued: "Queued", work_started: "Started", agent_started: `Agent ${e.payload?.agent || "working"}`,
+    tool_started: `Tool ${e.payload?.tool || e.step_id || ""} started`,
+    tool_finished: `Tool ${e.payload?.tool || e.step_id || ""} finished`,
+    approval_requested: "Approval requested — action needed",
+    approval_resolved: `Approval ${e.payload?.decision || "resolved"}`,
+    message_linked: "Reply posted", artifact_created: "Artifact created",
+    work_completed: "Completed", work_failed: `Failed${e.payload?.error ? `: ${e.payload.error.slice(0, 120)}` : ""}`,
+    work_cancelled: "Cancelled",
+  };
+  return map[e.type] || e.type;
 }

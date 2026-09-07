@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Badge, Button, Tooltip } from "../ui.jsx";
 
-export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpenCommandPalette, onViewChange, currentView, approvals, onResolveApproval }) {
+export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpenCommandPalette, onViewChange, currentView, approvals, onResolveApproval, wsStatus, workActive, workAttention, workConnected, onToggleWorkRail, workRailOpen, participants }) {
   const pendingApprovals = approvals.filter(a => a.status === "pending" && a.channel_id === channel?.id);
   const working = agents.filter(a => a.status === "working").length;
+  const attention = (workAttention || []).length;
 
   return (
     <header id="topbar">
@@ -16,12 +17,32 @@ export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpen
             <h1 className="channel-name">{channel?.name || "Select a channel"}</h1>
             {channel?.topic && <span className="channel-topic">{channel.topic}</span>}
           </div>
+          <div className="channel-presence-row">
+            <span className={`conn-state conn-${wsStatus || "offline"}`} title={`Connection: ${wsStatus || "offline"}`}>
+              <span className="conn-dot" aria-hidden />
+              {wsStatus === "connected" ? "Connected" : wsStatus === "connecting" ? "Connecting…" : "Offline"}
+            </span>
+            {(participants || []).length > 0 && (
+              <span className="presence-avatars" title={`${participants.length} participant${participants.length === 1 ? "" : "s"}`}>
+                {participants.slice(0, 4).map(p => (
+                  <span key={p} className="presence-avatar" aria-hidden>{p.charAt(0).toUpperCase()}</span>
+                ))}
+                {participants.length > 4 && <span className="presence-more">+{participants.length - 4}</span>}
+              </span>
+            )}
+            {(workActive || []).length > 0 && (
+              <span className="work-session-status" title={`${workActive.length} active work session${workActive.length === 1 ? "" : "s"}`}>
+                <span className="pulse-dot violet" aria-hidden />
+                {workActive.length} active{!workConnected ? " · replaying" : ""}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="topbar-center">
         <div className="view-tabs" role="tablist">
-          {["dashboard", "workflows", "runs", "talk"].map(v => (
+          {[["dashboard", "Overview"], ["workflows", "Workflows"], ["runs", "Runs"], ["talk", "Talk"], ["knowledge", "Knowledge"]].map(([v, label]) => (
             <button
               key={v}
               role="tab"
@@ -29,7 +50,7 @@ export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpen
               className={`view-tab ${currentView === v ? "active" : ""}`}
               onClick={() => onViewChange(v)}
             >
-              {v === "dashboard" ? "Overview" : v.charAt(0).toUpperCase() + v.slice(1)}
+              {label}
             </button>
           ))}
         </div>
@@ -56,6 +77,18 @@ export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpen
             }))}
           />
         )}
+
+        {attention > 0 && (
+          <button className="status-chip attention-chip" onClick={onToggleWorkRail} title="Open work needing attention">
+            {attention} need{attention === 1 ? "s" : ""} you
+          </button>
+        )}
+
+        <Tooltip content={workRailOpen ? "Hide work rail" : "Show work rail"}>
+          <Button variant={workRailOpen ? "primary" : "ghost"} size="sm" onClick={onToggleWorkRail} className="topbar-btn" aria-expanded={workRailOpen} aria-label="Toggle work rail">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+          </Button>
+        </Tooltip>
 
         <Tooltip content="Toggle computer panel">
           <Button variant={computerOpen ? "primary" : "ghost"} size="sm" onClick={onToggleComputer} className="topbar-btn">

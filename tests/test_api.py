@@ -271,7 +271,9 @@ def test_mention_streams_then_persists(client, auth, monkeypatch):
         ws.send_json({"body": "hey @swarm"})
         types = []
         bodies = []
-        for _ in range(8):
+        # The channel also carries work-lifecycle frames now, so read until
+        # the agent reply lands instead of assuming a fixed frame count.
+        for _ in range(30):
             event = ws.receive_json()
             types.append(event["type"])
             if event["type"] == "message" and event["message"].get("author_kind") == "agent":
