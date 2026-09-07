@@ -229,27 +229,43 @@ function Card({ children, className = "", padded = true, interactive, ...props }
   );
 }
 
-function Dropdown({ trigger, items, align = "right" }) {
+function Dropdown({ trigger, items, align = "right", label = "Menu" }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
-  
+
   useEffect(() => {
     function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function handleKey(e) { if (e.key === "Escape") setOpen(false); }
     document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
   }, []);
-  
+
   return (
     <div className="dropdown" ref={ref}>
-      <span onClick={() => setOpen(!open)}>{trigger}</span>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        onClick={() => setOpen(o => !o)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(o => !o); }
+        }}
+      >{trigger}</span>
       {open && (
-        <div className="dropdown-menu" style={{ [align]: 0 }}>
+        <div className="dropdown-menu" role="menu" style={{ [align]: 0 }}>
           {items.filter(item => item !== "divider").map((item, i) => {
             if (item === "divider") return <div key={`div-${i}`} className="dropdown-divider" />;
             if (item.section) return <div key={`sec-${i}`} className="dropdown-section">{item.section}</div>;
             return (
               <button
                 key={item.id || i}
+                role="menuitem"
                 className={`dropdown-item ${item.danger ? "danger" : ""}`}
                 onClick={() => { item.onClick?.(); setOpen(false); }}
               >

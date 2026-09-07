@@ -6,10 +6,17 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
   const [search, setSearch] = useState("");
   const [section, setSection] = useState("channels");
 
-  const rooms = channels.filter(c => c.kind === "room" || c.kind === undefined);
-  const groups = channels.filter(c => c.kind === "group");
-  const dms = channels.filter(c => c.kind === "dm");
-  const peopleDms = channels.filter(c => c.kind === "people");
+  const q = search.trim().toLowerCase();
+  const matchChannel = (c) => !q || (c.name || "").toLowerCase().includes(q);
+  const matchAgent = (a) => !q || (a.name || "").toLowerCase().includes(q)
+    || (a.display_name || "").toLowerCase().includes(q);
+
+  const rooms = channels.filter(c => (c.kind === "room" || c.kind === undefined) && matchChannel(c));
+  const groups = channels.filter(c => c.kind === "group" && matchChannel(c));
+  const dms = channels.filter(c => c.kind === "dm" && matchChannel(c));
+  const peopleDms = channels.filter(c => c.kind === "people" && matchChannel(c));
+  const matchedAgents = (agents || []).filter(matchAgent);
+  const matchedTeams = (teams || []).filter(t => !q || (t.name || "").toLowerCase().includes(q));
 
   return (
     <aside id="sidebar">
@@ -25,31 +32,33 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
       <div className="sidebar-search">
         <input
           type="search"
-          placeholder="Search…"
+          placeholder="Search channels, agents…"
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="input input-search"
-          aria-label="Search"
+          aria-label="Filter channels and agents"
         />
       </div>
 
       <ScrollArea className="sidebar-scroll">
-        <nav className="sidebar-nav">
-          <Section
-            title="Channels"
-            action={onNewChannel}
-            actionLabel="New channel"
-          >
-            {rooms.map(c => (
-              <ChannelItem
-                key={c.id}
-                channel={c}
-                active={activeChannel === c.id}
-                onClick={() => onSelectChannel(c.id)}
-                onDelete={onDeleteChannel ? () => onDeleteChannel(c.id) : null}
-              />
-            ))}
-          </Section>
+        <nav className="sidebar-nav" aria-label="Channels and agents">
+          {rooms.length > 0 && (
+            <Section
+              title="Channels"
+              action={onNewChannel}
+              actionLabel="New channel"
+            >
+              {rooms.map(c => (
+                <ChannelItem
+                  key={c.id}
+                  channel={c}
+                  active={activeChannel === c.id}
+                  onClick={() => onSelectChannel(c.id)}
+                  onDelete={onDeleteChannel ? () => onDeleteChannel(c.id) : null}
+                />
+              ))}
+            </Section>
+          )}
 
           {groups.length > 0 && (
             <Section title="Groups" action={onNewGroup} actionLabel="New group">
@@ -67,18 +76,25 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
             </Section>
           )}
 
-          <Section title="Agents" action={onNewAgent} actionLabel="New agent">
-            {agents.map(a => (
-              <AgentItem key={a.name} agent={a} active={activeChannel === a.dm_channel_id} onClick={() => onSelectChannel(a.dm_channel_id)} />
-            ))}
-          </Section>
+          {matchedAgents.length > 0 && (
+            <Section title="Agents" action={onNewAgent} actionLabel="New agent">
+              {matchedAgents.map(a => (
+                <AgentItem key={a.name} agent={a} active={activeChannel === a.dm_channel_id} onClick={() => onSelectChannel(a.dm_channel_id)} />
+              ))}
+            </Section>
+          )}
 
-          {teams.length > 0 && (
+          {matchedTeams.length > 0 && (
             <Section title="Teams" action={onNewTeam} actionLabel="New team">
-              {teams.map(t => (
+              {matchedTeams.map(t => (
                 <ChannelItem key={t.id} channel={{ id: t.id, name: t.name, kind: "team" }} active={activeChannel === t.id} onClick={() => onSelectChannel(t.id)} />
               ))}
             </Section>
+          )}
+
+          {q && rooms.length === 0 && groups.length === 0 && peopleDms.length === 0
+            && matchedAgents.length === 0 && matchedTeams.length === 0 && (
+            <p className="sidebar-empty" role="status">No matches for “{search.trim()}”.</p>
           )}
         </nav>
       </ScrollArea>
