@@ -38,7 +38,7 @@ export const ALL_TOOLS = [
   "system_read",
   "system_write",
 ];
-export const EMOJI = ["🔥", "✅", "👀", "❤️", "🎉", "👍"];
+export const EMOJI = ["👍", "❤️", "😂", "🎉", "😮", "😢", "🙏", "👀", "🔥", "✅", "🚀", "💡"];
 
 export function initials(name) {
   const parts = String(name || "?").trim().split(/\s+/);

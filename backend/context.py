@@ -165,4 +165,4 @@ async def compact_channel(channel_id: str, agent_name: str, window: int = 12) ->
     text = compact_summary(history, window)
     if not text:
         return None
-    return await db.replace_summary(agent_name, channel_id, text)
+    return await db.append_summary(agent_name, channel_id, text)

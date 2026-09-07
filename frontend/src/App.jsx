@@ -135,9 +135,18 @@ export default function App() {
       return;
     }
     if (raw?.type === "reaction") {
+      setReactions(prev => {
+        const list = prev[raw.message_id] || [];
+        if (list.some(r => r.author === raw.author && r.emoji === raw.emoji)) return prev;
+        return { ...prev, [raw.message_id]: [...list, { author: raw.author, emoji: raw.emoji }] };
+      });
+      return;
+    }
+    if (raw?.type === "reaction_removed") {
       setReactions(prev => ({
         ...prev,
-        [raw.message_id]: [...(prev[raw.message_id] || []), { author: raw.author, emoji: raw.emoji }],
+        [raw.message_id]: (prev[raw.message_id] || []).filter(
+          r => !(r.author === raw.author && r.emoji === raw.emoji)),
       }));
       return;
     }
@@ -326,6 +335,10 @@ export default function App() {
       else if (msg.type === "message_deleted" || msg.type === "reaction") ingestLive(msg);
       else if (msg.type === "channel_deleted" && msg.channel_id) handleChannelDeletedRef.current?.(msg.channel_id);
       else if (msg.type === "typing") setTyping(msg.author);
+      else if (msg.type === "agents_changed") {
+        loadChannels(); loadAllAgents(); loadTeams();
+        flash("New bot is ready — check the sidebar", "success");
+      }
       else if (msg.type === "work" && msg.event) ingestWorkEventRef.current?.(msg.event);
       else if (msg.type === "agent_stream_start" && msg.author) {
         setStreamingAgents(prev => ({ ...prev, [msg.author]: true }));
@@ -496,8 +509,28 @@ export default function App() {
       method: "POST",
       body: { author: user.handle, emoji },
     });
-    if (res.ok) flash("Reaction added", "success");
+    if (res.ok) {
+      setReactions(prev => {
+        const mine = prev[messageId] || [];
+        if (mine.some(r => r.author === user.handle && r.emoji === emoji)) return prev;
+        return { ...prev, [messageId]: [...mine, { author: user.handle, emoji }] };
+      });
+    }
     else flash("Could not add reaction", "error");
+  }
+  async function onUnreact(messageId, emoji) {
+    const res = await apiJson(
+      `/api/messages/${messageId}/reactions?emoji=${encodeURIComponent(emoji)}`,
+      { token: tokenRef.current, method: "DELETE" },
+    );
+    if (res.ok) {
+      setReactions(prev => ({
+        ...prev,
+        [messageId]: (prev[messageId] || []).filter(
+          r => !(r.author === user.handle && r.emoji === emoji)),
+      }));
+    }
+    else flash("Could not remove reaction", "error");
   }
   async function onDelete(m) {
     const res = await apiJson(`/api/messages/${m.id}`, { token: tokenRef.current, method: "DELETE" });
@@ -608,6 +641,7 @@ export default function App() {
               user={user}
               onReply={onReply}
               onReact={onReact}
+              onUnreact={onUnreact}
               onDelete={onDelete}
               onOpenThread={onReply}
               onRetry={onRetryAgent}
@@ -760,6 +794,7 @@ export default function App() {
           onClose={() => setThreadId(null)}
           onSend={(text) => sendMessage(text, threadId)}
           onReact={onReact}
+          onUnreact={onUnreact}
           onDelete={onDelete}
           canModerate={meRole === "admin"}
           onRetry={onRetryAgent}
@@ -852,7 +887,7 @@ function AgentsView({ agents, onOpenChannel }) {
   );
 }
 
-function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions }) {
+function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onUnreact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions }) {
   const parent = messages[parentId];
   const replies = threadReplies.length > 0 ? threadReplies : Object.values(messages).filter(m => m.parent_id === parentId);
   const replyOrder = replies.map(r => r.id);
@@ -873,12 +908,12 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
       <ScrollArea className="thread-body">
         {parent && (
           <div className="thread-parent">
-            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
           </div>
         )}
         <Divider />
         {replyOrder.length > 0 && (
-          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
         )}
       </ScrollArea>
       {sendFailure && (

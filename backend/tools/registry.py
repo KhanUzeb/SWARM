@@ -194,6 +194,33 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "create_agent": {
+        "type": "function",
+        "function": {
+            "name": "create_agent",
+            "description": (
+                "Provision a dedicated teammate bot for the user's need "
+                "(e.g. fitness tracking, meeting notes, research). The bot gets "
+                "its own 1:1 DM channel the user can open from the sidebar. "
+                "Give it a short slug name, a job title, and a focused "
+                "system_prompt describing its role."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "job": {"type": "string"},
+                    "system_prompt": {"type": "string"},
+                    "display_name": {"type": "string"},
+                    "tools": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["name", "job", "system_prompt"],
+            },
+        },
+    },
     "computer_run": {
         "type": "function",
         "function": {
@@ -476,6 +503,15 @@ RESEARCH_TOOLS = [
     "exa_search", "tavily_search", "firecrawl_scrape",
     "browser_use", "cua_desktop",
 ]
+# Spawned need-bots get a useful-but-safe subset: no bot-spawning
+# (anti-loop) and no host-machine access unless explicitly granted.
+SPAWN_DEFAULT_TOOLS = [
+    t for t in DEFAULT_BUILTIN_TOOLS
+    if t not in {
+        "create_agent",
+        "system_run", "system_ls", "system_read", "system_write",
+    }
+]
 
 from .. import db  # noqa: E402  — after constants so models can import them
 
@@ -719,6 +755,8 @@ class ToolRegistry:
             return await workspace_helpers["approval"](
                 agent_name, channel_id, args.get("action", ""), args.get("detail", ""),
             )
+        if name == "create_agent":
+            return await self._exec_create_agent(args)
         if name == "computer_run":
             from . import computer
             return computer.computer_run(args.get("command", ""))
@@ -793,6 +831,55 @@ class ToolRegistry:
             from . import system as system_mod
             return system_mod.system_write(args.get("path", ""), args.get("content", ""))
         return f"(unimplemented builtin {name})"
+
+    async def _exec_create_agent(self, args: dict[str, Any]) -> str:
+        """Provision a dedicated bot + DM channel for the user's need."""
+        raw = (args.get("name") or "").strip().lower()
+        if not re.match(r"^[a-z0-9][a-z0-9_-]{0,31}$", raw):
+            return "(need a bot name: lowercase letters, numbers, - or _, max 32 chars)"
+        if await db.fetch_agent(raw):
+            return f"(bot '{raw}' already exists — talk to it in #{db.dm_channel_id(raw)})"
+        if await db.get_user(raw):
+            return f"('{raw}' is already a user handle — pick another name)"
+        if await db.get_team(raw):
+            return f"('{raw}' is already a team — pick another name)"
+        if await db.get_channel(raw):
+            return f"('{raw}' collides with a channel id — pick another name)"
+        job = (args.get("job") or "").strip()[:80] or "Teammate"
+        prompt = (args.get("system_prompt") or "").strip()
+        if len(prompt) < 10:
+            return "(need a system_prompt of at least a sentence describing the bot's role)"
+        prompt = prompt[:4000]
+        display = (args.get("display_name") or "").strip()[:40] or None
+        wanted = args.get("tools")
+        if wanted:
+            valid = self.all_names()
+            tool_names = [t for t in wanted
+                          if isinstance(t, str) and t in valid and t != "create_agent"]
+            if not tool_names:
+                return "(none of those tool names are valid — omit tools for the safe default set)"
+        else:
+            tool_names = list(SPAWN_DEFAULT_TOOLS)
+        try:
+            created = await db.create_agent(
+                raw, prompt, "", None,
+                tools=tool_names, job=job, display_name=display,
+            )
+        except Exception as exc:  # noqa: BLE001 — e.g. raced duplicate insert
+            return f"(could not create bot '{raw}': {exc})"
+        # The schema backfill grants computer/system tools to full-tool bots;
+        # spawned bots keep host-machine access only when explicitly asked for.
+        explicit_system = {t for t in (wanted or [])
+                           if isinstance(t, str) and t.startswith("system_")}
+        if not explicit_system:
+            stored = db.parse_tools((await db.fetch_agent(raw) or {}).get("tools"))
+            stripped = [t for t in stored if not t.startswith("system_")]
+            if len(stripped) != len(stored):
+                await db.update_agent(raw, {"tools": stripped})
+        return (
+            f"created bot '{created['name']}' ({created['display_name']}, {job}) — "
+            f"the user can open its 1:1 DM at #{created['dm_channel_id']}"
+        )
 
     async def _exec_custom(self, row: dict[str, Any], args: dict[str, Any]) -> str:
         handler = row.get("handler_type") or "template"

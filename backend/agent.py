@@ -66,7 +66,8 @@ _TOOL_HINT = re.compile(
     r"composio|gmail|github|slack|notion|toolkit|"
     r"exa|tavily|firecrawl|crawl|scrape|research|"
     r"host|system|machine|repo|pytest|git|"
-    r"handoff|draft"
+    r"handoff|draft|"
+    r"bot|teammate|spin\s+up|create\s+an?\s+\w+\s+(bot|agent|assistant|helper|tracker|coach)"
     r")\b",
     re.I,
 )
@@ -88,6 +89,10 @@ _TOOL_POLICY = (
     "put repo/code work on the system root. "
     "Check knowledge_search before answering from memory; save durable facts with "
     "knowledge_save; drop stale notes with forget. "
+    "When the user describes a recurring need (tracking, reminders, notes, "
+    "research, coaching), offer to provision a dedicated bot with create_agent "
+    "— a short slug name, a job title, and a focused system_prompt — and "
+    "point them at its new 1:1 DM channel. "
     "You may @mention another bot to hand off work. Follow your profile.md."
 )
 
@@ -953,6 +958,6 @@ async def _maybe_write_summary(
     if not text:
         return
     try:
-        await db.replace_summary(agent_name, channel_id, text)
+        await db.append_summary(agent_name, channel_id, text)
     except Exception:  # noqa: BLE001 — summary is best-effort
         pass

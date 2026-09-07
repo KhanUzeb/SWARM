@@ -413,6 +413,19 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
                 (name, prompt, model, scope, time.time(), window, cap, json.dumps(tools), job, pretty_name(name)),
             )
 
+    # The main swarm agent can provision need-based bots; backfill the
+    # tool onto pre-existing databases that stored an older tool list.
+    cur = await db.execute("SELECT tools FROM agents WHERE name = 'swarm'")
+    row = await cur.fetchone()
+    if row is not None:
+        names = parse_tools(row[0])
+        if "create_agent" not in names:
+            names.append("create_agent")
+            await db.execute(
+                "UPDATE agents SET tools = ? WHERE name = 'swarm'",
+                (json.dumps(names),),
+            )
+
     cur = await db.execute("SELECT name, job FROM agents")
     agents = await cur.fetchall()
     for name, job in agents:
@@ -946,6 +959,17 @@ async def add_reaction(message_id: int, author: str, emoji: str) -> bool:
             return False
 
 
+async def remove_reaction(message_id: int, author: str, emoji: str) -> bool:
+    """Delete one user's emoji reaction. Returns True if a row was removed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM reactions WHERE message_id = ? AND author = ? AND emoji = ?",
+            (message_id, author, emoji),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def get_reactions(message_id: int) -> list[dict[str, Any]]:
     return (await get_reactions_many([message_id])).get(message_id, [])
 
@@ -1265,6 +1289,45 @@ async def replace_summary(agent_name: str, channel_id: str, body: str) -> dict[s
         "created_at": ts,
         "updated_at": ts,
     }
+
+
+async def get_summary(agent_name: str, channel_id: str) -> dict[str, Any] | None:
+    """Latest channel summary for one agent, if any."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM agent_memory WHERE agent_name = ? AND channel_id = ? "
+            "AND kind = 'summary' ORDER BY updated_at DESC LIMIT 1",
+            (agent_name, channel_id),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def append_summary(
+    agent_name: str, channel_id: str, body: str, cap_chars: int = 3000
+) -> dict[str, Any]:
+    """Accumulate onto the channel summary instead of clobbering it.
+
+    Each compaction pass appends its extract and the tail is kept under
+    cap_chars, so early history survives across many turns.
+    """
+    body = (body or "").strip()
+    if not body:
+        existing = await get_summary(agent_name, channel_id)
+        if existing is None:
+            raise ValueError("nothing to summarize")
+        return existing
+    previous = await get_summary(agent_name, channel_id)
+    if previous and previous.get("body"):
+        if body in previous["body"]:
+            return previous  # idempotent: same extract compacted twice
+        combined = f"{previous['body']}\n{body}"
+    else:
+        combined = body
+    if len(combined) > cap_chars:
+        combined = "…[trimmed]\n" + combined[-cap_chars:]
+    return await replace_summary(agent_name, channel_id, combined)
 
 
 async def list_memories(agent_name: str, limit: int = 20) -> list[dict[str, Any]]:
