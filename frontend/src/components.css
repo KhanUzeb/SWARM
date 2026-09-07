@@ -361,7 +361,23 @@
 }
 .user-bubble .reaction-chip { background: rgba(0, 0, 0, 0.06); }
 .reaction-chip:hover { transform: scale(1.04); }
+.reaction-chip.mine { outline: 1.5px solid var(--color-brand, #7c5cff); outline-offset: -1.5px; }
 .reaction-count { font-size: 11px; font-weight: 510; opacity: 0.7; }
+.react-wrap { position: relative; display: inline-flex; }
+.react-picker {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 20;
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px;
+  padding: 6px;
+  background: var(--color-bg-elevated, #1e1e26);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md, 10px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.react-pick {
+  padding: 4px 6px; font-size: 18px; line-height: 1;
+  background: transparent; border: none; border-radius: 6px; cursor: pointer;
+}
+.react-pick:hover { background: rgba(255, 255, 255, 0.1); transform: scale(1.15); }
 
 .thread-count {
   margin-top: 4px;

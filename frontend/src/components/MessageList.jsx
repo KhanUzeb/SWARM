@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Avatar, RichBody, Tooltip } from "../ui.jsx";
-import { fmtTime, isAgentError } from "../lib.js";
+import { fmtTime, isAgentError, EMOJI } from "../lib.js";
 
-export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, workByMessage, eventsByWork, canModerate }) {
+export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, workByMessage, eventsByWork, canModerate }) {
   const endRef = useRef(null);
   const logRef = useRef(null);
   const [pinned, setPinned] = useState(true);
@@ -79,6 +79,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
               replyCount={replyCounts[m.id] || 0}
               onReply={onReply}
               onReact={onReact}
+              onUnreact={onUnreact}
               onDelete={onDelete}
               onOpenThread={onOpenThread}
               onRetry={onRetry}
@@ -105,9 +106,34 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
   );
 }
 
-function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, onReact, onDelete, onOpenThread, onRetry, retrying, myHandle, streaming, work, workEvents, canDelete }) {
+function ReactPicker({ onPick, onClose }) {
+  return (
+    <div className="react-picker" role="menu" aria-label="Pick a reaction"
+      onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
+      {EMOJI.map(emoji => (
+        <button key={emoji} type="button" role="menuitem" className="react-pick"
+          aria-label={`React with ${emoji}`}
+          onClick={() => { onPick(emoji); onClose(); }}>
+          {emoji}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, retrying, myHandle, streaming, work, workEvents, canDelete }) {
+  const [pickOpen, setPickOpen] = useState(false);
   const counts = {};
-  for (const r of reactions || []) counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+  const byEmoji = {};
+  for (const r of reactions || []) {
+    counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+    (byEmoji[r.emoji] = byEmoji[r.emoji] || []).push(r.author);
+  }
+  const toggleReact = (emoji) => {
+    const mine = (byEmoji[emoji] || []).includes(myHandle);
+    if (mine && onUnreact) onUnreact(m.id, emoji);
+    else onReact(m.id, emoji);
+  };
   const isMe = m.author === myHandle;
   const failedAgent = m.author_kind === "agent" && isAgentError(m.body);
 
@@ -135,7 +161,10 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
           {!m.streaming && m.id != null && Object.keys(counts).length > 0 && (
             <div className="msg-reactions inline">
               {Object.entries(counts).map(([emoji, count]) => (
-                <button key={emoji} className="reaction-chip" onClick={() => onReact(m.id, emoji)}>
+                <button key={emoji} className={`reaction-chip${(byEmoji[emoji] || []).includes(myHandle) ? " mine" : ""}`}
+                  onClick={() => toggleReact(emoji)}
+                  title={(byEmoji[emoji] || []).join(", ")}
+                  aria-pressed={(byEmoji[emoji] || []).includes(myHandle)}>
                   {emoji} {count > 1 && <span className="reaction-count">{count}</span>}
                 </button>
               ))}
@@ -143,6 +172,13 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
           )}
           {!m.streaming && m.id != null && (
             <div className="msg-actions own">
+              <div className="react-wrap">
+                <button className="msg-mini-action" onClick={() => setPickOpen(o => !o)}
+                  aria-label="Add reaction" aria-expanded={pickOpen} aria-haspopup="menu">
+                  ☺ React
+                </button>
+                {pickOpen && <ReactPicker onPick={(emoji) => onReact(m.id, emoji)} onClose={() => setPickOpen(false)} />}
+              </div>
               {!m.parent_id && (
                 <button className="msg-mini-action" onClick={() => onOpenThread(m.id)} aria-label="Open thread">
                   Thread{replyCount > 0 ? ` (${replyCount})` : ""}
@@ -216,11 +252,14 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 14L4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
               </button>
             </Tooltip>
-            <Tooltip content="React">
-              <button onClick={() => onReact(m.id, "👍")} aria-label="React">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-              </button>
-            </Tooltip>
+            <div className="react-wrap">
+              <Tooltip content="React">
+                <button onClick={() => setPickOpen(o => !o)} aria-label="React" aria-expanded={pickOpen} aria-haspopup="menu">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+                </button>
+              </Tooltip>
+              {pickOpen && <ReactPicker onPick={(emoji) => onReact(m.id, emoji)} onClose={() => setPickOpen(false)} />}
+            </div>
             {onDelete && canDelete && (
               <Tooltip content="Delete">
                 <button className="danger" onClick={() => { if (window.confirm("Delete this message? Replies to it will also be removed.")) onDelete(m); }} aria-label="Delete">
@@ -234,7 +273,10 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
         {!m.streaming && m.id != null && Object.keys(counts).length > 0 && (
           <div className="msg-reactions inline">
             {Object.entries(counts).map(([emoji, count]) => (
-              <button key={emoji} className="reaction-chip" onClick={() => onReact(m.id, emoji)}>
+              <button key={emoji} className={`reaction-chip${(byEmoji[emoji] || []).includes(myHandle) ? " mine" : ""}`}
+                onClick={() => toggleReact(emoji)}
+                title={(byEmoji[emoji] || []).join(", ")}
+                aria-pressed={(byEmoji[emoji] || []).includes(myHandle)}>
                 {emoji} {count > 1 && <span className="reaction-count">{count}</span>}
               </button>
             ))}

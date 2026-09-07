@@ -918,6 +918,22 @@ async def api_add_reaction(
     return Response(status_code=204)
 
 
+@app.delete("/api/messages/{message_id}/reactions")
+async def api_remove_reaction(
+    message_id: int, emoji: str = Query(min_length=1, max_length=8),
+    handle: str = Depends(require_auth),
+):
+    if not await db.message_exists(message_id):
+        raise HTTPException(404, "no such message")
+    removed = await db.remove_reaction(message_id, handle, emoji)
+    if removed:
+        await hub.broadcast(await db.channel_of_message(message_id), {
+            "type": "reaction_removed", "message_id": message_id,
+            "author": handle, "emoji": emoji,
+        })
+    return {"ok": True, "removed": removed}
+
+
 # --------------------------------------------------------------- agents ---
 
 @app.get("/api/agents")
@@ -1912,6 +1928,11 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
             on_token=on_token,
         )
         await persist_tools(result["tool_events"])
+        if any(e["tool"] == "create_agent" and "created bot" in str(e.get("result") or "")
+               for e in result["tool_events"]):
+            # A need-based bot (and its DM) just appeared — tell every
+            # client to refresh its sidebar lists.
+            await hub.broadcast_all({"type": "agents_changed"})
 
         msg = await db.add_message(channel_id, name, result["reply"], "agent")
         await hub.broadcast(channel_id, {"type": "message", "message": msg})
