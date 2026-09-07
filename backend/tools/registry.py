@@ -860,22 +860,19 @@ class ToolRegistry:
                 return "(none of those tool names are valid — omit tools for the safe default set)"
         else:
             tool_names = list(SPAWN_DEFAULT_TOOLS)
+        # Spawned bots lock their tool list: the schema backfill must not
+        # silently re-expand it (e.g. with host-machine tools) on later
+        # boots. Host access is granted only when explicitly requested.
+        locked = not any(isinstance(t, str) and t.startswith("system_")
+                         for t in (wanted or []))
         try:
             created = await db.create_agent(
                 raw, prompt, "", None,
                 tools=tool_names, job=job, display_name=display,
+                tools_locked=locked,
             )
         except Exception as exc:  # noqa: BLE001 — e.g. raced duplicate insert
             return f"(could not create bot '{raw}': {exc})"
-        # The schema backfill grants computer/system tools to full-tool bots;
-        # spawned bots keep host-machine access only when explicitly asked for.
-        explicit_system = {t for t in (wanted or [])
-                           if isinstance(t, str) and t.startswith("system_")}
-        if not explicit_system:
-            stored = db.parse_tools((await db.fetch_agent(raw) or {}).get("tools"))
-            stripped = [t for t in stored if not t.startswith("system_")]
-            if len(stripped) != len(stored):
-                await db.update_agent(raw, {"tools": stripped})
         return (
             f"created bot '{created['name']}' ({created['display_name']}, {job}) — "
             f"the user can open its 1:1 DM at #{created['dm_channel_id']}"

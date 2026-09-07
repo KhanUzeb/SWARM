@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, apiJson } from "../lib.js";
+import { apiJson } from "../lib.js";
 
 function labelOf(model) {
   if (!model) return "";
@@ -27,10 +27,14 @@ export default function ModelPicker({
   const [error, setError] = useState("");
   const [models, setModels] = useState([]);
   const [active, setActive] = useState(0);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const rootRef = useRef(null);
   const inputRef = useRef(null);
   const fetchGen = useRef(0);
   const autoSelected = useRef(false);
+  const loadedSpec = useRef("");
+  const prevProvider = useRef(Symbol("unset"));
+  const spec = `${providerId || ""} ${(apiKey || "").trim()}`;
 
   const applyModels = useCallback((list, meta = {}) => {
     setModels(list);
@@ -49,67 +53,54 @@ export default function ModelPicker({
     }
   }, [autoSelectFirst, onChange, onModelsLoaded, value]);
 
+  // One fetch path for all three sources — models load lazily (first open
+  // or Refresh), never on mount or while typing a key, so opening the
+  // provider panel doesn't fan out live API calls per card per keystroke.
   const load = useCallback(async () => {
-    if (!token) return;
+    if (!token || disabled) return;
     const gen = ++fetchGen.current;
     setLoading(true);
     setError("");
     try {
-      if (providerId) {
-        const key = (apiKey || "").trim();
-        if (key.length >= 8) {
-          const res = await api(`/api/ai-support/providers/${providerId}/models`, {
-            token,
-            method: "POST",
-            body: { api_key: key },
-          });
-          const data = res.ok ? await res.json() : null;
-          if (gen !== fetchGen.current) return;
-          applyModels(data?.models || [], {
-            live: !!data?.live,
-            note: data?.note,
-            error: data?.error,
-            defaultModel: data?.default_model,
-          });
-          setLoading(false);
-          return;
-        }
-        const res = await apiJson(`/api/v2/providers/${providerId}/models`, { token, cacheTtl: 0 });
-        if (gen !== fetchGen.current) return;
-        const data = res.ok ? res.data : null;
-        applyModels(data?.models || [], {
-          live: !!data?.live,
-          note: data?.note,
-          error: data?.error,
-          defaultModel: data?.default_model,
-        });
-      } else {
-        const res = await apiJson("/api/v2/models/connected", { token, cacheTtl: 0 });
-        if (gen !== fetchGen.current) return;
-        const data = res.ok ? res.data : null;
-        applyModels(data?.models || [], {
-          live: !!data?.live,
-          note: data?.note,
-          defaultModel: data?.default_model,
-        });
-      }
+      const key = (apiKey || "").trim();
+      const path = providerId
+        ? `/api/v2/providers/${providerId}/models`
+        : "/api/v2/models/connected";
+      const res = providerId && key.length >= 8
+        ? await apiJson(`/api/ai-support/providers/${providerId}/models`, {
+            token, method: "POST", body: { api_key: key },
+          })
+        : await apiJson(path, { token, cacheTtl: 0 });
+      if (gen !== fetchGen.current) return;
+      const data = res.ok ? res.data : null;
+      applyModels(data?.models || [], {
+        live: !!data?.live,
+        note: data?.note,
+        error: data?.error,
+        defaultModel: data?.default_model,
+      });
     } catch {
       if (gen !== fetchGen.current) return;
       applyModels([], { live: false, note: "Couldn't load models." });
     }
+    loadedSpec.current = spec;
+    setHasLoaded(true);
     setLoading(false);
-  }, [token, providerId, apiKey, applyModels]);
+  }, [token, disabled, providerId, apiKey, spec, applyModels]);
 
-  useEffect(() => {
-    autoSelected.current = false;
-    load();
-  }, [load]);
+  function ensureLoaded() {
+    if (!hasLoaded || loadedSpec.current !== spec) load();
+  }
 
+  // autoSelectFirst keeps one eager load (mount + provider arrival) so the
+  // launch form still preselects a model; everything else loads on demand.
   useEffect(() => {
-    if (!apiKey || apiKey.trim().length < 8) return undefined;
-    const t = setTimeout(load, 350);
-    return () => clearTimeout(t);
-  }, [load, apiKey]);
+    if (!autoSelectFirst || autoSelected.current || disabled) return;
+    if (providerId !== prevProvider.current) {
+      prevProvider.current = providerId;
+      load();
+    }
+  }, [autoSelectFirst, disabled, providerId, load]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -145,6 +136,7 @@ export default function ModelPicker({
     if (ev.key === "ArrowDown") {
       ev.preventDefault();
       setOpen(true);
+      ensureLoaded();
       setActive((i) => Math.min(i + 1, Math.max(filtered.length - 1, 0)));
     } else if (ev.key === "ArrowUp") {
       ev.preventDefault();
@@ -159,7 +151,7 @@ export default function ModelPicker({
   }
 
   const current = models.find((m) => m.id === value);
-  const badge = loading ? "Loading…" : live ? "Live API" : models.length ? "Catalog" : "No models";
+  const badge = loading ? "Loading…" : !hasLoaded ? "Tap to load" : live ? "Live API" : models.length ? "Catalog" : "No models";
 
   return (
     <div className="model-picker" ref={rootRef}>
@@ -171,7 +163,10 @@ export default function ModelPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => {
-          setOpen((v) => !v);
+          setOpen((v) => {
+            if (!v) ensureLoaded();
+            return !v;
+          });
           setTimeout(() => inputRef.current?.focus(), 0);
         }}
       >

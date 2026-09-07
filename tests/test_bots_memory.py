@@ -33,6 +33,11 @@ def test_create_agent_happy_path(client, auth):
     tools = db.parse_tools(row["tools"])
     assert "create_agent" not in tools  # no spawn chains
     assert not any(t.startswith("system_") for t in tools)
+    # The boot backfill must not silently re-expand the locked list.
+    _run(db.init_db())
+    tools = db.parse_tools(_run(db.fetch_agent("coach-fit"))["tools"])
+    assert "create_agent" not in tools
+    assert not any(t.startswith("system_") for t in tools)
     assert _run(db.get_channel("dm-coach-fit"))["kind"] == "dm"
     # Sidebar agents list shows the new bot.
     agents = client.get("/api/agents", headers=auth).json()
