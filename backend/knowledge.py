@@ -205,10 +205,10 @@ async def search_docs(
             except Exception:  # noqa: BLE001 — fall through to LIKE
                 rows = []
         if not rows:
-            like = f"%{needle}%"
+            like = f"%{db._like_escape(needle)}%"
             cur = await conn.execute(
                 f"SELECT * FROM knowledge_docs {where}"
-                f"{' AND' if where else 'WHERE'} (title LIKE ? OR body LIKE ? OR tags LIKE ?) "
+                f"{' AND' if where else 'WHERE'} (title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\') "
                 "ORDER BY updated_at DESC LIMIT ?",
                 [*params, like, like, like, limit * 2],
             )

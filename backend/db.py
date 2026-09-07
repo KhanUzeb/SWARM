@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS agent_memory (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_memory_agent ON agent_memory(agent_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_kind ON agent_memory(agent_name, kind, channel_id);
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id);
 
 CREATE TABLE IF NOT EXISTS skills (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -809,12 +811,15 @@ async def get_history(
         return [dict(r) for r in reversed(rows)]
 
 
-async def get_history_after(channel_id: str, after_id: int) -> list[dict[str, Any]]:
+async def get_history_after(
+    channel_id: str, after_id: int, limit: int = 200,
+) -> list[dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT * FROM messages WHERE channel_id = ? AND id > ? ORDER BY id ASC",
-            (channel_id, after_id),
+            "SELECT * FROM messages WHERE channel_id = ? AND id > ? "
+            "ORDER BY id ASC LIMIT ?",
+            (channel_id, after_id, min(max(limit, 1), 500)),
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
@@ -846,15 +851,26 @@ async def channel_of_message(message_id: int) -> str | None:
         return row[0] if row else None
 
 
+def _like_escape(needle: str) -> str:
+    """Escape LIKE wildcards so a literal %, _ or \\ in user input can't
+    widen the match (or, on forget paths, widen the delete)."""
+    return (
+        (needle or "")
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
 async def search_history(channel_id: str, query: str, limit: int = 10) -> list[dict[str, Any]]:
     """Naive substring search. Phase 6 (vector search) replaces this
     implementation only — the tool signature in agent.py stays the same."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT * FROM messages WHERE channel_id = ? AND body LIKE ? "
+            "SELECT * FROM messages WHERE channel_id = ? AND body LIKE ? ESCAPE '\\' "
             "ORDER BY created_at DESC LIMIT ?",
-            (channel_id, f"%{query}%", limit),
+            (channel_id, f"%{_like_escape(query)}%", limit),
         )
         rows = await cur.fetchall()
         return [dict(r) for r in reversed(rows)]
@@ -931,14 +947,27 @@ async def add_reaction(message_id: int, author: str, emoji: str) -> bool:
 
 
 async def get_reactions(message_id: int) -> list[dict[str, Any]]:
+    return (await get_reactions_many([message_id])).get(message_id, [])
+
+
+async def get_reactions_many(message_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """One query for a page of messages (fixes the per-message N+1)."""
+    ids = [int(m) for m in message_ids]
+    out: dict[int, list[dict[str, Any]]] = {m: [] for m in ids}
+    if not ids:
+        return out
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT author, emoji, created_at FROM reactions WHERE message_id = ?",
-            (message_id,),
+            "SELECT message_id, author, emoji, created_at FROM reactions "
+            f"WHERE message_id IN ({','.join('?' for _ in ids)})",
+            ids,
         )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        for row in await cur.fetchall():
+            out.setdefault(int(row["message_id"]), []).append(
+                {"author": row["author"], "emoji": row["emoji"],
+                 "created_at": row["created_at"]})
+        return out
 
 
 # ------------------------------------------------------------------ users -
@@ -1277,18 +1306,19 @@ async def search_memory(
 ) -> list[dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        like = f"%{_like_escape(query)}%"
         if channel_id:
             cur = await db.execute(
                 "SELECT * FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND (channel_id IS NULL OR channel_id = ?) AND body LIKE ? "
+                "AND (channel_id IS NULL OR channel_id = ?) AND body LIKE ? ESCAPE '\\' "
                 "ORDER BY created_at DESC LIMIT ?",
-                (agent_name, channel_id, f"%{query}%", limit),
+                (agent_name, channel_id, like, limit),
             )
         else:
             cur = await db.execute(
                 "SELECT * FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND body LIKE ? ORDER BY created_at DESC LIMIT ?",
-                (agent_name, f"%{query}%", limit),
+                "AND body LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?",
+                (agent_name, like, limit),
             )
         rows = await cur.fetchall()
         return [dict(r) for r in reversed(rows)]
@@ -1312,18 +1342,19 @@ async def forget_memory_by_query(
     needle = (query or "").strip()
     if not needle:
         return 0
+    like = f"%{_like_escape(needle)}%"
     async with aiosqlite.connect(DB_PATH) as db:
         if channel_id:
             cur = await db.execute(
                 "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND (channel_id IS NULL OR channel_id = ?) AND body LIKE ?",
-                (agent_name, channel_id, f"%{needle}%"),
+                "AND (channel_id IS NULL OR channel_id = ?) AND body LIKE ? ESCAPE '\\'",
+                (agent_name, channel_id, like),
             )
         else:
             cur = await db.execute(
                 "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
-                "AND body LIKE ?",
-                (agent_name, f"%{needle}%"),
+                "AND body LIKE ? ESCAPE '\\'",
+                (agent_name, like),
             )
         await db.commit()
         return cur.rowcount

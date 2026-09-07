@@ -12,6 +12,7 @@ import uuid
 import asyncio
 import base64
 import hashlib
+import logging
 import os
 import secrets
 from urllib.parse import urlencode
@@ -22,9 +23,22 @@ import aiosqlite
 
 from . import db
 
+_logger = logging.getLogger("swarm.v2")
+
+OAUTH_STATE_TTL_SECONDS = 600
+
 _run_tasks: dict[str, asyncio.Task] = {}
-_oauth_states: dict[str, dict[str, str]] = {}
+_oauth_states: dict[str, dict[str, Any]] = {}
 _event_lock = asyncio.Lock()
+
+
+def _sweep_oauth_states(now: float | None = None) -> None:
+    """Drop expired OAuth states so the in-memory map can't grow or replay."""
+    now = time.time() if now is None else now
+    expired = [s for s, ctx in _oauth_states.items()
+               if float(ctx.get("expires_at") or 0) <= now]
+    for state in expired:
+        _oauth_states.pop(state, None)
 
 
 async def shutdown() -> None:
@@ -45,7 +59,11 @@ def oauth_start(provider_id: str, owner: str, spec: dict[str, Any]) -> str:
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = {"provider_id": provider_id, "owner": owner, "verifier": verifier}
+    _sweep_oauth_states()
+    _oauth_states[state] = {
+        "provider_id": provider_id, "owner": owner, "verifier": verifier,
+        "expires_at": time.time() + OAUTH_STATE_TTL_SECONDS,
+    }
     redirect_uri = os.environ.get("SWARM_OAUTH_REDIRECT_URI", "http://localhost:8000/api/v2/oauth/callback")
     params = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code", "state": state, "code_challenge": challenge, "code_challenge_method": "S256", "scope": spec.get("oauth_scope", "")}
     return f"{authorize_url}?{urlencode({k: v for k, v in params.items() if v})}"
@@ -54,6 +72,10 @@ def oauth_start(provider_id: str, owner: str, spec: dict[str, Any]) -> str:
 async def oauth_callback(state: str, code: str) -> dict[str, Any]:
     context = _oauth_states.pop(state, None)
     if not context:
+        _sweep_oauth_states()
+        raise ValueError("invalid or expired OAuth state")
+    if float(context.get("expires_at") or 0) <= time.time():
+        _sweep_oauth_states()
         raise ValueError("invalid or expired OAuth state")
     provider_id = context["provider_id"]
     from .ai_support.providers import get_provider
@@ -160,6 +182,7 @@ CREATE TABLE IF NOT EXISTS run_artifacts (
     metadata TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL,
     FOREIGN KEY(run_id) REFERENCES runs(id)
 );
+CREATE INDEX IF NOT EXISTS idx_run_artifacts_run ON run_artifacts(run_id);
 """
 
 
@@ -283,7 +306,9 @@ async def list_runs(owner: str, limit: int = 50) -> list[dict[str, Any]]:
 async def recoverable_runs() -> list[dict[str, Any]]:
     async with aiosqlite.connect(db.DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT * FROM runs WHERE status IN ('queued', 'running') ORDER BY created_at")
+        cur = await conn.execute(
+            "SELECT * FROM runs WHERE status IN ('queued', 'running', 'waiting_for_approval')"
+            " ORDER BY created_at")
         return [dict(row) for row in await cur.fetchall()]
 
 
@@ -484,7 +509,18 @@ async def execute_run(run_id: str, owner: str) -> None:
 
 def start_run(run_id: str, owner: str) -> None:
     if run_id not in _run_tasks:
-        _run_tasks[run_id] = asyncio.create_task(execute_run(run_id, owner), name=f"v2-run-{run_id}")
+        task = asyncio.create_task(execute_run(run_id, owner), name=f"v2-run-{run_id}")
+
+        def _done(done: asyncio.Task, run_id: str = run_id) -> None:
+            _run_tasks.pop(run_id, None)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                _logger.error("v2 run %s failed: %s", run_id, exc)
+
+        task.add_done_callback(_done)
+        _run_tasks[run_id] = task
 
 
 async def cancel_run(run_id: str, owner: str) -> bool:
