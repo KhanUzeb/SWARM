@@ -130,8 +130,8 @@ swarm/
   cycle, and `_run_shell_tool('ls')` ran as user `swarm` with cwd
   `/tmp/swarm-sandbox`. That is not the same as a remote VPS deploy.
 - **No conversation-level rate limit on tool calls across agents.**
-  The 3-call cap is per single `@mention` trigger. Mentioning two
-  agents in one message can still produce up to 6 tool calls total.
+  The 6-call default (hard cap 12) is per single `@mention` trigger. Mentioning two
+  agents in one message can still produce up to 12 tool calls total.
   Acceptable at current scale; revisit if the sandbox shell ever does
   anything expensive enough to matter.
 - **The shared computer is this host, not a VM.** Sandbox tools stay

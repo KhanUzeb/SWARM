@@ -73,11 +73,11 @@ a duplicate row or an error.
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
 | archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
-Allowed tool names include **33 builtins** (`read_only_shell`,
+Allowed tool names include **34 builtins** (`read_only_shell`,
 `search_channel_history`, `remember`, `recall`, `forget`,
 `knowledge_search`, `knowledge_save`, `list_workspace`,
 `read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
-`save_skill`, `request_approval`, computer-use `computer_run` /
+  `save_skill`, `request_approval`, `create_agent`, computer-use `computer_run` /
 `computer_open` / `computer_screenshot`, browser-use
 `browser_navigate` / `browser_snapshot` / `browser_click` /
 `browser_type` / `browser_press` / `browser_wait` /
@@ -294,7 +294,7 @@ The composite form exists so REST and WS share one parsing path
 separately from the token on every call.
 
 - **Admin password (optional).** The first registered handle may set an
-  optional `password` (min 8 chars). It is hashed with PBKDF2-HMAC-SHA256
+  optional `password` (min 4 chars). It is hashed with PBKDF2-HMAC-SHA256
   (100,000 rounds, random salt) via `hash_password()` in `db.py` and
   stored in `users.password_hash` — never plain text. If an admin has a
   password, reclaiming that handle via `POST /api/register` requires the
@@ -371,8 +371,8 @@ Admin only. Soft-delete (`archived_at`). 404 if already archived.
 {"detail": "wrong or missing admin password"}
 // response 409 if handle taken (non-loopback reclaim without password when required)
 {"detail": "handle already registered"}
-// response 400 if password shorter than 8 chars on first admin
-{"detail": "admin password must be at least 8 characters"}
+// response 400 if password shorter than 4 chars on first admin
+{"detail": "admin password must be at least 4 characters"}
 ```
 Members created after the first admin omit `password`; they get `role: member`.
 
@@ -387,11 +387,15 @@ Public. Returns booleans only — never raw API keys.
   "providers_ready": {"groq": true, "openrouter": false, "huggingface": false},
   "composio": false,
   "browser": true,
-  "system": true
+  "system": true,
+  "onboarded": false,
+  "admins": ["uzeb"]
 }
 ```
-With Bearer auth, also includes `ai_providers` connection metadata
-(hints, models — not secrets).
+`onboarded` / `admins` are public workspace facts (handles are visible
+in chat); per-connection details stay behind auth. With Bearer auth,
+also includes `ai_providers` connection metadata (hints, models — not
+secrets) and `me` (`{handle, role}`).
 
 ### `GET /api/tools`
 Auth required. Builtin + custom + plugin catalog.

@@ -23,12 +23,12 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 
 ## Feature summary (post-merge)
 
-- **Tools:** 30 builtins (sandbox computer, host system, Playwright, Exa, Tavily, Firecrawl, Browser Use CLI, CUA) + plugins + Composio
+- **Tools:** 34 builtins (sandbox computer, host system, Playwright, Exa, Tavily, Firecrawl, Browser Use CLI, CUA, memory/knowledge: `forget`, `knowledge_search`, `knowledge_save`, sub-agent `create_agent`) + plugins + Composio
 - **Profiles:** `profiles/<bot>.md` for seeded Bots; `profiles/jobs/<id>.md` for each job template
-- **AI providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen (OpenAI SDK adapter, tau-inspired resolver); UI in Computer → AI; onboarding step 1; minimisable provider panel
+- **AI providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen (OpenAI SDK adapter, tau-inspired resolver); UI in Computer → AI; minimisable provider panel
 - **Apps:** Composio + Exa + Tavily + Firecrawl keys in Computer → Apps; Browser Use CLI and CUA are local installs
 - **Security:** Bearer required on data reads; CORS allowlist; `X-Swarm-Client: web` for browser origins; first user is admin; optional admin password stored as PBKDF2 hash (never plain text)
-- **Frontend:** Slack-style sidebar (DMs, teams, channels, search); 3-step onboarding with API key save; Computer panel with Sandbox vs System file browser; Retry on agent error bubbles and failed human sends
+- **Frontend:** Slack-style sidebar (DMs, teams, channels, search); Computer panel with Sandbox vs System file browser; Retry on agent error bubbles and failed human sends
 - **Bots:** Custom `display_name`; group chats; `@core` team; archive instead of hard-delete
 - **People:** Private 1:1s; JSON/CSV audit export per channel
 - **Slash commands:** `/standup` `/digest` `/decide` `/research` `/page` `/repro` `/draft` `/review` `/plan` `/brief`
