@@ -235,6 +235,8 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
                 "step_id": row["step_id"], "payload": _decode(row.get("payload"), {}),
                 "created_at": row["created_at"],
             })
+        cur = await conn.execute("SELECT COALESCE(MAX(seq), 0) FROM work_events WHERE work_id=?", (work_id,))
+        (base,) = await cur.fetchone()
     # Reuse linked run events so run-backed sessions show the same trace
     # through the normalized interface without duplicating orchestration.
     run_id = session.get("run_id")
@@ -251,8 +253,14 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
                 "run_failed": "work_failed", "run_cancelled": "work_cancelled",
                 "run_denied": "work_cancelled",
             }
-            base = max([e["seq"] for e in events], default=0)
+            # Stable numbering: run-derived seqs always continue from the global
+            # work-event high-water mark, so a cursor poll never renumbers or
+            # re-delivers run events the client already has.
+            base = int(base or 0)
+            skip = max(0, after - base)
             for idx, re in enumerate(run_events, start=1):
+                if idx <= skip:
+                    continue
                 wtype = mapping.get(re.get("event_type", ""), "tool_finished")
                 events.append({
                     "work_id": work_id, "seq": base + idx, "type": wtype,

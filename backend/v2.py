@@ -215,12 +215,12 @@ def _decode(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
-async def list_workflows(owner: str) -> list[dict[str, Any]]:
+async def list_workflows(owner: str, limit: int = 200) -> list[dict[str, Any]]:
     async with aiosqlite.connect(db.DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
-            "SELECT * FROM workflows WHERE owner = ? AND archived_at IS NULL ORDER BY updated_at DESC",
-            (owner,),
+            "SELECT * FROM workflows WHERE owner = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT ?",
+            (owner, min(max(limit, 1), 500)),
         )
         rows = [dict(r) for r in await cur.fetchall()]
     for row in rows:
@@ -365,12 +365,12 @@ async def append_event(run_id: str, event_type: str, payload: dict[str, Any] | N
     return {"run_id": run_id, "seq": seq, "event_type": event_type, "step_id": step_id, "payload": payload or {}, "created_at": now}
 
 
-async def list_events(run_id: str, owner: str, after: int = 0) -> list[dict[str, Any]]:
+async def list_events(run_id: str, owner: str, after: int = 0, limit: int = 2000) -> list[dict[str, Any]]:
     if not await get_run(run_id, owner):
         return []
     async with aiosqlite.connect(db.DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT e.* FROM run_events e JOIN runs r ON r.id=e.run_id WHERE e.run_id=? AND r.owner=? AND e.seq>? ORDER BY e.seq", (run_id, owner, after))
+        cur = await conn.execute("SELECT e.* FROM run_events e JOIN runs r ON r.id=e.run_id WHERE e.run_id=? AND r.owner=? AND e.seq>? ORDER BY e.seq LIMIT ?", (run_id, owner, after, min(max(limit, 1), 5000)))
         rows = [dict(r) for r in await cur.fetchall()]
     for row in rows:
         row["payload"] = _decode(row.get("payload"), {})

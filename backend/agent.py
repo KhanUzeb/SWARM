@@ -7,7 +7,7 @@ Phase 4: multiple personas, loaded from the `agents` table.
 Phase 5: every call traced through Langfuse when configured. Tracing is
          skipped otherwise, and the module works with zero env vars set
          beyond GROQ_API_KEY.
-Phase 8: AsyncGroq; tool-call rounds non-streaming; final text streamed.
+Phase 8: OpenAI SDK streaming; tool-call rounds non-streaming; final text streamed.
 Phase 9: per-agent harness, memory notes, classified retries, OpenRouter.
 """
 from __future__ import annotations

@@ -349,3 +349,36 @@ def test_work_event_payloads_strip_sensitive_keys():
     assert clean == {"summary": "ok"}
     assert set(dirty) - {"summary"}  # input untouched in shape (all keys still present)
 
+
+def test_run_backed_cursor_never_renumbers_or_drops(client, auth):
+    """A cursor sitting at the end of the work events must still replay the
+    run-derived tail with stable seq numbers — not renumber it from 1 and
+    silently drop the tail (the pre-fix behavior)."""
+    async def setup():
+        run = await v2.create_run("uzeb", "cursor determinism", None)
+        session = await work.create_session(
+            "uzeb", "cursor determinism", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.append_event(run["id"], "run_started", {})
+        await v2.append_event(run["id"], "step_started", {}, step_id="s1")
+        await v2.append_event(run["id"], "step_completed", {"ok": True}, step_id="s1")
+        return session["id"]
+
+    work_id = asyncio.run(setup())
+    full = asyncio.run(work.list_events(work_id, "uzeb", 0))
+    assert [e["seq"] for e in full] == sorted(e["seq"] for e in full)
+    via_run = [e for e in full if e.get("via_run")]
+    assert len(via_run) >= 3  # run_queued + run_started + steps, renumbered after work evts
+    work_max = max(e["seq"] for e in full if not e.get("via_run"))
+
+    tail = asyncio.run(work.list_events(work_id, "uzeb", work_max))
+    assert [e["seq"] for e in tail] == [e["seq"] for e in full if e["seq"] > work_max]
+    assert [(e["seq"], e["type"]) for e in tail] == [
+        (e["seq"], e["type"]) for e in full if e["seq"] > work_max]
+
+    again = asyncio.run(work.list_events(work_id, "uzeb", work_max))
+    assert [e["seq"] for e in again] == [e["seq"] for e in tail]
+
+    top = max(e["seq"] for e in full)
+    assert asyncio.run(work.list_events(work_id, "uzeb", top)) == []
+
