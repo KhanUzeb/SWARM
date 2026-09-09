@@ -939,8 +939,8 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
 
   useEffect(() => {
     if (isAgent && !templatesLoaded) {
-      api(`/api/agent-templates`, { token })
-        .then((data) => { setTemplates(data || []); setTemplatesLoaded(true); })
+      apiJson(`/api/agent-templates`, { token })
+        .then((res) => { setTemplates(res.ok && Array.isArray(res.data) ? res.data : []); setTemplatesLoaded(true); })
         .catch(() => setTemplatesLoaded(true));
     }
   }, [isAgent, templatesLoaded, token]);

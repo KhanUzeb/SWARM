@@ -7,6 +7,7 @@ const HISTORY_LIMIT = 50;
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
 const ALL_TOOLS = [
   "read_only_shell", "search_channel_history", "remember", "recall",
+  "forget", "knowledge_search", "knowledge_save",
   "list_workspace", "read_workspace", "write_workspace", "fetch_url",
   "channel_digest", "save_skill", "request_approval",
   "computer_run", "computer_open", "computer_screenshot",

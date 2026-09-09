@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "bun --bun vite",
     "build": "bun --bun vite build",
-    "preview": "bun --bun vite preview"
+    "preview": "bun --bun vite preview",
+    "test": "bun test src/work/workUtils.test.js"
   },
   "dependencies": {
-    "katex": "^0.18.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
