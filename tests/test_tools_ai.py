@@ -65,32 +65,14 @@ def test_custom_tool_crud(client, auth):
     assert delete.status_code == 200
 
 
-def test_agent_rejects_unknown_tool(client, auth):
-    res = client.post(
-        "/api/agents",
-        json={
-            "name": "badtools",
-            "system_prompt": "test",
-            "tools": ["not_a_real_tool_xyz"],
-        },
-        headers=auth,
-    )
-    assert res.status_code == 400
-
-
-def test_map_model_keeps_live_id():
+def test_ai_models_catalog_offline_live_and_mapping(client, auth, monkeypatch):
     from backend.ai_support.resolver import map_model_for_provider
-    assert map_model_for_provider("gpt-4o-mini", "openai", stored_model="gpt-4o") == "gpt-4o-mini"
-    assert map_model_for_provider("openai/gpt-oss-20b", "huggingface", stored_model="Qwen/Qwen2.5-72B-Instruct") == "Qwen/Qwen2.5-72B-Instruct"
 
-
-def test_ai_models_catalog_without_key(client, auth):
     res = client.get("/api/ai-support/providers/groq/models", headers=auth)
     assert res.status_code == 200
     body = res.json()
     assert body["live"] is False
-    ids = {m["id"] for m in body["models"]}
-    assert "openai/gpt-oss-120b" in ids
+    assert "openai/gpt-oss-120b" in {m["id"] for m in body["models"]}
 
     all_models = client.get("/api/ai-support/models", headers=auth)
     assert all_models.status_code == 200
@@ -99,8 +81,6 @@ def test_ai_models_catalog_without_key(client, auth):
     assert any(m["id"] == "openai/gpt-oss-120b" for m in groq["models"])
     assert payload["models"]
 
-
-def test_ai_models_live_mock(client, auth, monkeypatch):
     async def fake_list(provider_id, *, api_key=None):
         return {
             "provider_id": provider_id,
@@ -114,8 +94,9 @@ def test_ai_models_live_mock(client, auth, monkeypatch):
         }
 
     monkeypatch.setattr("backend.main.list_provider_models", fake_list)
-    res = client.get("/api/ai-support/providers/groq/models", headers=auth)
-    assert res.status_code == 200
-    body = res.json()
-    assert body["live"] is True
-    assert [m["id"] for m in body["models"]] == ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+    live = client.get("/api/ai-support/providers/groq/models", headers=auth).json()
+    assert live["live"] is True
+    assert [m["id"] for m in live["models"]] == ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+
+    assert map_model_for_provider("gpt-4o-mini", "openai", stored_model="gpt-4o") == "gpt-4o-mini"
+    assert map_model_for_provider("openai/gpt-oss-20b", "huggingface", stored_model="Qwen/Qwen2.5-72B-Instruct") == "Qwen/Qwen2.5-72B-Instruct"

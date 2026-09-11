@@ -49,16 +49,6 @@ def test_like_wildcards_treated_literally(client, auth):
     assert [h["body"] for h in _run(db.search_memory("swarm", "plain"))] == ["plain note"]
 
 
-def test_history_after_is_capped(client, auth):
-    async def seed():
-        for i in range(4):
-            await db.add_message("general", "uzeb", f"m{i}", "human")
-
-    _run(seed())
-    rows = _run(db.get_history_after("general", 0, limit=2))
-    assert [r["body"] for r in rows] == ["m0", "m1"]
-
-
 def test_recoverable_runs_include_approval_waiters(client, auth):
     async def seed():
         run = await v2mod.create_run("uzeb", "do things", None)

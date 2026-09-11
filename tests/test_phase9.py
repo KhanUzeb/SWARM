@@ -6,20 +6,23 @@ import backend.db as db
 from backend.models import AgentCreate, DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, resolve_groq_model
 
 
-def test_groq_model_aliases():
+def test_model_aliases_and_tool_budget():
+    from backend.models import AgentPatch
     assert resolve_groq_model("llama-3.1-8b-instant") == FAST_GROQ_MODEL
     assert resolve_groq_model("llama-3.3-70b-versatile") == DEFAULT_GROQ_MODEL
     assert resolve_groq_model("openai/gpt-oss-20b") == "openai/gpt-oss-20b"
-    created = AgentCreate(name="x", system_prompt="hi", model="llama-3.1-8b-instant")
-    assert created.model == FAST_GROQ_MODEL
-
-
-def test_get_agent_includes_memories(client, auth):
-    data = client.get("/api/agents/swarm", headers=auth).json()
-    assert data["name"] == "swarm"
-    assert "memories" in data
-    assert data["memories"] == []
-    assert client.get("/api/agents/nope", headers=auth).status_code == 404
+    assert AgentCreate(name="x", system_prompt="hi", model="llama-3.1-8b-instant").model == FAST_GROQ_MODEL
+    assert agent.max_tool_calls_of({}) == agent.MAX_TOOL_CALLS == 6
+    assert agent.max_tool_calls_of({"max_tool_calls": 2}) == 2
+    assert agent.max_tool_calls_of({"max_tool_calls": 99}) == agent.TOOL_CALL_HARD_CAP == 12
+    assert AgentCreate(name="x", system_prompt="hi").max_tool_calls == 6
+    assert AgentPatch(max_tool_calls=12).max_tool_calls == 12
+    try:
+        AgentPatch(max_tool_calls=13)
+    except Exception:  # noqa: BLE001 — pydantic ValidationError
+        pass
+    else:
+        raise AssertionError("max_tool_calls=13 should be rejected")
 
 
 def test_memory_roundtrip_and_context(client):
@@ -175,18 +178,3 @@ def test_tool_call_caps(monkeypatch):
     assert len(closed["tool_events"]) == 1
     assert closed["reply"] == "did the thing, one step left"
     assert len(calls) == 3  # work round, capped round, no-tools closing round
-
-
-def test_tool_budget_defaults_and_hard_cap():
-    from backend.models import AgentPatch
-    assert agent.max_tool_calls_of({}) == agent.MAX_TOOL_CALLS == 6
-    assert agent.max_tool_calls_of({"max_tool_calls": 2}) == 2
-    assert agent.max_tool_calls_of({"max_tool_calls": 99}) == agent.TOOL_CALL_HARD_CAP == 12
-    assert AgentCreate(name="x", system_prompt="hi").max_tool_calls == 6
-    assert AgentPatch(max_tool_calls=12).max_tool_calls == 12
-    try:
-        AgentPatch(max_tool_calls=13)
-    except Exception:  # noqa: BLE001 — pydantic ValidationError
-        pass
-    else:
-        raise AssertionError("max_tool_calls=13 should be rejected")

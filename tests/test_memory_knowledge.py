@@ -38,6 +38,14 @@ def test_forget_tool_by_id_and_query(client, monkeypatch):
             sandbox_dir="", shell_runner=lambda cmd: "", workspace_helpers={},
         )
         assert "no matching notes" in missing
+        # Recall surfaces note ids for follow-up forget-by-id.
+        recallable = await db.add_memory("swarm", "recallable fact xyz", channel_id="general")
+        recalled = await registry.execute(
+            "recall", {"query": "recallable"},
+            agent_name="swarm", channel_id="general", allowed=["recall"],
+            sandbox_dir="", shell_runner=lambda cmd: "", workspace_helpers={},
+        )
+        assert f"(id {recallable['id']})" in recalled
 
     asyncio.run(scenario())
 
@@ -57,23 +65,6 @@ def test_memory_endpoints_list_and_forget(client, auth):
     assert gone.status_code == 200
     _clear_rate()
     assert client.delete(f"/api/agents/swarm/memory/{row['id']}", headers=auth).status_code == 404
-
-
-def test_recall_lists_note_ids(client, auth):
-    async def seed():
-        return await db.add_memory("swarm", "recallable fact xyz", channel_id="general")
-
-    row = asyncio.run(seed())
-    from backend.tools.registry import get_registry
-
-    async def run():
-        return await get_registry().execute(
-            "recall", {"query": "recallable"},
-            agent_name="swarm", channel_id="general", allowed=["recall"],
-            sandbox_dir="", shell_runner=lambda cmd: "", workspace_helpers={},
-        )
-
-    assert f"(id {row['id']})" in asyncio.run(run())
 
 
 # --------------------------------------------------------------- context ---
@@ -178,6 +169,17 @@ def test_knowledge_hits_reach_agent_prompt(client):
     assert package["stats"]["kb_hits"] >= 1
     assert "ship.sh" in package["kb_hits"][0]["body"]
 
+    # Prompt guidance only appears with the relevant tools enabled.
+    system_with = main.agent._build_messages(
+        "prompt", [], allowed_tools=["knowledge_search", "knowledge_save"])[0]["content"]
+    assert "Knowledge habit" in system_with
+    system_without = main.agent._build_messages(
+        "prompt", [], allowed_tools=["remember"])[0]["content"]
+    assert "Knowledge habit" not in system_without
+    system_forget = main.agent._build_messages(
+        "prompt", [], allowed_tools=["forget"])[0]["content"]
+    assert "Memory hygiene" in system_forget
+
 
 # --------------------------------------------------------------- knowledge ---
 def test_knowledge_crud_and_owner_isolation(client, auth):
@@ -276,19 +278,3 @@ def test_message_delete_requires_author_or_admin(client, auth):
     ).json()
     _clear_rate()
     assert client.delete(f"/api/messages/{own['id']}", headers=foreign).status_code == 200
-
-
-# --------------------------------------------------------------- agent guidance ---
-def test_build_messages_guides_knowledge_tools():
-    system_with = main.agent._build_messages(
-        "prompt", [], allowed_tools=["knowledge_search", "knowledge_save"])[0]["content"]
-    assert "Knowledge habit" in system_with
-    system_without = main.agent._build_messages(
-        "prompt", [], allowed_tools=["remember"])[0]["content"]
-    assert "Knowledge habit" not in system_without
-    system_forget = main.agent._build_messages(
-        "prompt", [], allowed_tools=["forget"])[0]["content"]
-    assert "Memory hygiene" in system_forget
-
-
-

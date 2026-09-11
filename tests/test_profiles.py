@@ -13,24 +13,17 @@ def test_seeded_bots_have_profile_files(client, auth):
     assert "You are **coder**" in (agents["coder"].get("profile") or "")
 
 
-def test_job_profile_used_when_no_named_file():
+def test_job_profile_fallback_and_injection():
     text = load_agent_profile("piper", "Product Performance")
     assert text
     assert "highest-impact" in text
     assert load_job_profile("sales-outbound")
-    assert load_named_missing()
+    assert load_agent_profile("no-such-bot", None) is None
 
-
-def load_named_missing():
-    return load_agent_profile("no-such-bot", None) is None
-
-
-def test_profile_injected_into_system_messages():
-    profile = load_agent_profile("swarm")
     messages = _build_messages(
         "You are swarm.",
         [{"author_kind": "human", "author": "uzeb", "body": "hi"}],
-        profile=profile,
+        profile=load_agent_profile("swarm"),
         display_name="Swarm",
         job="Generalist",
     )

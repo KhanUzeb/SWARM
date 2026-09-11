@@ -25,11 +25,13 @@ def test_v2_workflow_and_run_contract(client, auth):
     run = client.post(
         "/api/v2/runs",
         headers=auth,
-        json={"objective": "Check the release notes", "workflow_id": workflow["id"]},
+        json={"objective": "Check the release notes", "workflow_id": workflow["id"],
+              "model": "openai/gpt-oss-20b"},
     )
     assert run.status_code == 200
     run_body = run.json()
     assert run_body["status"] == "queued"
+    assert run_body["model"] == "openai/gpt-oss-20b"
 
     events = client.get(f"/api/v2/runs/{run_body['id']}/events", headers=auth)
     assert events.status_code == 200
@@ -67,6 +69,10 @@ def test_provider_catalog_routing_and_saved_model(client, auth):
     assert check.status_code == 200
     assert check.json()["supported"] is True
 
+    connected = client.get("/api/v2/models/connected", headers=auth)
+    assert connected.status_code == 200
+    assert {"models", "default_model", "live"} <= set(connected.json())
+
 
 def test_v2_rejects_invalid_workflow_graph(client, auth):
     response = client.post(
@@ -76,34 +82,6 @@ def test_v2_rejects_invalid_workflow_graph(client, auth):
     )
     assert response.status_code == 422
     assert "node ids must be unique" in str(response.json()["detail"])
-
-
-def test_v2_run_accepts_model(client, auth):
-    run = client.post(
-        "/api/v2/runs",
-        headers=auth,
-        json={"objective": "Summarize the brief", "model": "openai/gpt-oss-20b"},
-    )
-    assert run.status_code == 200
-    body = run.json()
-    assert body["model"] == "openai/gpt-oss-20b"
-
-
-def test_v2_connected_models_endpoint(client, auth):
-    response = client.get("/api/v2/models/connected", headers=auth)
-    assert response.status_code == 200
-    body = response.json()
-    assert "models" in body
-    assert "default_model" in body
-    assert "live" in body
-
-
-def test_computer_run_endpoint(client, auth):
-    response = client.post("/api/computer/run", headers=auth, json={"command": "echo swarm"})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["command"] == "echo swarm"
-    assert "swarm" in body["output"]
 
 
 def test_v2_oauth_start_requires_config_and_emits_pkce_url(client, auth, monkeypatch):

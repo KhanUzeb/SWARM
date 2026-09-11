@@ -47,6 +47,26 @@ def test_workflow_run_maps_to_same_session_interface(client, auth, monkeypatch):
     assert events[0]["work_id"] == session["id"]
     assert events[0]["seq"] >= 1
 
+    # A chat-triggered reply on the same interface links back full messages…
+    _clear_rate()
+    client.post(
+        "/api/channels/dm-swarm/messages",
+        json={"author": "uzeb", "body": "link me"},
+        headers=auth,
+    )
+    chat = _wait_for(
+        lambda: [s for s in client.get("/api/work", headers=auth).json()
+                 if s.get("channel_id") == "dm-swarm" and s["status"] == "completed"] or None)
+    msgs = client.get(f"/api/work/{chat[0]['id']}/messages", headers=auth)
+    assert msgs.status_code == 200
+    assert any(m.get("author") == "swarm" and m.get("body") == "run output"
+               and "reactions" in m for m in msgs.json())
+    assert client.get("/api/work/work_nope/messages", headers=auth).status_code == 404
+    # …and message linking stays idempotent.
+    assert asyncio.run(work.link_message(session["id"], 4242)) is True
+    assert asyncio.run(work.link_message(session["id"], 4242)) is False
+    assert asyncio.run(work.linked_messages(session["id"], "uzeb")) == [4242]
+
 
 def test_event_cursor_replay_is_stable(client, auth):
     """Cursor replay over run-backed sessions is monotonic and never
@@ -170,13 +190,6 @@ def test_owner_isolation_and_auth(client, auth):
     assert client.get(f"/api/work/{session['id']}/events").status_code == 401
 
 
-def test_message_linking_is_idempotent(client, auth):
-    session = asyncio.run(work.create_session("uzeb", "link check", source="chat"))
-    assert asyncio.run(work.link_message(session["id"], 4242)) is True
-    assert asyncio.run(work.link_message(session["id"], 4242)) is False
-    assert asyncio.run(work.linked_messages(session["id"], "uzeb")) == [4242]
-
-
 def test_no_secrets_leak_through_events(client, auth):
     session = asyncio.run(work.create_session("uzeb", "secret check", source="chat"))
     event = asyncio.run(work.append_event(session["id"], "tool_started", {
@@ -268,26 +281,3 @@ def test_ws_receives_work_lifecycle_events(client, auth, monkeypatch):
     # The same session is listed with its message link.
     sessions = [s for s in client.get("/api/work", headers=auth).json() if s["id"] == work_id]
     assert sessions and sessions[0]["status"] == "completed"
-
-
-def test_work_messages_endpoint_returns_full_messages(client, auth, monkeypatch):
-    _mock_agent(monkeypatch, reply="linked reply body")
-    _clear_rate()
-    client.post(
-        "/api/channels/dm-swarm/messages",
-        json={"author": "uzeb", "body": "link me"},
-        headers=auth,
-    )
-    sessions = _wait_for(
-        lambda: [s for s in client.get("/api/work", headers=auth).json()
-                 if s["status"] == "completed"] or None)
-    work_id = sessions[0]["id"]
-    msgs = client.get(f"/api/work/{work_id}/messages", headers=auth)
-    assert msgs.status_code == 200
-    assert any(m.get("author") == "swarm" and m.get("body") == "linked reply body"
-               and "reactions" in m for m in msgs.json())
-    assert client.get("/api/work/work_nope/messages", headers=auth).status_code == 404
-
-
-
-

@@ -30,6 +30,8 @@ def test_seeded_bots_have_jobs_dms_and_tool_splits(client, auth):
     assert "computer_run" not in agents["ledger"]["tools"]
     assert agents["swarm"]["history_window"] == 12
     assert agents["ledger"]["max_tool_calls"] == 6
+    assert client.get("/api/agents/swarm", headers=auth).json()["memories"] == []
+    assert client.get("/api/agents/nope", headers=auth).status_code == 404
     channels = {c["id"]: c for c in client.get("/api/channels", headers=auth).json()}
     assert channels["dm-swarm"]["kind"] == "dm"
     assert channels["dm-swarm"]["owner_agent"] == "swarm"
@@ -91,8 +93,32 @@ def test_agent_lifecycle_create_patch_duplicate(client, auth):
     )
     assert again.status_code == 409
 
+    # Display names slug into stable agent names.
+    _clear_rate()
+    slugged = client.post(
+        "/api/agents",
+        json={"display_name": "Maya Chen", "system_prompt": "Help with ops.", "job": "Operations"},
+        headers=auth,
+    )
+    assert slugged.status_code == 200
+    assert slugged.json()["name"] == "maya-chen"
+    _clear_rate()
+    renamed = client.patch("/api/agents/maya-chen", json={"display_name": "Maya"}, headers=auth)
+    assert renamed.status_code == 200
+    assert renamed.json()["display_name"] == "Maya"
+    assert renamed.json()["name"] == "maya-chen"
 
-def test_dm_message_triggers_without_mention(client, auth, monkeypatch):
+    # Unknown tools are rejected at creation time.
+    _clear_rate()
+    bad = client.post(
+        "/api/agents",
+        json={"name": "badtools", "system_prompt": "test", "tools": ["not_a_real_tool_xyz"]},
+        headers=auth,
+    )
+    assert bad.status_code == 400
+
+
+def test_dm_triggers_without_mention_room_requires_it(client, auth, monkeypatch):
     async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
         if on_stream_start is not None:
             await on_stream_start()
@@ -116,21 +142,17 @@ def test_dm_message_triggers_without_mention(client, auth, monkeypatch):
                 break
         assert bodies == ["on it"]
 
-
-def test_room_still_requires_mention(client, auth, monkeypatch):
-    async def fake_reply(*_args, **_kwargs):
-        return {"reply": "should not run", "tool_events": [], "usage": {}}
-
-    monkeypatch.setattr("backend.agent.generate_reply", fake_reply)
-    monkeypatch.setattr("backend.main.agent.generate_reply", fake_reply)
     _clear_rate()
-    token = auth["Authorization"].removeprefix("Bearer ")
     with client.websocket_connect("/ws/general") as ws:
         ws.send_json({"token": token})
         ws.send_json({"body": "just chatting"})
-        event = ws.receive_json()
-        assert event["type"] == "message"
-        assert event["message"]["author_kind"] == "human"
+        # Status frames may precede the echo; read until it lands.
+        for _ in range(12):
+            event = ws.receive_json()
+            if event["type"] == "message" and event["message"].get("author_kind") == "human":
+                break
+        else:
+            raise AssertionError("no echo of the human message")
         # No agent follow-up: a second receive would block. Check history instead.
     history = client.get("/api/channels/general/messages", headers=auth).json()
     assert not any(m["author_kind"] == "agent" for m in history)
@@ -158,18 +180,13 @@ def test_skills_crud(client, auth):
     assert "Cite sources" in patched.json()["body"]
     _clear_rate()
     assert client.delete(f"/api/skills/{skill['id']}", headers=auth).status_code == 200
-    listed = client.get("/api/skills", headers=auth).json()
-    assert not any(s["name"] == "weekly-health" for s in listed)
-
-
-def test_bundled_slash_commands(client, auth):
-    names = {s["name"] for s in client.get("/api/skills", headers=auth).json()}
-    expected = {
-        "standup", "digest", "decide", "research", "page",
-        "repro", "draft", "review", "plan", "brief",
-    }
-    assert expected <= names
-    standup = next(s for s in client.get("/api/skills", headers=auth).json() if s["name"] == "standup")
+    remaining = client.get("/api/skills", headers=auth).json()
+    assert not any(s["name"] == "weekly-health" for s in remaining)
+    # Bundled slash commands ship with the product.
+    names = {s["name"] for s in remaining}
+    assert {"standup", "digest", "decide", "research", "page",
+            "repro", "draft", "review", "plan", "brief"} <= names
+    standup = next(s for s in remaining if s["name"] == "standup")
     assert "blockers" in standup["body"].lower()
 
 
@@ -264,7 +281,7 @@ def test_approvals_roundtrip(client, auth, monkeypatch):
     assert any("Approved: send outreach" in m["body"] for m in history)
 
 
-def test_computer_workspace(client, auth, tmp_path, monkeypatch):
+def test_sandbox_api_and_writes_stay_inside(client, auth, tmp_path, monkeypatch):
     sandbox = tmp_path / "box"
     sandbox.mkdir()
     (sandbox / "notes.md").write_text("hello", encoding="utf-8")
@@ -276,6 +293,13 @@ def test_computer_workspace(client, auth, tmp_path, monkeypatch):
     preview = client.get("/api/computer/file", params={"path": "notes.md"}, headers=auth).json()
     assert preview["content"] == "hello"
     assert client.get("/api/computer/file", params={"path": "../secret"}, headers=auth).status_code == 404
+
+    result = asyncio.run(agent._run_write_workspace("reports/a.md", "# hi"))
+    assert "wrote reports/a.md" in result
+    assert (sandbox / "reports" / "a.md").read_text(encoding="utf-8") == "# hi"
+    denied = asyncio.run(agent._run_write_workspace("../escape.md", "nope"))
+    assert "invalid" in denied
+    assert not (tmp_path / "escape.md").exists()
 
 
 def test_handoff_from_agent_mention(client, auth, monkeypatch):
@@ -302,22 +326,6 @@ def test_handoff_from_agent_mention(client, auth, monkeypatch):
                     break
         assert "swarm" in authors
         assert "ledger" in authors
-
-
-def test_custom_display_name_slugs(client, auth):
-    _clear_rate()
-    created = client.post(
-        "/api/agents",
-        json={"display_name": "Maya Chen", "system_prompt": "Help with ops.", "job": "Operations"},
-        headers=auth,
-    )
-    assert created.status_code == 200
-    assert created.json()["name"] == "maya-chen"
-    _clear_rate()
-    patched = client.patch("/api/agents/maya-chen", json={"display_name": "Maya"}, headers=auth)
-    assert patched.status_code == 200
-    assert patched.json()["display_name"] == "Maya"
-    assert patched.json()["name"] == "maya-chen"
 
 
 def test_group_chat_triggers_members_without_mention(client, auth, monkeypatch):
@@ -363,15 +371,3 @@ def test_group_chat_triggers_members_without_mention(client, auth, monkeypatch):
                 if "swarm" in authors and "ledger" in authors:
                     break
         assert authors[:2] == ["swarm", "ledger"]
-
-
-def test_workspace_write_stays_in_sandbox(tmp_path, monkeypatch):
-    sandbox = tmp_path / "box"
-    sandbox.mkdir()
-    monkeypatch.setattr(agent, "SANDBOX_DIR", str(sandbox))
-    result = asyncio.run(agent._run_write_workspace("reports/a.md", "# hi"))
-    assert "wrote reports/a.md" in result
-    assert (sandbox / "reports" / "a.md").read_text(encoding="utf-8") == "# hi"
-    denied = asyncio.run(agent._run_write_workspace("../escape.md", "nope"))
-    assert "invalid" in denied
-    assert not (tmp_path / "escape.md").exists()

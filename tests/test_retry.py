@@ -52,13 +52,12 @@ def test_retry_agent_message_deletes_error_and_reruns(client, auth, monkeypatch)
         time.sleep(0.1)
     assert ran["count"] == 1
 
-
-def test_retry_rejects_non_error_messages(client, auth):
-    posted = client.post(
+    # Retrying a healthy message is rejected, not re-run.
+    _clear_rate()
+    healthy = client.post(
         "/api/channels/general/messages",
         json={"author": "uzeb", "body": "normal message"},
         headers=auth,
     ).json()
     _clear_rate()
-    res = client.post(f"/api/messages/{posted['id']}/retry", headers=auth)
-    assert res.status_code == 400
+    assert client.post(f"/api/messages/{healthy['id']}/retry", headers=auth).status_code == 400

@@ -35,6 +35,13 @@ def test_first_user_is_admin_second_is_member(client):
     assert handles["uzeb"] == "admin"
     assert handles["maya"] == "member"
 
+    gate = client.get("/api/status").json()
+    assert gate["onboarded"] is False
+    assert gate["admins"] == ["uzeb"]
+    marked = client.post("/api/workspace/onboarded", headers=_auth(first["token"]))
+    assert marked.status_code == 200
+    assert client.get("/api/status").json()["onboarded"] is True
+
 
 def test_member_cannot_create_or_archive_bots(client, auth):
     member = _register(client, "maya")
@@ -101,15 +108,6 @@ def test_admin_password_required_to_reclaim_handle(local_client):
         headers=_auth(loopback_member["token"]),
     )
     assert res.status_code == 403
-
-
-def test_workspace_onboarded_survives_and_skips_flag(client, auth):
-    gate = client.get("/api/status").json()
-    assert gate["onboarded"] is False
-    assert gate["admins"] == ["uzeb"]
-    marked = client.post("/api/workspace/onboarded", headers=auth)
-    assert marked.status_code == 200
-    assert client.get("/api/status").json()["onboarded"] is True
 
 
 def test_people_dm_is_private(client, auth):

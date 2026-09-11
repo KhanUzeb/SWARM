@@ -33,49 +33,37 @@ def test_seeded_agents_get_computer_use(client, auth):
     assert "plugin:composio:execute" not in agents["ledger"]["tools"]
 
 
-def test_computer_run_echo(tmp_path, monkeypatch):
+def test_runners_echo_and_block(client, auth, tmp_path, monkeypatch):
+    response = client.post("/api/computer/run", headers=auth, json={"command": "echo swarm"})
+    assert response.status_code == 200
+    assert response.json()["command"] == "echo swarm"
+    assert "swarm" in response.json()["output"]
+
     monkeypatch.setattr("backend.agent.SANDBOX_DIR", str(tmp_path))
     out = computer.computer_run("echo swarm-computer")
     assert "swarm-computer" in out
-    blocked = computer.computer_run("rm -rf /")
-    assert "blocked" in blocked
-
-
-def test_computer_open_url_points_at_browser(monkeypatch):
+    assert "blocked" in computer.computer_run("rm -rf /")
     monkeypatch.setenv("SWARM_BROWSER", "1")
-    note = computer.computer_open("https://example.com")
-    assert "browser_navigate" in note
+    assert "browser_navigate" in computer.computer_open("https://example.com")
 
-
-def test_status_includes_composio_and_browser(client):
-    body = client.get("/api/status").json()
-    assert body["composio"] is False
-    assert body["exa"] is False
-    assert body["tavily"] is False
-    assert body["firecrawl"] is False
-    assert body["browser"] is True
-    assert body["system"] is True
-
-
-def test_system_run_echo(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_SYSTEM", "1")
     monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
     (tmp_path / "hello.txt").write_text("hi-from-host", encoding="utf-8")
     out = system_mod.system_run("echo swarm-system")
     assert "swarm-system" in out
-    listed = system_mod.system_ls("")
-    assert "hello.txt" in listed
-    read = system_mod.system_read("hello.txt")
-    assert "hi-from-host" in read
-    wrote = system_mod.system_write("note.md", "ok")
-    assert "wrote note.md" in wrote
+    assert "blocked" in system_mod.system_run("rm -rf /")
+
+
+def test_system_files_and_guards(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
+    (tmp_path / "hello.txt").write_text("hi-from-host", encoding="utf-8")
+    assert "hello.txt" in system_mod.system_ls("")
+    assert "hi-from-host" in system_mod.system_read("hello.txt")
+    assert "wrote note.md" in system_mod.system_write("note.md", "ok")
     assert (tmp_path / "note.md").read_text(encoding="utf-8") == "ok"
-    blocked = system_mod.system_run("rm -rf /")
-    assert "blocked" in blocked
-    escaped = system_mod.system_read("../secret")
-    assert "invalid path" in escaped
-    env_block = system_mod.system_write(".env", "SECRET=1")
-    assert "protected" in env_block
+    assert "invalid path" in system_mod.system_read("../secret")
+    assert "protected" in system_mod.system_write(".env", "SECRET=1")
 
 
 def test_system_disabled_at_function_and_api_layers(client, auth, tmp_path, monkeypatch):
@@ -90,15 +78,24 @@ def test_system_disabled_at_function_and_api_layers(client, auth, tmp_path, monk
     ).status_code == 403
 
 
-def test_computer_api_includes_system(client, auth, tmp_path, monkeypatch):
+def test_system_root_mobility(client, auth, tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    other = tmp_path / "elsewhere"
+    project.mkdir()
+    other.mkdir()
+    (other / "outside.md").write_text("hello-outside", encoding="utf-8")
+    (project / "host.md").write_text("from-host", encoding="utf-8")
     monkeypatch.setenv("SWARM_SYSTEM", "1")
-    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
-    (tmp_path / "host.md").write_text("from-host", encoding="utf-8")
+    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
+
     data = client.get("/api/computer", headers=auth).json()
     assert data["system"]["enabled"] is True
     assert any(e["name"] == "host.md" for e in data["system"]["entries"])
     listing = client.get("/api/computer/system", headers=auth).json()
     assert listing["enabled"] is True
+    assert Path(listing["root"]) == project.resolve()
+    assert any(p["id"] == "home" for p in listing["places"])
+    assert "crumbs" in listing
     preview = client.get(
         "/api/computer/system/file", params={"path": "host.md"}, headers=auth
     ).json()
@@ -107,22 +104,7 @@ def test_computer_api_includes_system(client, auth, tmp_path, monkeypatch):
         "/api/computer/system/file", params={"path": "../secret"}, headers=auth
     ).status_code == 404
 
-
-def test_system_root_mobility(client, auth, tmp_path, monkeypatch):
-    project = tmp_path / "project"
-    other = tmp_path / "elsewhere"
-    project.mkdir()
-    other.mkdir()
-    (other / "outside.md").write_text("hello-outside", encoding="utf-8")
-    monkeypatch.setenv("SWARM_SYSTEM", "1")
-    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
-
-    listing = client.get("/api/computer/system", headers=auth).json()
-    assert listing["enabled"] is True
-    assert Path(listing["root"]) == project.resolve()
-    assert any(p["id"] == "home" for p in listing["places"])
-    assert "crumbs" in listing
-
+    # The root can move within the filesystem anchor, but not to it.
     _clear_rate()
     moved = client.post(
         "/api/computer/system/root",
@@ -133,10 +115,10 @@ def test_system_root_mobility(client, auth, tmp_path, monkeypatch):
     body = moved.json()
     assert Path(body["root"]) == other.resolve()
     assert any(e["name"] == "outside.md" for e in body["entries"])
-    preview = client.get(
+    outside_preview = client.get(
         "/api/computer/system/file", params={"path": "outside.md"}, headers=auth
     ).json()
-    assert preview["content"] == "hello-outside"
+    assert outside_preview["content"] == "hello-outside"
 
     _clear_rate()
     up = client.post(
@@ -190,6 +172,9 @@ def test_system_listing_scopes_and_hides(tmp_path, monkeypatch):
 
 
 def test_browser_status_and_disabled(client, auth, monkeypatch):
+    flags = client.get("/api/status").json()
+    assert flags["browser"] is True
+    assert flags["system"] is True
     monkeypatch.setenv("SWARM_BROWSER", "0")
     res = client.get("/api/browser/status", headers=auth)
     assert res.status_code == 200
@@ -198,11 +183,31 @@ def test_browser_status_and_disabled(client, auth, monkeypatch):
     assert "unavailable" in text.lower()
 
 
-def test_composio_status_and_connect(client, auth, monkeypatch):
+def test_composio_connect_cycle_and_keyless_layers(client, auth, monkeypatch):
     monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
     status = client.get("/api/composio/status", headers=auth)
     assert status.status_code == 200
     assert status.json()["connected"] is False
+    flags = client.get("/api/status").json()
+    assert flags["composio"] is False
+    assert flags["exa"] is False
+    assert flags["tavily"] is False
+    assert flags["firecrawl"] is False
+
+    async def via_registry():
+        return await get_registry().execute(
+            "plugin:composio:execute",
+            {"tool_slug": "GMAIL_SEND_EMAIL"},
+            agent_name="swarm",
+            channel_id="general",
+            allowed=["plugin:composio:execute"],
+            sandbox_dir="/tmp",
+            shell_runner=lambda _cmd: "",
+            workspace_helpers={},
+        )
+
+    assert "composio not connected" in asyncio.run(via_registry()).lower()
+    assert "composio not connected" in asyncio.run(composio_client.execute("GMAIL_SEND_EMAIL", {})).lower()
 
     connect = client.post(
         "/api/composio/connect",
@@ -219,26 +224,7 @@ def test_composio_status_and_connect(client, auth, monkeypatch):
     assert client.get("/api/composio/status", headers=auth).json()["connected"] is False
 
 
-def test_composio_without_key_at_both_layers(client, monkeypatch):
-    monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
-
-    async def go():
-        return await get_registry().execute(
-            "plugin:composio:execute",
-            {"tool_slug": "GMAIL_SEND_EMAIL"},
-            agent_name="swarm",
-            channel_id="general",
-            allowed=["plugin:composio:execute"],
-            sandbox_dir="/tmp",
-            shell_runner=lambda _cmd: "",
-            workspace_helpers={},
-        )
-
-    assert "composio not connected" in asyncio.run(go()).lower()
-    assert "composio not connected" in asyncio.run(composio_client.execute("GMAIL_SEND_EMAIL", {})).lower()
-
-
-def test_connectors_catalog_and_exa_without_key(client, auth, monkeypatch):
+def test_connectors_catalog_exa_and_cli_key(client, auth, monkeypatch):
     monkeypatch.delenv("EXA_API_KEY", raising=False)
     res = client.get("/api/connectors", headers=auth)
     assert res.status_code == 200
@@ -246,20 +232,9 @@ def test_connectors_catalog_and_exa_without_key(client, auth, monkeypatch):
     assert ids >= {"composio", "exa", "tavily", "firecrawl", "browser_use", "cua"}
     text = asyncio.run(__import__("backend.tools.connectors", fromlist=["exa_search"]).exa_search("latest llm papers"))
     assert "exa not connected" in text.lower()
-
-
-def test_connector_cli_rejects_api_key(client, auth):
-    res = client.post(
+    bad = client.post(
         "/api/connectors/browser_use/connect",
         json={"api_key": "not-a-real-key-here"},
         headers=auth,
     )
-    assert res.status_code == 400
-
-
-def test_optional_clis_degrade_gracefully(client):
-    connectors = __import__("backend.tools.connectors", fromlist=["browser_use_cli", "cua_desktop"])
-    browser_text = asyncio.run(connectors.browser_use_cli("status"))
-    assert "not installed" in browser_text.lower() or "browser-use" in browser_text.lower()
-    cua_text = asyncio.run(connectors.cua_desktop("status"))
-    assert "cli:" in cua_text.lower() or "cua" in cua_text.lower()
+    assert bad.status_code == 400

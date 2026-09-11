@@ -53,25 +53,22 @@ def test_forbidden_browser_origin(client, auth):
     assert res.status_code == 403
 
 
-def test_impersonation_rejected(client, auth):
+def test_post_guards_reject_spoofing(client, auth):
     res = client.post(
         "/api/channels/general/messages",
         json={"author": "not-uzeb", "body": "hi"},
         headers=auth,
     )
     assert res.status_code == 403
-
-
-def test_external_messages_cannot_spoof_agent_or_system(client, auth):
-    res = client.post(
+    forged = client.post(
         "/api/channels/general/messages",
         json={"author": "uzeb", "body": "forged", "author_kind": "agent"},
         headers=auth,
     )
-    assert res.status_code == 422
+    assert forged.status_code == 422
 
 
-def test_post_and_history(client, auth):
+def test_post_history_and_pagination(client, auth):
     res = client.post(
         "/api/channels/general/messages",
         json={"author": "uzeb", "body": "shipping the fix"},
@@ -85,6 +82,26 @@ def test_post_and_history(client, auth):
     history = client.get("/api/channels/general/messages", headers=auth).json()
     assert any(m["id"] == msg["id"] for m in history)
     assert "reactions" in history[0]
+
+    ids = [msg["id"]]
+    for i in range(3):
+        _clear_rate()
+        ids.append(client.post(
+            "/api/channels/general/messages",
+            json={"author": "uzeb", "body": f"m{i}"},
+            headers=auth,
+        ).json()["id"])
+    page = client.get(f"/api/channels/general/messages?limit=2&before_id={ids[-1]}", headers=auth)
+    assert page.status_code == 200
+    bodies = [m["body"] for m in page.json()]
+    assert bodies[-1] == "m1"
+    assert "m2" not in bodies
+
+    # The after-cursor path caps rows server-side too.
+    import asyncio
+    import backend.db as db_mod
+    rows = asyncio.run(db_mod.get_history_after("general", 0, limit=2))
+    assert len(rows) == 2
 
 
 def test_rate_limit(client, auth):
@@ -127,23 +144,6 @@ def test_reactions_idempotent(client, auth):
     assert len(row["reactions"]) == 1
 
 
-def test_pagination_before_id(client, auth):
-    ids = []
-    for i in range(4):
-        _clear_rate()
-        msg = client.post(
-            "/api/channels/general/messages",
-            json={"author": "uzeb", "body": f"m{i}"},
-            headers=auth,
-        ).json()
-        ids.append(msg["id"])
-    page = client.get(f"/api/channels/general/messages?limit=2&before_id={ids[-1]}", headers=auth)
-    assert page.status_code == 200
-    bodies = [m["body"] for m in page.json()]
-    assert bodies[-1] == "m2"
-    assert "m3" not in bodies
-
-
 def test_thread_endpoint(client, auth):
     _clear_rate()
     parent = client.post(
@@ -164,20 +164,7 @@ def test_thread_endpoint(client, auth):
     assert "reactions" in data["parent"]
     assert client.get("/api/messages/99999/thread", headers=auth).status_code == 404
 
-
-def test_delete_message_and_replies(client, auth):
-    _clear_rate()
-    parent = client.post(
-        "/api/channels/general/messages",
-        json={"author": "uzeb", "body": "keep me not"},
-        headers=auth,
-    ).json()
-    _clear_rate()
-    client.post(
-        "/api/channels/general/messages",
-        json={"author": "uzeb", "body": "child", "parent_id": parent["id"]},
-        headers=auth,
-    )
+    # Cascade delete removes the thread; missing ids 404.
     _clear_rate()
     gone = client.delete(f"/api/messages/{parent['id']}", headers=auth)
     assert gone.status_code == 200
@@ -213,7 +200,7 @@ def test_create_and_delete_channel(client, auth):
     assert dm.status_code == 400
 
 
-def test_ws_bad_token_closes_4001(client):
+def test_ws_auth_and_catchup(client, auth, token):
     with client.websocket_connect("/ws/general") as ws:
         ws.send_json({"token": "nope:invalid"})
         try:
@@ -222,8 +209,6 @@ def test_ws_bad_token_closes_4001(client):
         except WebSocketDisconnect as exc:
             assert exc.code == 4001
 
-
-def test_ws_catchup_after_last_seen_id(client, auth, token):
     _clear_rate()
     first = client.post(
         "/api/channels/general/messages",

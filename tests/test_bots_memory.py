@@ -42,6 +42,17 @@ def test_create_agent_happy_path(client, auth):
     # Sidebar agents list shows the new bot.
     agents = client.get("/api/agents", headers=auth).json()
     assert "coach-fit" in [a["name"] for a in agents]
+    # Stripping swarm's own tool re-adds it on backfill too.
+    async def strip_swarm():
+        row = await db.fetch_agent("swarm")
+        names = [t for t in db.parse_tools(row["tools"]) if t != "create_agent"]
+        async with __import__("aiosqlite").connect(db.DB_PATH) as conn:
+            await conn.execute("UPDATE agents SET tools = ? WHERE name = 'swarm'", (json.dumps(names),))
+            await conn.commit()
+        await db.init_db()
+
+    _run(strip_swarm())
+    assert "create_agent" in db.parse_tools(_run(db.fetch_agent("swarm"))["tools"])
 
 
 def test_create_agent_rejects_bad_and_duplicate_names(client, auth):
@@ -56,19 +67,6 @@ def test_create_agent_rejects_bad_and_duplicate_names(client, auth):
         "name": "pick", "job": "j", "system_prompt": "a proper role description here",
         "tools": ["nope-not-a-tool"],
     })
-
-
-def test_swarm_backfilled_with_create_agent(client):
-    async def strip():
-        row = await db.fetch_agent("swarm")
-        names = [t for t in db.parse_tools(row["tools"]) if t != "create_agent"]
-        async with __import__("aiosqlite").connect(db.DB_PATH) as conn:
-            await conn.execute("UPDATE agents SET tools = ? WHERE name = 'swarm'", (json.dumps(names),))
-            await conn.commit()
-
-    _run(strip())
-    _run(db.init_db())
-    assert "create_agent" in db.parse_tools(_run(db.fetch_agent("swarm"))["tools"])
 
 
 def test_tool_gate_opens_for_bot_requests():
