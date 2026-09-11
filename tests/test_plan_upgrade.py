@@ -345,22 +345,6 @@ def test_model_override_falls_back_when_gone(client, monkeypatch):
     assert result["model"] != "bad-model-xyz"
 
 
-def test_stt_status_and_transcribe_guards(client, auth, monkeypatch):
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    status = client.get("/api/stt/status", headers=auth)
-    assert status.status_code == 200
-    assert status.json()["available"] is False
-
-    denied = client.post("/api/stt/transcribe", headers=auth, content=b"")
-    assert denied.status_code == 503
-
-    monkeypatch.setenv("GROQ_API_KEY", "gsk_test_stt")
-    empty = client.post("/api/stt/transcribe", headers=auth, content=b"")
-    assert empty.status_code == 422
-    big = client.post("/api/stt/transcribe", headers=auth, content=b"x" * (11 * 1024 * 1024))
-    assert big.status_code == 413
-
-
 def test_policy_endpoint(client, auth):
     res = client.post("/api/v2/policy/evaluate", json={
         "agent": "coder", "tool": "push_to_main", "target": "main",

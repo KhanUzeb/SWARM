@@ -54,8 +54,9 @@ solid — glow lives at the margins and never competes with the work.
    The active chat model shows as a chip in the composer (grey dot =
    Auto, glowing blue dot = pinned model, provider name included) and
    as a tag on every agent bubble; token streams render live in a
-   blue-outlined bubble with a blinking caret. Stop is a red octagon
-   beside send while generation runs; the mic pulses magenta while
-   recording; stopped replies use a dashed bubble with a Resume action.
+   blue-outlined bubble with a    blinking caret. Stop is a red octagon
+   beside send while generation runs; stopped replies use a dashed
+   bubble with a Resume action. The composer is text-only — no voice
+   input.
 4. Borders stay at 5–12% white; depth comes from the backdrop.
 5. Contrast: primary text ≥ 12:1, secondary ≥ 7:1 on surfaces.

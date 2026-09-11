@@ -529,15 +529,7 @@ streamed text is persisted as an agent message with a trailing
 `[reply cut off — stopped]` marker so nothing shown is lost; the run's
 work session records `work_cancelled`.
 
-### Speech-to-text
-- `GET /api/stt/status` — `{available, provider, model}`. Backed by
-  Groq Whisper (`whisper-large-v3-turbo`); unavailable without a Groq key.
-- `POST /api/stt/transcribe?filename=voice.webm` — raw audio body
-  (10 MB max), returns `{"ok": true, "text", "model"}`. 503 when
-  unconfigured, 422 on empty body, 413 over the cap, 502 when the
-  speech backend is unreachable or returns no transcript. The composer
-  mic records with MediaRecorder and inserts the transcript into the
-  draft; failures surface inline, never as exceptions.
+
 
 ### `GET /api/messages/{message_id}/thread`
 Auth required. One-level thread: the parent message plus every

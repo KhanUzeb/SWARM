@@ -1028,63 +1028,7 @@ async def api_stop_channel(channel_id: str, handle: str = Depends(require_auth))
     return {"ok": True, "stopped": stopped}
 
 
-STT_MODEL = "whisper-large-v3-turbo"
-STT_MAX_BYTES = 10 * 1024 * 1024
 
-
-async def _stt_key() -> str | None:
-    spec = get_provider("groq") or {}
-    return await ai_store.resolve_key("groq", env_fallback=spec.get("env_fallback") or "GROQ_API_KEY")
-
-
-@app.get("/api/stt/status")
-async def api_stt_status(handle: str = Depends(require_auth)):
-    key = await _stt_key()
-    return {
-        "available": bool(key),
-        "provider": "groq" if key else None,
-        "model": STT_MODEL if key else None,
-    }
-
-
-@app.post("/api/stt/transcribe")
-async def api_stt_transcribe(request: Request, handle: str = Depends(require_auth)):
-    """Transcribe a voice note (raw audio body, e.g. audio/webm from the
-    composer mic) with the speech-to-text backend. 503 when unconfigured."""
-    key = await _stt_key()
-    if not key:
-        raise HTTPException(
-            status_code=503,
-            detail="speech-to-text is not configured — set GROQ_API_KEY or connect Groq",
-        )
-    body = await request.body()
-    if not body:
-        raise HTTPException(status_code=422, detail="empty audio body")
-    if len(body) > STT_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="voice note is too large (10 MB max)")
-    content_type = request.headers.get("content-type", "audio/webm")
-    filename = (request.query_params.get("filename") or "voice.webm")[:64]
-    import httpx
-
-    try:
-        async with httpx.AsyncClient(timeout=90) as client:
-            response = await client.post(
-                "https://api.groq.com/openai/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {key}"},
-                files={"file": (filename, body, content_type)},
-                data={"model": STT_MODEL, "response_format": "json"},
-            )
-    except Exception as exc:  # noqa: BLE001 — network outage
-        raise HTTPException(status_code=502, detail=f"speech backend unreachable: {exc}")
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="speech backend rejected the audio")
-    try:
-        text = (response.json().get("text") or "").strip()
-    except Exception:  # noqa: BLE001
-        text = ""
-    if not text:
-        raise HTTPException(status_code=502, detail="speech backend returned no transcript")
-    return {"ok": True, "text": text, "model": STT_MODEL}
 
 
 @app.get("/api/messages/{message_id}/thread")
