@@ -49,8 +49,9 @@ Three rules make the loop trustworthy:
 
 - **Five-second legibility:** who is working, on what, and what needs you —
   visible without leaving the conversation.
-- **Calm surfaces, loud signals:** charcoal + plum for intelligence,
-  persimmon for attention, jade only for confirmed success.
+- **Calm surfaces, loud signals:** midnight-indigo surfaces, violet for
+  identity and running work, magenta for attention, jade only for
+  confirmed success. See `docs/VISUAL-IDENTITY.md`.
 - **Recovery over perfection:** retries, reconnect replay, restart recovery,
   and idempotent actions are features, not edge cases.
 - **Local-first honesty:** SQLite, no cloud dependency, secrets sealed;

@@ -27,6 +27,8 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
   const [runModel, setRunModel] = useState("");
   const [workflowId, setWorkflowId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [routeHint, setRouteHint] = useState("");
+  const [routeBusy, setRouteBusy] = useState(false);
   const [editing, setEditing] = useState(null);
   const [editNodes, setEditNodes] = useState([]);
   const [agentName, setAgentName] = useState("swarm");
@@ -91,6 +93,31 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
     else flash?.(res.data?.detail || "Could not launch run", "error");
   }
 
+  async function suggestModel() {
+    if (!objective.trim() || routeBusy) return;
+    setRouteBusy(true);
+    setRouteHint("");
+    try {
+      const res = await apiJson("/api/v2/model-routing/route", {
+        token, method: "POST", body: { objective: objective.trim() },
+      });
+      if (res.ok && res.data) {
+        const { task_type, provider_name, model, reasons } = res.data;
+        if (model) {
+          if (res.data.provider_id) setModelProviderId(res.data.provider_id);
+          setRunModel(model);
+        }
+        setRouteHint(`${task_type} task${provider_name ? ` → ${provider_name}` : ""}${model ? ` · ${model}` : ""}. ${(reasons || [])[0] || ""}`);
+      } else {
+        setRouteHint(res.data?.detail || "Could not suggest a model");
+      }
+    } catch (e) {
+      setRouteHint(e.message || "Could not suggest a model");
+    } finally {
+      setRouteBusy(false);
+    }
+  }
+
   function openEditor(workflow) {
     setEditing(workflow);
     setEditNodes(workflow.graph?.nodes || []);
@@ -122,16 +149,24 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
           <form onSubmit={launchRun} className="cc-form">
             <Textarea value={objective} onChange={e => setObjective(e.target.value)} placeholder="What should your agent team accomplish?" rows={4} />
             <label className="field-label" htmlFor="run-model">Model</label>
-            <ModelPicker
-              id="run-model"
-              token={token}
-              providerId={connectedProvider?.id}
-              value={runModel}
-              onChange={setRunModel}
-              autoSelectFirst
-              placeholder={connectedProvider ? "Select a model from API" : "Connect a provider first"}
-              disabled={!connectedProvider}
-            />
+            <div className="row">
+              <div style={{ flex: 1 }}>
+                <ModelPicker
+                  id="run-model"
+                  token={token}
+                  providerId={connectedProvider?.id}
+                  value={runModel}
+                  onChange={setRunModel}
+                  autoSelectFirst
+                  placeholder={connectedProvider ? "Select a model from API" : "Connect a provider first"}
+                  disabled={!connectedProvider}
+                />
+              </div>
+              <Button variant="ghost" size="sm" onClick={suggestModel} disabled={!objective.trim() || routeBusy || !llmReady} title="Classify this brief and pick a connected model">
+                {routeBusy ? "Routing…" : "Auto-route"}
+              </Button>
+            </div>
+            {routeHint && <p className="muted small" role="status">{routeHint}</p>}
             {workflows.length > 0 && (
               <>
                 <label className="field-label" htmlFor="run-workflow">Workflow (optional)</label>
@@ -154,98 +189,6 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
       {editing && <div className="workflow-editor-backdrop"><section className="workflow-editor"><header className="run-monitor-head"><div><span className="eyebrow">Workflow designer</span><h2>{editing.name}</h2></div><button className="panel-close" onClick={() => setEditing(null)}>×</button></header><div className="workflow-node-list">{editNodes.map((node, index) => <div className="workflow-node" key={node.id}><span className="node-index">{index + 1}</span><span><b>{node.label}</b><small>{node.type === "agent" ? `${node.agent}${node.model ? ` · ${node.model}` : ""}` : node.type}</small></span><button className="node-remove" onClick={() => setEditNodes(nodes => nodes.filter(n => n.id !== node.id))}>×</button></div>)}</div><div className="cc-inline-form workflow-add"><select className="input" value={agentName} onChange={e => setAgentName(e.target.value)}>{agents.length ? agents.map(a => <option key={a.name} value={a.name}>{a.display_name || a.name}</option>) : <option value="swarm">swarm</option>}</select><ModelPicker token={token} providerId={connectedProvider?.id} value={agentModel} onChange={setAgentModel} placeholder="Model from API" disabled={!connectedProvider} /><Button variant="ghost" onClick={() => setEditNodes(nodes => [...nodes, { id: `agent-${Date.now()}`, type: "agent", label: `Agent ${agentName}`, agent: agentName, ...(agentModel.trim() ? { model: agentModel.trim() } : {}) }])}>Add agent</Button></div><footer className="workflow-editor-actions"><Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button><Button variant="primary" disabled={busy} onClick={saveEditor}>Save workflow</Button></footer></section></div>}
       <section className="cc-runs"><div className="cc-section-head"><div><span className="eyebrow">Recent activity</span><h2>Runs</h2></div><span className="cc-count">{runs.length}</span></div>{runs.length ? <div className="cc-run-list">{runs.slice(0, 8).map(r => <button className="cc-run-row" key={r.id} onClick={() => onOpenRun?.(r)}><span className={`run-status ${r.status}`} /><span className="run-objective">{r.objective}</span><Badge variant={r.status === "completed" ? "success" : r.status === "failed" ? "error" : "subtle"}>{r.status.replaceAll("_", " ")}</Badge><span className="text-subtle" style={{ fontSize: 12 }}>{new Date(r.created_at * 1000).toLocaleString()}</span></button>)}</div> : <EmptyState kind="run" title="No runs yet" message="Launch a brief and your live run history will appear here." />}</section>
       <section className={`cc-providers${providersCollapsed ? " collapsed" : ""}`}><div className="cc-section-head"><div><span className="eyebrow">Model access</span><h2>AI providers</h2></div><span style={{ display: "flex", alignItems: "center", gap: 10 }}><span className="cc-provider-note" style={{ display: providersCollapsed ? "none" : undefined }}>API key or supported OAuth</span><button className="btn btn-ghost btn-sm" aria-expanded={!providersCollapsed} aria-label={providersCollapsed ? "Expand providers" : "Minimise providers"} onClick={() => { const next = !providersCollapsed; setProvidersCollapsed(next); try { localStorage.setItem("swarm.providersCollapsed", next ? "1" : "0"); } catch {} }}>{providersCollapsed ? "Show" : "Minimise"} <span aria-hidden>{providersCollapsed ? "▾" : "▴"}</span></button></span></div>{!providersCollapsed && <ProviderPanel token={token} onStatusChange={load} flash={(message, error) => flash?.(message, error ? "error" : "success")} />}{providersCollapsed && <div className="cc-provider-collapsed-note"><span className="cc-provider-note">Collapsed — {providers.filter(p => p.connected).length} connected</span> <button className="btn btn-subtle btn-sm" onClick={() => { setProvidersCollapsed(false); try { localStorage.setItem("swarm.providersCollapsed", "0"); } catch {} }}>Expand</button></div>}</section>
-    </div>
-  );
-}
-
-function eventDetail(event) {
-  const payload = event.payload || {};
-  if (payload.output) return payload.output;
-  if (payload.error) return payload.error;
-  if (payload.objective) return payload.objective;
-  if (payload.decision) return `Decision: ${payload.decision}`;
-  return "";
-}
-
-export function RunMonitor({ token, run, onClose }) {
-  const [current, setCurrent] = useState(run);
-  const [events, setEvents] = useState([]);
-  const [error, setError] = useState("");
-  const [approvalBusy, setApprovalBusy] = useState(false);
-
-  const refresh = useCallback(async () => {
-    if (!run?.id) return;
-    const [r, e] = await Promise.all([
-      apiJson(`/api/v2/runs/${run.id}`, { token }),
-      apiJson(`/api/v2/runs/${run.id}/events?after=0`, { token }),
-    ]);
-    if (r.ok) setCurrent(r.data); else setError("Run is no longer available");
-    if (e.ok) setEvents(e.data);
-  }, [token, run?.id]);
-
-  useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, 2500);
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${proto}://${location.host}/api/v2/ws/runs/${encodeURIComponent(run.id)}`);
-    socket.onopen = () => socket.send(JSON.stringify({ token, after: 0 }));
-    socket.onmessage = message => {
-      try {
-        const event = JSON.parse(message.data);
-        if (event.type === "run_terminal") { setCurrent(value => ({ ...value, status: event.status })); return; }
-        if (event.seq) setEvents(values => [...values.filter(value => value.seq !== event.seq), event].sort((a, b) => a.seq - b.seq));
-      } catch { /* polling remains the fallback */ }
-    };
-    return () => { clearInterval(timer); socket.close(); };
-  }, [refresh, run.id, token]);
-
-  async function resolveApproval(event, decision) {
-    if (!event.step_id) return;
-    setApprovalBusy(true);
-    const response = await apiJson(`/api/v2/runs/${run.id}/approvals/${event.step_id}`, { token, method: "POST", body: { status: decision } });
-    setApprovalBusy(false);
-    if (response.ok) refresh(); else setError(response.data?.detail || "Could not resolve approval");
-  }
-
-  async function downloadArtifact(event, artifact) {
-    event.preventDefault();
-    const response = await fetch(`/api/v2/artifacts/${artifact.id}`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!response.ok) return;
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a"); link.href = url; link.download = artifact.name || "artifact"; link.click();
-    URL.revokeObjectURL(url);
-  }
-
-  if (!run) return null;
-  return (
-    <div className="run-monitor-backdrop" role="dialog" aria-modal="true">
-      <section className="run-monitor">
-        <header className="run-monitor-head"><div><span className="eyebrow">Live run</span><h2>{current?.objective || run.objective}</h2><span className="text-subtle" style={{ fontSize: 12 }}>{current?.id || run.id}{current?.model ? ` · ${current.model}` : ""}</span></div><button className="panel-close" onClick={onClose} aria-label="Close">×</button></header>
-        <div className="run-monitor-status"><span className={`run-status ${current?.status}`} /><strong>{(current?.status || "queued").replaceAll("_", " ")}</strong><span className="text-subtle">Supervised execution</span></div>
-        {error && <p className="run-monitor-error">{error}</p>}
-        <div className="run-event-list">{events.length ? events.map(e => {
-          const detail = eventDetail(e);
-          const isError = detail.includes("[agent error:");
-          return (
-            <div className={`run-event${isError ? " run-event-error" : ""}`} key={`${e.run_id}-${e.seq}`}>
-              <span className="event-seq">{String(e.seq).padStart(2, "0")}</span>
-              <span>
-                <b>{e.event_type.replaceAll("_", " ")}</b>
-                <small>{e.step_id || "run"} · {new Date(e.created_at * 1000).toLocaleTimeString()}</small>
-                {detail && <p className="run-event-detail">{detail}</p>}
-                {e.event_type === "approval_requested" && current?.status === "waiting_for_approval" && (
-                  <span className="run-approval-actions">
-                    <Button size="sm" variant="primary" disabled={approvalBusy} onClick={() => resolveApproval(e, "approved")}>Approve</Button>
-                    <Button size="sm" variant="ghost" disabled={approvalBusy} onClick={() => resolveApproval(e, "denied")}>Deny</Button>
-                  </span>
-                )}
-              </span>
-            </div>
-          );
-        }) : <EmptyState kind="run" title="Waiting for events" message="The run is queued and will appear here as execution begins." />}</div>
-        {current?.report && <article className="run-report"><span className="eyebrow">Run report</span><h3>{current.report.summary || "Completed run"}</h3><p>{current.report.steps?.length || 0} workflow steps completed.</p>{current.report.artifacts?.map(a => <a className="run-artifact" key={a.id} href={`/api/v2/artifacts/${a.id}`} onClick={event => downloadArtifact(event, a)}>Download {a.name}</a>)}</article>}
-      </section>
     </div>
   );
 }

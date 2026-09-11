@@ -20,6 +20,12 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 | Add unified work sessions + workspace rail | `backend/work.py`, `WorkRail.jsx`, `sessionStore.js`, chat/v2 hooks | Removes `/api/work` + rail; chat/v2 keep working standalone |
 | Add memory/knowledge/context + chat management | `backend/{context,knowledge}.py`, `forget`/`knowledge_*` tools, `KnowledgeView.jsx`, delete authz | Removes KB endpoints, context meter, forget; deletes revert to author-only checks removed |
 | Pinterest-2026 accents + taste pass + KaTeX removal | plum/persimmon/jade tokens, aurora+grain backdrop, serif hero, `ui.jsx` | Reverts palette; re-adding katex restores math rendering |
+| Add durable work-state, policy, evals and memory-graph backend | `backend/{work_state,policy,evals,memory_graph}.py`, per-loop event locks, progress/verify/policy/eval/relation routes | Removes state machine, policy engine, eval harness, graph store; run/verify APIs 404 |
+| Revamp UX: neutral tokens, 5-concept IA, Work hero surface | `styles.css`, `Sidebar/TopBar`, `WorkHome`, `SmartComposer`, `ContextDrawer`, `Status`, `ArtifactCard` | Reverts IA + work hero; legacy CommandCenter/RunMonitor remain |
+| Prune test suite 176 -> 141, fix flaky recovery test | merged/removed redundant tests, deterministic approval-parked recovery | Restores deleted tests (suite grows back); recovery test may flake again |
+| Prune test suite 141 -> 110 | merged endpoint neighbors into journey tests, folded thin guards | Same as above |
+| Task-aware model routing + live work detail + context drawer | `backend/routing.py`, route endpoint, `CommandCenter` Auto-route, live `WorkDetail` modal, `ContextDrawer` in talk view, `RunMonitor` removed | Reverts routing + detail unification; RunMonitor does not come back |
+| Midnight Magic + Galaxy Dust identity + aurora backdrop | `styles.css`, `components.css`, `docs/VISUAL-IDENTITY.md` | Reverts to neutral charcoal; backdrop returns to flat canvas |
 
 ## Feature summary (post-merge)
 

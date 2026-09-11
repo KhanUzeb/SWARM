@@ -170,6 +170,48 @@ def test_progress_and_verify_endpoints(client, auth):
     assert result["evidence"] == [{"source": "test"}]
 
 
+def test_task_routing_classifies_and_routes():
+    from backend import routing
+
+    coding = routing.classify("Fix the checkout latency bug and add a benchmark")
+    assert coding["task_type"] == "coding"
+    research = routing.classify("Research the competitor landscape with sources")
+    assert research["task_type"] == "research"
+    chat = routing.classify("hello there")
+    assert chat["task_type"] == "chat"
+    assert routing.needs_tools("coding") is True
+    assert routing.needs_tools("chat") is False
+
+
+def test_route_endpoint_fallback_without_providers(client, auth):
+    res = client.post("/api/v2/model-routing/route", json={"objective": "Fix the bug"}, headers=auth)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["task_type"] == "coding"
+    assert body["requires_tools"] is True
+    assert "reasons" in body
+
+    empty = client.post("/api/v2/model-routing/route", json={"objective": "  "}, headers=auth)
+    assert empty.status_code == 422
+
+
+def test_route_endpoint_picks_connected_provider(client, auth, monkeypatch):
+    from backend.ai_support import resolver as resolver_mod
+
+    async def fake_auth(provider_id):
+        if provider_id == "groq":
+            return type("Auth", (), {"default_model": "openai/gpt-oss-120b"})()
+        return None
+
+    monkeypatch.setattr(resolver_mod, "resolve_runtime_auth", fake_auth)
+    res = client.post("/api/v2/model-routing/route", json={"objective": "Research launch risks"}, headers=auth)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["task_type"] == "research"
+    assert body["provider_id"] == "groq"
+    assert body["model"] == "openai/gpt-oss-120b"
+
+
 def test_policy_endpoint(client, auth):
     res = client.post("/api/v2/policy/evaluate", json={
         "agent": "coder", "tool": "push_to_main", "target": "main",

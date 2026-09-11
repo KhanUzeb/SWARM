@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import agent, context, db, evals, knowledge, memory_graph, policy, v2, work, work_state
+from . import agent, context, db, evals, knowledge, memory_graph, policy, routing, v2, work, work_state
 from .ai_support import store as ai_store
 from .ai_support.agent_templates import get_agent_templates
 from .ai_support.catalog import list_all_models, list_provider_models
@@ -486,6 +486,14 @@ async def api_v2_verify_run(run_id: str, payload: dict[str, Any], handle: str = 
         needs_human_review=bool(payload.get("needs_human_review", not passed)),
     )
     return {"run_id": run_id, "event": event_type, "result": contract}
+
+
+@app.post("/api/v2/model-routing/route")
+async def api_v2_route_model(payload: dict[str, Any], handle: str = Depends(require_auth)):
+    objective = str(payload.get("objective") or "")
+    if not objective.strip():
+        raise HTTPException(status_code=422, detail="objective is required")
+    return await routing.route(objective)
 
 
 @app.post("/api/v2/policy/evaluate")

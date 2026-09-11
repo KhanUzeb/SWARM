@@ -1,32 +1,32 @@
 /*
  * swarm — Design System
- * Premium dark UI: Apple clarity, Stripe polish, OpenAI restraint.
- * Accent direction from Pinterest's 2026 Palette research (Cool Blue /
- * Jade / Plum Noir / Wasabi / Persimmon): Plum Noir carries agent
- * intelligence, Persimmon carries approvals and attention, Jade carries
- * success — all on a warmed charcoal base instead of generic zinc+indigo.
+ * Visual identity: "08. Midnight Magic" foundation + "18. Galaxy Dust"
+ * accents (color-combination cheatsheet picks). Deep indigo-night
+ * surfaces, cool-white text, one violet accent for identity/running
+ * work, magenta reserved for attention, jade for success — saturated
+ * color carries state, never decoration.
  */
 
 :root {
-  /* ── Color Primitives (plan §2: near-neutral charcoal; saturated color reserved for state/identity) ── */
-  --color-bg: #101012;
-  --color-bg-elevated: #161618;
-  --color-bg-surface: #1c1c1f;
-  --color-bg-hover: #242428;
-  --color-bg-glass: rgba(22, 22, 24, 0.82);
-  --color-border-subtle: rgba(255, 255, 255, 0.05);
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-border-strong: rgba(255, 255, 255, 0.12);
-  --color-bubble-agent: #1e1e22;
-  --color-bubble-agent-hover: #26262c;
-  --color-bubble-user: linear-gradient(135deg, #f2822e 0%, #d1541f 100%);
-  --color-bubble-user-text: #2b1206;
-  --color-bubble-user-muted: rgba(43, 18, 6, 0.62);
+  /* ── Color Primitives (Midnight Magic base; Galaxy Dust accents) ── */
+  --color-bg: #07070d;
+  --color-bg-elevated: #0d0d17;
+  --color-bg-surface: #141422;
+  --color-bg-hover: #1c1c2e;
+  --color-bg-glass: rgba(13, 13, 23, 0.82);
+  --color-border-subtle: rgba(235, 230, 255, 0.05);
+  --color-border: rgba(235, 230, 255, 0.08);
+  --color-border-strong: rgba(235, 230, 255, 0.12);
+  --color-bubble-agent: #181826;
+  --color-bubble-agent-hover: #202033;
+  --color-bubble-user: linear-gradient(135deg, #a678ff 0%, #7c5cf0 100%);
+  --color-bubble-user-text: #ffffff;
+  --color-bubble-user-muted: rgba(255, 255, 255, 0.65);
 
-  --color-text-primary: #f4f2ee;
-  --color-text-secondary: #c4c2bd;
-  --color-text-muted: #8f8d89;
-  --color-text-subtle: #63615e;
+  --color-text-primary: #f4f0fa;
+  --color-text-secondary: #b9b3cc;
+  --color-text-muted: #8b85a3;
+  --color-text-subtle: #5f5a76;
 
   /* Semantic token aliases (plan §35) */
   --bg-canvas: var(--color-bg);
@@ -38,11 +38,13 @@
   --text-primary: var(--color-text-primary);
   --text-secondary: var(--color-text-secondary);
   --text-muted: var(--color-text-muted);
-  --accent: #7c8cf8;
-  --accent-soft: rgba(124, 140, 248, 0.14);
-  --state-running: #7c8cf8;
+  --accent: #9d7bff;
+  --accent-soft: rgba(157, 123, 255, 0.14);
+  --accent-magenta: #e5499b;
+  --accent-magenta-soft: rgba(229, 73, 155, 0.12);
+  --state-running: #7aa2ff;
   --state-success: #5da37a;
-  --state-warning: #e8933c;
+  --state-warning: #e8a33d;
   --state-danger: #e5605c;
   --state-idle: #62666d;
   --radius-xs: 6px;
@@ -56,11 +58,11 @@
   --duration-normal: 220ms;
   --duration-slow: 340ms;
 
-  --color-brand: #7c8cf8;
-  --color-brand-bg: #4a56c4;
-  --color-brand-hover: #93a0fa;
-  --color-brand-subtle: rgba(124, 140, 248, 0.14);
-  --color-brand-glow: rgba(124, 140, 248, 0.35);
+  --color-brand: #9d7bff;
+  --color-brand-bg: #5b4bc4;
+  --color-brand-hover: #b39dff;
+  --color-brand-subtle: rgba(157, 123, 255, 0.14);
+  --color-brand-glow: rgba(139, 92, 246, 0.35);
 
   --color-success: #5da37a;
   --color-success-bg: rgba(93, 163, 122, 0.15);
@@ -101,10 +103,10 @@
   --radius-full: 9999px;
   
   /* ── Shadows (inset top hairline = premium depth on every surface) ── */
-  --shadow-sm: inset 0 1px 0 rgba(255, 236, 226, 0.07), 0 1px 2px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-md: inset 0 1px 0 rgba(255, 236, 226, 0.07), 0 8px 24px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.04);
-  --shadow-lg: inset 0 1px 0 rgba(255, 236, 226, 0.07), 0 16px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --shadow-xl: inset 0 1px 0 rgba(255, 236, 226, 0.08), 0 24px 64px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-sm: inset 0 1px 0 rgba(235, 230, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-md: inset 0 1px 0 rgba(235, 230, 255, 0.07), 0 8px 24px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-lg: inset 0 1px 0 rgba(235, 230, 255, 0.07), 0 16px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-xl: inset 0 1px 0 rgba(235, 230, 255, 0.08), 0 24px 64px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-ring: 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-ring-brand: 0 0 0 1px var(--color-brand);
   --shadow-focus: 0 0 0 3px var(--color-brand-subtle), 0 0 0 1px var(--color-brand);
@@ -176,27 +178,35 @@ body {
   font-size: 15px;
   line-height: 1.6;
   color: var(--color-text-primary);
-  background: #080509;
+  background: #050508;
   font-feature-settings: "cv01", "ss03", "liga", "kern", "calt";
 }
 
-/* Calm by default (plan §2): near-flat charcoal canvas. Active work creates
-   motion; decoration never competes with it. Aurora kept behind a flag. */
+/* Ambient backdrop recreating the midnight aurora reference: near-black
+   canvas, violet band sweeping the middle, magenta bloom low-right, blue
+   breathing at the right edge, pale haze in the far corner, fine grain
+   over everything. App surfaces stay solid so glow lives at the margins. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 240px);
+  background:
+    radial-gradient(720px 520px at 96% 100%, rgba(255, 244, 252, 0.10), transparent 55%),
+    radial-gradient(900px 620px at 90% 28%, rgba(59, 130, 246, 0.16), transparent 60%),
+    radial-gradient(1050px 720px at 58% 62%, rgba(139, 92, 246, 0.22), transparent 62%),
+    radial-gradient(1250px 820px at 76% 110%, rgba(236, 72, 153, 0.26), transparent 60%),
+    radial-gradient(900px 700px at 30% 110%, rgba(190, 60, 150, 0.12), transparent 60%),
+    linear-gradient(180deg, #050508 0%, #07070d 100%);
 }
 body::after {
-  content: none;
-}
-body.decorated::before {
-  background:
-    radial-gradient(900px 520px at 10% -6%, rgba(124, 140, 248, 0.16), transparent 62%),
-    radial-gradient(760px 520px at 96% 108%, rgba(232, 147, 60, 0.08), transparent 60%),
-    radial-gradient(1000px 700px at 50% 55%, rgba(20, 22, 44, 0.35), transparent 70%);
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.07;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -283,8 +293,8 @@ body.decorated::before {
   background: rgba(22, 16, 22, 0.9);
   backdrop-filter: blur(10px);
   box-shadow:
-    inset 0 1px 0 rgba(255, 236, 226, 0.08),
-    0 0 0 1px rgba(255, 235, 240, 0.07),
+    inset 0 1px 0 rgba(235, 230, 255, 0.08),
+    0 0 0 1px rgba(235, 230, 255, 0.07),
     0 24px 80px rgba(0, 0, 0, 0.55);
   overflow: hidden;
 }
@@ -352,11 +362,11 @@ body.decorated::before {
   display: grid;
   place-items: center;
   border-radius: var(--radius-xl);
-  background: linear-gradient(135deg, rgba(124, 63, 126, 0.4), rgba(239, 125, 60, 0.22));
+  background: linear-gradient(135deg, rgba(124, 92, 240, 0.4), rgba(229, 73, 155, 0.22));
   color: var(--color-brand-hover);
   font-size: 22px;
   opacity: 0.9;
-  box-shadow: inset 0 1px 0 rgba(255, 236, 226, 0.12), 0 6px 20px rgba(124, 63, 126, 0.25);
+  box-shadow: inset 0 1px 0 rgba(235, 230, 255, 0.12), 0 6px 20px rgba(124, 92, 240, 0.25);
 }
 .eyebrow {
   display: block;
@@ -570,17 +580,17 @@ body.decorated::before {
 .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 
 .btn-primary, .btn.primary {
-  background: linear-gradient(135deg, #f2822e 0%, #cf501f 100%);
-  color: #2b1206;
+  background: linear-gradient(135deg, #a678ff 0%, #7c5cf0 100%);
+  color: #ffffff;
   border-color: transparent;
   border-radius: var(--radius-full);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 6px 20px rgba(209, 84, 31, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 6px 20px rgba(139, 92, 246, 0.35);
   font-weight: 600;
 }
 .btn-primary:hover:not(:disabled), .btn.primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #ff8f3d 0%, #dd5f24 100%);
-  color: #2b1206;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 8px 26px rgba(209, 84, 31, 0.38);
+  background: linear-gradient(135deg, #b48cff 0%, #8b6bf5 100%);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 8px 26px rgba(139, 92, 246, 0.45);
 }
 .btn-primary:active:not(:disabled), .btn.primary:active:not(:disabled) { transform: scale(0.98); }
 
@@ -659,7 +669,7 @@ body.decorated::before {
 .input:hover { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
 .input:focus {
   outline: none;
-  box-shadow: inset 0 0 0 1px rgba(182, 120, 194, 0.5), 0 0 0 3px rgba(182, 120, 194, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(157, 123, 255, 0.5), 0 0 0 3px rgba(157, 123, 255, 0.13);
   background: rgba(255, 255, 255, 0.05);
 }
 .input:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -782,8 +792,8 @@ body.decorated::before {
 .avatar-lg { width: 44px; height: 44px; font-size: 14px; }
 .avatar-xl { width: 56px; height: 56px; font-size: 18px; }
 
-.avatar-human { background: linear-gradient(135deg, #7376f4 0%, var(--color-brand-bg) 100%); color: #ffffff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15); }
-.avatar-agent { background: linear-gradient(135deg, #f5c842 0%, var(--color-warning) 100%); color: #09090b; }
+.avatar-human { background: linear-gradient(135deg, #7aa2ff 0%, var(--color-brand-bg) 100%); color: #ffffff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15); }
+.avatar-agent { background: linear-gradient(135deg, #c86bff 0%, #7c5cf0 100%); color: #ffffff; }
 .avatar-system { background: var(--color-bg-hover); color: var(--color-text-muted); }
 .avatar-image { object-fit: cover; }
 

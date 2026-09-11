@@ -14,7 +14,7 @@ import { Composer } from "./components/Composer.jsx";
 import { ComputerPanel } from "./components/ComputerPanel.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
 import { LoginScreen } from "./components/LoginScreen.jsx";
-import { CommandCenter, RunMonitor } from "./components/CommandCenter.jsx";
+import { CommandCenter } from "./components/CommandCenter.jsx";
 import { WorkHome, WorkDetail as WorkRunDetail } from "./components/WorkHome.jsx";
 import { ContextDrawer } from "./components/ContextDrawer.jsx";
 import { KnowledgeView } from "./components/KnowledgeView.jsx";
@@ -71,6 +71,7 @@ export default function App() {
   const [contextStats, setContextStats] = useState(null);
   const [contextError, setContextError] = useState(false);
   const [workRailOpen, setWorkRailOpen] = useState(() => localStorage.getItem("swarm_work_rail") !== "0");
+  const [showContext, setShowContext] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
   const [streamingAgents, setStreamingAgents] = useState({});
 
@@ -696,6 +697,19 @@ export default function App() {
                 </div>
               </div>
             )}
+            <div className="talk-context-bar">
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowContext(s => !s)} aria-expanded={showContext}>
+                {showContext ? "Hide context" : "Context"}
+              </button>
+            </div>
+            {showContext && (
+              <ContextDrawer
+                stats={contextStats}
+                included={[`#${current.name}`, ...workingWith.map(a => `@${a}`)]}
+                onRefresh={() => loadContextStats(channelRef.current)}
+                onClose={() => setShowContext(false)}
+              />
+            )}
             <Composer
               onSend={(text) => sendMessage(text)}
               channelName={current.name}
@@ -742,7 +756,14 @@ export default function App() {
         })}
       />
 
-      {selectedRun && <RunMonitor token={token} run={selectedRun} onClose={() => setSelectedRun(null)} />}
+      {selectedRun && (
+        <div className="run-monitor-backdrop" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setSelectedRun(null); }}>
+          <section className="run-monitor">
+            <button className="panel-close" onClick={() => setSelectedRun(null)} aria-label="Close run detail">×</button>
+            <WorkRunDetail run={selectedRun} token={token} onStatusChange={setSelectedRun} />
+          </section>
+        </div>
+      )}
       {selectedWork && (() => {
         const detail = workSessions.find(s => s.id === selectedWork);
         if (!detail) return null;

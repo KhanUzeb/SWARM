@@ -116,19 +116,46 @@ export function WorkCard({ run, hero, onOpen, token }) {
   );
 }
 
-export function WorkDetail({ run, token, onApprove, onDeny }) {
+export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
   const [tab, setTab] = useState("Overview");
+  const [current, setCurrent] = useState(run);
   const [progress, setProgress] = useState(null);
   const [events, setEvents] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState("");
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [approvalMsg, setApprovalMsg] = useState("");
+
+  useEffect(() => { setCurrent(run); }, [run?.id]);
 
   useEffect(() => {
     if (!token || !run?.id) return;
-    apiJson(`/api/v2/runs/${run.id}/progress`, { token }).then((r) => { if (r.ok) setProgress(r.data); }).catch(() => {});
-    apiJson(`/api/v2/runs/${run.id}/events`, { token }).then((r) => { if (r.ok) setEvents(r.data); }).catch(() => {});
-    apiJson(`/api/v2/runs/${run.id}/artifacts`, { token }).then((r) => { if (r.ok) setArtifacts(r.data); }).catch(() => {});
+    let alive = true;
+    async function refresh() {
+      try {
+        const [r, p, e, a] = await Promise.all([
+          apiJson(`/api/v2/runs/${run.id}`, { token }),
+          apiJson(`/api/v2/runs/${run.id}/progress`, { token }),
+          apiJson(`/api/v2/runs/${run.id}/events`, { token }),
+          apiJson(`/api/v2/runs/${run.id}/artifacts`, { token }),
+        ]);
+        if (!alive) return;
+        if (r.ok) {
+          setCurrent(r.data);
+          onStatusChange?.(r.data);
+        }
+        if (p.ok) setProgress(p.data);
+        if (e.ok) setEvents(e.data);
+        if (a.ok) setArtifacts(a.data);
+      } catch { /* polling continues */ }
+    }
+    refresh();
+    const timer = setInterval(() => {
+      if (["queued", "running", "waiting_for_approval"].includes(current?.status)) refresh();
+    }, 2500);
+    return () => { alive = false; clearInterval(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, run?.id]);
 
   const agents = useMemo(() => {
@@ -141,6 +168,36 @@ export function WorkDetail({ run, token, onApprove, onDeny }) {
   }, [events]);
 
   const failure = progress?.failures?.[0];
+  const pendingGate = [...events].reverse().find((e) => e.event_type === "approval_requested");
+
+  async function resolve(decision) {
+    if (onApprove && decision === "approved") return onApprove(run);
+    if (onDeny && decision === "denied") return onDeny(run);
+    const stepId = pendingGate?.step_id;
+    if (!stepId) {
+      setApprovalMsg("No pending approval step found.");
+      return;
+    }
+    setApprovalBusy(true);
+    setApprovalMsg("");
+    try {
+      const res = await apiJson(`/api/v2/runs/${run.id}/approvals/${stepId}`, {
+        method: "POST", token, body: { status: decision },
+      });
+      if (res.ok) {
+        setCurrent(res.data);
+        onStatusChange?.(res.data);
+        const ev = await apiJson(`/api/v2/runs/${run.id}/events`, { token });
+        if (ev.ok) setEvents(ev.data);
+      } else {
+        setApprovalMsg(res.data?.detail || "Could not resolve approval");
+      }
+    } catch (e) {
+      setApprovalMsg(e.message || "Could not resolve approval");
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
 
   async function verify(passed) {
     setVerifyBusy(true);
@@ -161,10 +218,10 @@ export function WorkDetail({ run, token, onApprove, onDeny }) {
   }
 
   return (
-    <section className="work-detail" aria-label={`Work detail ${run?.objective}`}>
+    <section className="work-detail" aria-label={`Work detail ${current?.objective}`}>
       <header className="work-detail-head">
-        <h3>{run?.objective}</h3>
-        <WorkStatusBadge status={run?.status || "queued"} />
+        <h3>{current?.objective}</h3>
+        <WorkStatusBadge status={current?.status || "queued"} />
       </header>
       <div className="tabs" role="tablist">
         {TABS.map((t) => (
@@ -177,14 +234,22 @@ export function WorkDetail({ run, token, onApprove, onDeny }) {
       {tab === "Overview" && (
         <div className="work-overview">
           <PlanList plan={progress?.plan || []} current={progress?.current_step} />
-          {run?.status === "waiting_for_approval" && (
+          {current?.report?.summary && (
+            <div className="report-card">
+              <h4>Result</h4>
+              <p>{current.report.summary}</p>
+              <p className="muted small">{current.report.steps?.length || 0} steps · {(current.report.artifacts || []).length} artifacts</p>
+            </div>
+          )}
+          {current?.status === "waiting_for_approval" && (
             <div className="approval-card rich">
-              <h4>Needs your approval</h4>
+              <h4>Needs your approval{pendingGate?.step_id ? ` · ${pendingGate.step_id}` : ""}</h4>
               <p className="muted">Review scope, impact and reversibility before deciding.</p>
               <div className="row">
-                <button className="btn btn-primary btn-sm" onClick={() => onApprove?.(run)}>Approve</button>
-                <button className="btn btn-ghost btn-sm" onClick={() => onDeny?.(run)}>Deny</button>
+                <button className="btn btn-primary btn-sm" disabled={approvalBusy} onClick={() => resolve("approved")}>Approve</button>
+                <button className="btn btn-ghost btn-sm" disabled={approvalBusy} onClick={() => resolve("denied")}>Deny</button>
               </div>
+              {approvalMsg && <p className="muted small" role="status">{approvalMsg}</p>}
             </div>
           )}
           {failure && (
