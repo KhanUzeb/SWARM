@@ -13,17 +13,6 @@ def test_seeded_bots_have_profile_files(client, auth):
     assert "You are **coder**" in (agents["coder"].get("profile") or "")
 
 
-def test_job_profiles_listed(client, auth):
-    rows = client.get("/api/profiles", headers=auth).json()
-    ids = {(r["kind"], r["id"]) for r in rows}
-    assert ("bot", "swarm") in ids
-    assert ("job", "chief-of-staff") in ids
-    assert ("job", "sales-outbound") in ids
-    jobs = client.get("/api/jobs", headers=auth).json()
-    chief = next(j for j in jobs if j["id"] == "chief-of-staff")
-    assert "Chief of staff" in chief["profile"]
-
-
 def test_job_profile_used_when_no_named_file():
     text = load_agent_profile("piper", "Product Performance")
     assert text

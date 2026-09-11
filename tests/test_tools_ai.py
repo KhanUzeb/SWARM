@@ -13,23 +13,31 @@ def test_list_tools_includes_builtins_and_plugin(client, auth):
     assert res.status_code == 200
     data = res.json()
     names = {t["name"] for t in data["tools"]}
-    assert "read_workspace" in names
-    assert "fetch_url" in names
-    assert "channel_digest" in names
-    assert "computer_run" in names
-    assert "browser_navigate" in names
-    assert "plugin:composio:execute" in names
-    assert "plugin:time-helper:utc_now" in names
+    assert {"read_workspace", "fetch_url", "channel_digest", "computer_run",
+            "browser_navigate", "plugin:composio:execute", "plugin:time-helper:utc_now",
+            "exa_search", "tavily_search", "firecrawl_scrape", "browser_use",
+            "cua_desktop", "system_run", "system_ls", "system_read", "system_write"} <= names
+    assert "composio" in {p["id"] for p in data["plugins"]}
 
 
-def test_ai_provider_catalog_includes_hf(client, auth):
+def test_ai_provider_catalog_and_connect(client, auth):
     res = client.get("/api/ai-support/providers", headers=auth)
     assert res.status_code == 200
     ids = {p["id"] for p in res.json()}
-    assert "huggingface" in ids
-    assert "together" in ids
+    assert {"huggingface", "together", "groq"} <= ids
     hf = next(p for p in res.json() if p["id"] == "huggingface")
     assert hf["kind"] == "openai_compatible"
+
+    connect = client.post(
+        "/api/ai-support/connect/groq",
+        json={"api_key": "gsk_test_key_12345678", "model": "openai/gpt-oss-120b"},
+        headers=auth,
+    )
+    assert connect.status_code == 200
+    assert client.get("/api/status").json()["groq"] is True
+
+    _clear_rate()
+    assert client.delete("/api/ai-support/connect/groq", headers=auth).status_code == 200
 
 
 def test_custom_tool_crud(client, auth):
@@ -68,27 +76,6 @@ def test_agent_rejects_unknown_tool(client, auth):
         headers=auth,
     )
     assert res.status_code == 400
-
-
-def test_ai_provider_connect_status(client, auth):
-    providers = client.get("/api/ai-support/providers", headers=auth)
-    assert providers.status_code == 200
-    assert any(p["id"] == "groq" for p in providers.json())
-
-    connect = client.post(
-        "/api/ai-support/connect/groq",
-        json={"api_key": "gsk_test_key_12345678", "model": "openai/gpt-oss-120b"},
-        headers=auth,
-    )
-    assert connect.status_code == 200
-
-    status = client.get("/api/status")
-    assert status.status_code == 200
-    assert status.json()["groq"] is True
-
-    _clear_rate()
-    disconnect = client.delete("/api/ai-support/connect/groq", headers=auth)
-    assert disconnect.status_code == 200
 
 
 def test_map_model_keeps_live_id():

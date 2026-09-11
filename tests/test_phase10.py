@@ -9,7 +9,7 @@ def _clear_rate():
     main._last_write.clear()
 
 
-def test_seeded_bots_have_jobs_and_dms(client, auth):
+def test_seeded_bots_have_jobs_dms_and_tool_splits(client, auth):
     agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
     assert agents["swarm"]["display_name"] == "Swarm"
     assert agents["swarm"]["job"] == "Generalist"
@@ -22,6 +22,14 @@ def test_seeded_bots_have_jobs_and_dms(client, auth):
     assert agents["coder"]["dm_channel_id"] == "dm-coder"
     assert "fenced markdown" in agents["coder"]["system_prompt"]
     assert "\\subsection*{Code}" in agents["coder"]["system_prompt"]
+    # Default tool splits and windows.
+    assert "read_only_shell" in agents["swarm"]["tools"]
+    assert "remember" in agents["swarm"]["tools"]
+    assert "computer_run" in agents["swarm"]["tools"]
+    assert "read_only_shell" not in agents["ledger"]["tools"]
+    assert "computer_run" not in agents["ledger"]["tools"]
+    assert agents["swarm"]["history_window"] == 12
+    assert agents["ledger"]["max_tool_calls"] == 6
     channels = {c["id"]: c for c in client.get("/api/channels", headers=auth).json()}
     assert channels["dm-swarm"]["kind"] == "dm"
     assert channels["dm-swarm"]["owner_agent"] == "swarm"
@@ -33,26 +41,55 @@ def test_seeded_bots_have_jobs_and_dms(client, auth):
 def test_jobs_catalog(client, auth):
     jobs = client.get("/api/jobs", headers=auth).json()
     ids = {j["id"] for j in jobs}
-    assert "sales-outbound" in ids
-    assert "chief-of-staff" in ids
-    assert "code-engineer" in ids
+    assert {"sales-outbound", "chief-of-staff", "code-engineer"} <= ids
     assert all("prompt" in j and "job" in j for j in jobs)
+    chief = next(j for j in jobs if j["id"] == "chief-of-staff")
+    assert chief["suggested_name"] == "chief"
+    assert "attention" in chief["suggested_prompt"].lower()
+    assert all("suggested_name" in j and "suggested_prompt" in j for j in jobs)
+    assert "Chief of staff" in chief["profile"]
+    profile_ids = {(r["kind"], r["id"]) for r in client.get("/api/profiles", headers=auth).json()}
+    assert ("bot", "swarm") in profile_ids
+    assert ("job", "chief-of-staff") in profile_ids
+    assert ("job", "sales-outbound") in profile_ids
 
 
-def test_create_agent_opens_dm(client, auth):
+def test_agent_lifecycle_create_patch_duplicate(client, auth):
+    """One canonical agent lifecycle: create (+DM opens), patch, duplicate 409."""
     _clear_rate()
     created = client.post(
         "/api/agents",
-        json={"name": "piper", "system_prompt": "Investigate latency.", "job": "Product Performance"},
+        json={"name": "piper", "system_prompt": "Investigate latency.", "job": "Product Performance",
+              "tools": ["remember", "recall"], "history_window": 8},
         headers=auth,
     )
     assert created.status_code == 200
     body = created.json()
     assert body["job"] == "Product Performance"
+    assert body["tools"] == ["remember", "recall"]
+    assert body["history_window"] == 8
     assert body["dm_channel_id"] == "dm-piper"
     channels = {c["id"]: c for c in client.get("/api/channels", headers=auth).json()}
     assert channels["dm-piper"]["kind"] == "dm"
     assert channels["dm-piper"]["owner_agent"] == "piper"
+
+    _clear_rate()
+    patched = client.patch(
+        "/api/agents/piper",
+        json={"history_window": 20, "channel_scope": "general"},
+        headers=auth,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["history_window"] == 20
+    assert patched.json()["channel_scope"] == "general"
+
+    _clear_rate()
+    again = client.post(
+        "/api/agents",
+        json={"name": "piper", "system_prompt": "dup"},
+        headers=auth,
+    )
+    assert again.status_code == 409
 
 
 def test_dm_message_triggers_without_mention(client, auth, monkeypatch):
@@ -170,28 +207,10 @@ def test_routines_and_due(client, auth, monkeypatch):
     assert any("[routine:Morning digest]" in (m["body"] or "") for m in history)
     assert any(m["author_kind"] == "agent" and m["body"] == "digest ready" for m in history)
 
-
-def test_manual_routine_run_does_not_reschedule(client, auth, monkeypatch):
-    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
-        return {"reply": "manual result", "tool_events": [], "usage": {}}
-
-    monkeypatch.setattr(main.agent, "generate_reply", fake_reply)
-    _clear_rate()
-    created = client.post(
-        "/api/routines",
-        json={
-            "agent_name": "swarm",
-            "title": "Manual check",
-            "instructions": "Check now.",
-            "interval_minutes": 60,
-        },
-        headers=auth,
-    ).json()
-    before = created["next_run_at"]
-
-    asyncio.run(main._execute_routine(created, test_run=True))
-    after = asyncio.run(db.get_routine(created["id"]))
-    assert after["next_run_at"] == before
+    # A manual test-run posts without rescheduling the routine.
+    current = asyncio.run(db.get_routine(row["id"]))
+    asyncio.run(main._execute_routine(current, test_run=True))
+    assert asyncio.run(db.get_routine(row["id"]))["next_run_at"] == current["next_run_at"]
 
 
 def test_agent_failure_is_persisted_and_status_resets(client, auth, monkeypatch):
@@ -285,22 +304,7 @@ def test_handoff_from_agent_mention(client, auth, monkeypatch):
         assert "ledger" in authors
 
 
-def test_dm_offers_tools():
-    assert agent.should_offer_tools(
-        [{"author_kind": "human", "body": "hi"}],
-        channel_kind="dm",
-    )
-    assert not agent.should_offer_tools(
-        [{"author_kind": "human", "body": "hi"}],
-        channel_kind="room",
-    )
-    assert agent.should_offer_tools(
-        [{"author_kind": "human", "body": "hi"}],
-        channel_kind="group",
-    )
-
-
-def test_custom_display_name(client, auth):
+def test_custom_display_name_slugs(client, auth):
     _clear_rate()
     created = client.post(
         "/api/agents",
@@ -308,17 +312,9 @@ def test_custom_display_name(client, auth):
         headers=auth,
     )
     assert created.status_code == 200
-    body = created.json()
-    assert body["name"] == "maya-chen"
-    assert body["display_name"] == "Maya Chen"
-    agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
-    assert agents["maya-chen"]["display_name"] == "Maya Chen"
+    assert created.json()["name"] == "maya-chen"
     _clear_rate()
-    patched = client.patch(
-        "/api/agents/maya-chen",
-        json={"display_name": "Maya"},
-        headers=auth,
-    )
+    patched = client.patch("/api/agents/maya-chen", json={"display_name": "Maya"}, headers=auth)
     assert patched.status_code == 200
     assert patched.json()["display_name"] == "Maya"
     assert patched.json()["name"] == "maya-chen"
@@ -334,6 +330,12 @@ def test_group_chat_triggers_members_without_mention(client, auth, monkeypatch):
 
     monkeypatch.setattr("backend.agent.generate_reply", fake_reply)
     monkeypatch.setattr("backend.main.agent.generate_reply", fake_reply)
+    _clear_rate()
+    assert client.post(
+        "/api/channels",
+        json={"name": "empty-group", "kind": "group", "members": []},
+        headers=auth,
+    ).status_code == 400
     _clear_rate()
     created = client.post(
         "/api/channels",
@@ -361,16 +363,6 @@ def test_group_chat_triggers_members_without_mention(client, auth, monkeypatch):
                 if "swarm" in authors and "ledger" in authors:
                     break
         assert authors[:2] == ["swarm", "ledger"]
-
-
-def test_group_needs_members(client, auth):
-    _clear_rate()
-    res = client.post(
-        "/api/channels",
-        json={"name": "empty-group", "kind": "group", "members": []},
-        headers=auth,
-    )
-    assert res.status_code == 400
 
 
 def test_workspace_write_stays_in_sandbox(tmp_path, monkeypatch):

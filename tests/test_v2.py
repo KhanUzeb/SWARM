@@ -1,3 +1,8 @@
+import time
+
+from backend.v2 import order_nodes
+
+
 def test_v2_workflow_and_run_contract(client, auth):
     created = client.post(
         "/api/v2/workflows",
@@ -38,7 +43,7 @@ def test_v2_resources_are_private(client, auth):
     assert client.get("/api/v2/workflows").status_code == 401
 
 
-def test_provider_catalog_has_broad_api_key_and_oauth_metadata(client, auth):
+def test_provider_catalog_routing_and_saved_model(client, auth):
     response = client.get("/api/ai-support/providers", headers=auth)
     assert response.status_code == 200
     providers = {row["id"]: row for row in response.json()}
@@ -46,6 +51,21 @@ def test_provider_catalog_has_broad_api_key_and_oauth_metadata(client, auth):
         assert provider_id in providers
         assert "api_key" in (providers[provider_id].get("auth_methods") or ["api_key"])
     assert "oauth" in providers["google"]["auth_methods"]
+
+    connect = client.post(
+        "/api/ai-support/connect/groq",
+        headers=auth,
+        json={"api_key": "gsk_test_key_12345678", "model": "openai/gpt-oss-20b"},
+    )
+    assert connect.status_code == 200
+    saved = {row["id"]: row for row in client.get("/api/v2/providers", headers=auth).json()}
+    assert saved["groq"]["model"] == "openai/gpt-oss-20b"
+    assert saved["groq"]["connected"] is True
+    assert any(p["id"] == "deepseek" for p in client.get("/api/v2/providers", headers=auth).json())
+
+    check = client.get("/api/v2/model-routing/validate", headers=auth, params={"provider_id": "groq", "model": "openai/gpt-oss-20b", "requires_tools": "true"})
+    assert check.status_code == 200
+    assert check.json()["supported"] is True
 
 
 def test_v2_rejects_invalid_workflow_graph(client, auth):
@@ -56,18 +76,6 @@ def test_v2_rejects_invalid_workflow_graph(client, auth):
     )
     assert response.status_code == 422
     assert "node ids must be unique" in str(response.json()["detail"])
-
-
-def test_v2_provider_catalog_includes_saved_model(client, auth):
-    connect = client.post(
-        "/api/ai-support/connect/groq",
-        headers=auth,
-        json={"api_key": "gsk_test_key_12345678", "model": "openai/gpt-oss-20b"},
-    )
-    assert connect.status_code == 200
-    providers = {row["id"]: row for row in client.get("/api/v2/providers", headers=auth).json()}
-    assert providers["groq"]["model"] == "openai/gpt-oss-20b"
-    assert providers["groq"]["connected"] is True
 
 
 def test_v2_run_accepts_model(client, auth):
@@ -96,15 +104,6 @@ def test_computer_run_endpoint(client, auth):
     body = response.json()
     assert body["command"] == "echo swarm"
     assert "swarm" in body["output"]
-
-
-def test_v2_provider_catalog_and_routing_preflight(client, auth):
-    providers = client.get("/api/v2/providers", headers=auth)
-    assert providers.status_code == 200
-    assert any(p["id"] == "deepseek" for p in providers.json())
-    check = client.get("/api/v2/model-routing/validate", headers=auth, params={"provider_id": "groq", "model": "openai/gpt-oss-20b", "requires_tools": "true"})
-    assert check.status_code == 200
-    assert check.json()["supported"] is True
 
 
 def test_v2_oauth_start_requires_config_and_emits_pkce_url(client, auth, monkeypatch):
@@ -173,6 +172,3 @@ def test_v2_graph_order_follows_edges():
     nodes = [{"id": "finish"}, {"id": "start"}, {"id": "middle"}]
     ordered = order_nodes(nodes, [["start", "middle"], ["middle", "finish"]])
     assert [node["id"] for node in ordered] == ["start", "middle", "finish"]
-import time
-
-from backend.v2 import order_nodes

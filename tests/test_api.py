@@ -6,7 +6,7 @@ def _clear_rate():
     main._last_write.clear()
 
 
-def test_status_reports_groq_unset(client):
+def test_status_reports_provider_readiness(client, monkeypatch):
     res = client.get("/api/status")
     assert res.status_code == 200
     body = res.json()
@@ -15,15 +15,15 @@ def test_status_reports_groq_unset(client):
     assert body["demo"] is False
     assert "ai_providers" not in body
 
-
-def test_status_reports_groq_set(client, monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
-    res = client.get("/api/status")
-    assert res.status_code == 200
-    body = res.json()
+    body = client.get("/api/status").json()
     assert body["groq"] is True
     assert body["openrouter"] is False
-    assert body["demo"] is False
+
+    monkeypatch.setenv("SWARM_DEMO", "1")
+    assert client.get("/api/status").json()["demo"] is True
+    monkeypatch.delenv("SWARM_DEMO", raising=False)
+    assert client.get("/api/status").json()["demo"] is False
 
 
 def test_register_and_409(client):
@@ -32,14 +32,17 @@ def test_register_and_409(client):
     body = res.json()
     assert body["handle"] == "uzeb"
     assert body["token"].startswith("uzeb:")
+    assert body["created"] is True
+    assert body["onboarded"] is False
 
     again = client.post("/api/register", json={"handle": "uzeb"})
     assert again.status_code == 409
 
 
-def test_read_requires_bearer(client):
+def test_auth_is_required(client):
     assert client.get("/api/channels").status_code == 401
     assert client.get("/api/channels/general/messages").status_code == 401
+    assert client.post("/api/channels", json={"name": "secret"}).status_code == 401
 
 
 def test_forbidden_browser_origin(client, auth):
@@ -48,11 +51,6 @@ def test_forbidden_browser_origin(client, auth):
         headers={**auth, "Origin": "https://evil.example", "X-Swarm-Client": "web"},
     )
     assert res.status_code == 403
-
-
-def test_write_requires_bearer(client):
-    res = client.post("/api/channels", json={"name": "secret"})
-    assert res.status_code == 401
 
 
 def test_impersonation_rejected(client, auth):
@@ -164,9 +162,6 @@ def test_thread_endpoint(client, auth):
     assert len(data["replies"]) == 1
     assert data["replies"][0]["id"] == reply["id"]
     assert "reactions" in data["parent"]
-
-
-def test_thread_404(client, auth):
     assert client.get("/api/messages/99999/thread", headers=auth).status_code == 404
 
 

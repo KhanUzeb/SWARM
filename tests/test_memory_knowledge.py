@@ -125,8 +125,9 @@ def test_context_stats_and_compact(client, auth):
     assert stats2["has_summary"] is True
 
 
-def test_build_context_trims_to_budget(client):
-    from backend import context as context_mod
+def test_build_context_trims_and_boosts_channel_kb(client):
+    import backend.context as ctx_mod
+    import backend.knowledge as kb_mod
 
     history = [
         {"author": "uzeb", "author_kind": "human", "body": "x" * 2000}
@@ -135,13 +136,31 @@ def test_build_context_trims_to_budget(client):
 
     async def run():
         await db.add_memory("swarm", "keep me", channel_id="general")
-        return await context_mod.build_context(
+        await kb_mod.create_doc(
+            "agent:swarm", "Deploy runbook", "deploy checklist for general channel",
+            channel_id="general")
+        await kb_mod.create_doc(
+            "agent:swarm", "Deploy notes", "deploy checklist global fallback")
+        trimmed = await ctx_mod.build_context(
             "swarm", "general", history, window=20, budget_chars=3000)
+        kb_history = [{"author_kind": "human", "author": "uzeb", "body": "deploy checklist?"}]
+        full = await ctx_mod.build_context("swarm", "general", kb_history, kb_limit=5)
+        starved = await ctx_mod.build_context(
+            "swarm", "general", kb_history, kb_limit=5, budget_chars=65)
+        return trimmed, full, starved
 
-    package = asyncio.run(run())
-    assert package["stats"]["total_chars"] <= 3000
-    assert package["stats"]["dropped_messages"] > 0
-    assert package["history"]  # most recent turns survive
+    trimmed, full, starved = asyncio.run(run())
+    # Oversized history trims to budget, most recent turns survive.
+    assert trimmed["stats"]["total_chars"] <= 3000
+    assert trimmed["stats"]["dropped_messages"] > 0
+    assert trimmed["history"]
+    # Channel-scoped KB wins ordering and survives starvation trims.
+    assert full["kb_hits"], "expected KB hits for the deploy query"
+    assert full["kb_hits"][0].get("boosted") is True
+    assert full["kb_hits"][0].get("channel_id") == "general"
+    kept = [h for h in starved["kb_hits"] if h.get("boosted")]
+    assert kept, "channel-scoped hit should survive trimming"
+    assert all(h.get("boosted") for h in starved["kb_hits"])
 
 
 def test_knowledge_hits_reach_agent_prompt(client):
@@ -272,27 +291,4 @@ def test_build_messages_guides_knowledge_tools():
     assert "Memory hygiene" in system_forget
 
 
-# --------------------------------------------------------------- kb boost ---
-def test_context_boosts_channel_kb_and_trims_global_first():
-    import backend.context as ctx_mod
-    import backend.knowledge as kb_mod
 
-    async def seed():
-        await kb_mod.create_doc(
-            "agent:swarm", "Deploy runbook", "deploy checklist for general channel",
-            channel_id="general")
-        await kb_mod.create_doc(
-            "agent:swarm", "Deploy notes", "deploy checklist global fallback")
-
-    asyncio.run(seed())
-    history = [{"author_kind": "human", "author": "uzeb", "body": "deploy checklist?"}]
-    full = asyncio.run(ctx_mod.build_context("swarm", "general", history, kb_limit=5))
-    assert full["kb_hits"], "expected KB hits for the deploy query"
-    assert full["kb_hits"][0].get("boosted") is True
-    assert full["kb_hits"][0].get("channel_id") == "general"
-
-    starved = asyncio.run(
-        ctx_mod.build_context("swarm", "general", history, kb_limit=5, budget_chars=65))
-    kept = [h for h in starved["kb_hits"] if h.get("boosted")]
-    assert kept, "channel-scoped hit should survive trimming"
-    assert all(h.get("boosted") for h in starved["kb_hits"])

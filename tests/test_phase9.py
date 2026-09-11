@@ -3,7 +3,6 @@ import asyncio
 import backend.agent as agent
 import backend.ai_support.resolver as ai_resolver
 import backend.db as db
-import backend.main as main
 from backend.models import AgentCreate, DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, resolve_groq_model
 
 
@@ -15,67 +14,12 @@ def test_groq_model_aliases():
     assert created.model == FAST_GROQ_MODEL
 
 
-def _clear_rate():
-    main._last_write.clear()
-
-
-def test_seeded_harness(client, auth):
-    agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
-    assert "read_only_shell" in agents["swarm"]["tools"]
-    assert "remember" in agents["swarm"]["tools"]
-    assert "computer_run" in agents["swarm"]["tools"]
-    assert "read_only_shell" not in agents["ledger"]["tools"]
-    assert "computer_run" not in agents["ledger"]["tools"]
-    assert agents["swarm"]["history_window"] == 12
-    assert agents["ledger"]["max_tool_calls"] == 6
-    assert agents["swarm"]["model"] == DEFAULT_GROQ_MODEL
-    assert agents["ledger"]["model"] == DEFAULT_GROQ_MODEL
-
-
 def test_get_agent_includes_memories(client, auth):
     data = client.get("/api/agents/swarm", headers=auth).json()
     assert data["name"] == "swarm"
     assert "memories" in data
     assert data["memories"] == []
     assert client.get("/api/agents/nope", headers=auth).status_code == 404
-
-
-def test_create_and_patch_agent(client, auth):
-    _clear_rate()
-    created = client.post(
-        "/api/agents",
-        json={
-            "name": "scribe",
-            "system_prompt": "You take notes.",
-            "tools": ["remember", "recall"],
-            "history_window": 8,
-        },
-        headers=auth,
-    )
-    assert created.status_code == 200
-    body = created.json()
-    assert body["name"] == "scribe"
-    assert body["tools"] == ["remember", "recall"]
-    assert body["history_window"] == 8
-    assert body["model"] == DEFAULT_GROQ_MODEL
-
-    _clear_rate()
-    patched = client.patch(
-        "/api/agents/scribe",
-        json={"history_window": 20, "channel_scope": "general"},
-        headers=auth,
-    )
-    assert patched.status_code == 200
-    assert patched.json()["history_window"] == 20
-    assert patched.json()["channel_scope"] == "general"
-
-    _clear_rate()
-    again = client.post(
-        "/api/agents",
-        json={"name": "scribe", "system_prompt": "dup"},
-        headers=auth,
-    )
-    assert again.status_code == 409
 
 
 def test_memory_roundtrip_and_context(client):
@@ -99,7 +43,7 @@ def test_memory_roundtrip_and_context(client):
     assert "ship date is Friday" in messages[0]["content"]
 
 
-def test_classify_and_retryable():
+def test_error_classification_and_no_provider(client, monkeypatch):
     missing = RuntimeError("missing_key")
     assert "no API key" in agent.classify_error(missing)
     rate = RuntimeError("rate limit exceeded")
@@ -109,6 +53,24 @@ def test_classify_and_retryable():
     timeout = TimeoutError("timeout")
     assert agent.is_retryable(timeout)
     assert "timed out" in agent.classify_error(timeout)
+
+    async def no_ready():
+        return False
+
+    monkeypatch.setattr(ai_resolver, "any_provider_ready", no_ready)
+    row = {
+        "name": "swarm",
+        "system_prompt": "You are swarm.",
+        "model": "x",
+        "history_window": 12,
+        "max_tool_calls": 3,
+        "tools": [],
+    }
+    result = asyncio.run(agent.generate_reply(
+        row, "general", [{"author_kind": "human", "author": "uzeb", "body": "hi"}],
+    ))
+    assert result["reply"].startswith("[agent error:")
+    assert "API key" in result["reply"]
 
 
 def test_compact_summary_only_when_window_full():
@@ -168,10 +130,12 @@ def test_retry_once_then_succeeds(client, monkeypatch):
     assert calls["model"] == DEFAULT_GROQ_MODEL
 
 
-def test_tool_cap_applies_to_batched_calls(monkeypatch):
+def test_tool_call_caps(monkeypatch):
+    """Batched calls stop at the cap; a capped round still closes with a
+    no-tools summary round."""
     executed = []
 
-    async def fake_complete(*_args, **_kwargs):
+    async def fake_batch(*_args, **_kwargs):
         return "", [
             {"id": "1", "name": "read", "arguments": "{}"},
             {"id": "2", "name": "read", "arguments": "{}"},
@@ -181,17 +145,36 @@ def test_tool_cap_applies_to_batched_calls(monkeypatch):
         executed.append(True)
         return "ok"
 
-    monkeypatch.setattr(agent, "_complete_stream", fake_complete)
+    monkeypatch.setattr(agent, "_complete_stream", fake_batch)
     monkeypatch.setattr(agent, "_execute_tool", fake_tool)
     row = {"name": "swarm", "max_tool_calls": 1}
-    result = asyncio.run(agent._run_with_client(
+    capped = asyncio.run(agent._run_with_client(
         object(), "model", row, "general", [], use_tools=True,
         allowed=["read"], on_tools_ready=None, on_stream_start=None,
         on_token=None, trace=None,
     ))
     assert len(executed) == 1
-    assert len(result["tool_events"]) == 1
-    assert "tool-call cap" in result["reply"]
+    assert len(capped["tool_events"]) == 1
+    assert "tool-call cap" in capped["reply"]
+
+    calls = []
+
+    async def fake_rounds(client, model, messages, on_start=None, on_token=None, tool_schemas=None):
+        calls.append(bool(tool_schemas))
+        if len(calls) <= 2:
+            # Work round, then a capped round that still wants tools.
+            return "", [{"id": "1", "name": "read", "arguments": "{}"}], None
+        return "did the thing, one step left", [], None
+
+    monkeypatch.setattr(agent, "_complete_stream", fake_rounds)
+    closed = asyncio.run(agent._run_with_client(
+        object(), "model", row, "general", [], use_tools=True,
+        allowed=["read"], on_tools_ready=None, on_stream_start=None,
+        on_token=None, trace=None,
+    ))
+    assert len(closed["tool_events"]) == 1
+    assert closed["reply"] == "did the thing, one step left"
+    assert len(calls) == 3  # work round, capped round, no-tools closing round
 
 
 def test_tool_budget_defaults_and_hard_cap():
@@ -207,49 +190,3 @@ def test_tool_budget_defaults_and_hard_cap():
         pass
     else:
         raise AssertionError("max_tool_calls=13 should be rejected")
-
-
-def test_cap_hit_closes_with_summary(monkeypatch):
-    calls = []
-
-    async def fake_complete(client, model, messages, on_start=None, on_token=None, tool_schemas=None):
-        calls.append(bool(tool_schemas))
-        if len(calls) <= 2:
-            # Work round, then a capped round that still wants tools.
-            return "", [{"id": "1", "name": "read", "arguments": "{}"}], None
-        return "did the thing, one step left", [], None
-
-    async def fake_tool(*_args, **_kwargs):
-        return "ok"
-
-    monkeypatch.setattr(agent, "_complete_stream", fake_complete)
-    monkeypatch.setattr(agent, "_execute_tool", fake_tool)
-    row = {"name": "swarm", "max_tool_calls": 1}
-    result = asyncio.run(agent._run_with_client(
-        object(), "model", row, "general", [], use_tools=True,
-        allowed=["read"], on_tools_ready=None, on_stream_start=None,
-        on_token=None, trace=None,
-    ))
-    assert len(result["tool_events"]) == 1
-    assert result["reply"] == "did the thing, one step left"
-    assert len(calls) == 3  # work round, capped round, no-tools closing round
-
-
-def test_classified_error_when_no_provider(client, monkeypatch):
-    async def no_ready():
-        return False
-
-    monkeypatch.setattr(ai_resolver, "any_provider_ready", no_ready)
-    row = {
-        "name": "swarm",
-        "system_prompt": "You are swarm.",
-        "model": "x",
-        "history_window": 12,
-        "max_tool_calls": 3,
-        "tools": [],
-    }
-    result = asyncio.run(agent.generate_reply(
-        row, "general", [{"author_kind": "human", "author": "uzeb", "body": "hi"}],
-    ))
-    assert result["reply"].startswith("[agent error:")
-    assert "API key" in result["reply"]

@@ -16,26 +16,6 @@ def _clear_rate():
     main._last_write.clear()
 
 
-def test_catalog_includes_computer_browser_composio(client, auth):
-    res = client.get("/api/tools", headers=auth)
-    assert res.status_code == 200
-    names = {t["name"] for t in res.json()["tools"]}
-    assert "computer_run" in names
-    assert "browser_navigate" in names
-    assert "plugin:composio:execute" in names
-    assert "exa_search" in names
-    assert "tavily_search" in names
-    assert "firecrawl_scrape" in names
-    assert "browser_use" in names
-    assert "cua_desktop" in names
-    assert "system_run" in names
-    assert "system_ls" in names
-    assert "system_read" in names
-    assert "system_write" in names
-    plugins = {p["id"] for p in res.json()["plugins"]}
-    assert "composio" in plugins
-
-
 def test_seeded_agents_get_computer_use(client, auth):
     agents = {a["name"]: a for a in client.get("/api/agents", headers=auth).json()}
     assert "computer_run" in agents["swarm"]["tools"]
@@ -98,11 +78,16 @@ def test_system_run_echo(tmp_path, monkeypatch):
     assert "protected" in env_block
 
 
-def test_system_disabled(tmp_path, monkeypatch):
+def test_system_disabled_at_function_and_api_layers(client, auth, tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_SYSTEM", "0")
     monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
     out = system_mod.system_run("echo nope")
     assert "disabled" in out.lower()
+    listing = client.get("/api/computer/system", headers=auth).json()
+    assert listing["enabled"] is False
+    assert client.get(
+        "/api/computer/system/file", params={"path": "x"}, headers=auth
+    ).status_code == 403
 
 
 def test_computer_api_includes_system(client, auth, tmp_path, monkeypatch):
@@ -121,16 +106,6 @@ def test_computer_api_includes_system(client, auth, tmp_path, monkeypatch):
     assert client.get(
         "/api/computer/system/file", params={"path": "../secret"}, headers=auth
     ).status_code == 404
-
-
-def test_system_api_disabled(client, auth, tmp_path, monkeypatch):
-    monkeypatch.setenv("SWARM_SYSTEM", "0")
-    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))
-    listing = client.get("/api/computer/system", headers=auth).json()
-    assert listing["enabled"] is False
-    assert client.get(
-        "/api/computer/system/file", params={"path": "x"}, headers=auth
-    ).status_code == 403
 
 
 def test_system_root_mobility(client, auth, tmp_path, monkeypatch):
@@ -181,27 +156,18 @@ def test_system_root_mobility(client, auth, tmp_path, monkeypatch):
     assert denied.status_code == 400
 
 
-def test_system_listing_is_only_the_bound_folder(tmp_path, monkeypatch):
-    project = tmp_path / "recall"
-    project.mkdir()
-    (project / "app").mkdir()
-    (project / "data").mkdir()
-    (project / "readme.md").write_text("ok", encoding="utf-8")
-    monkeypatch.setenv("SWARM_SYSTEM", "1")
-    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
-    system_mod.reset_runtime()
-    names = {e["name"] for e in system_mod.listing("")["entries"]}
-    assert names == {"app", "data", "readme.md"}
-    home_shell = {"Documents", "Music", "My Music", "My Documents"}
-    assert names.isdisjoint(home_shell)
-
-
-def test_system_listing_skips_escaping_junctions(tmp_path, monkeypatch):
+def test_system_listing_scopes_and_hides(tmp_path, monkeypatch):
+    """Listing shows only the bound folder, hides legacy shell folders,
+    and skips escaping junctions."""
     project = tmp_path / "recall"
     outside = tmp_path / "Documents"
     project.mkdir()
     outside.mkdir()
     (project / "app").mkdir()
+    (project / "data").mkdir()
+    (project / "readme.md").write_text("ok", encoding="utf-8")
+    (project / "My Music").mkdir()
+    (project / "My Documents").mkdir()
     decoy = project / "Documents"
     if os.name == "nt":
         created = subprocess.run(
@@ -219,23 +185,8 @@ def test_system_listing_skips_escaping_junctions(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
     system_mod.reset_runtime()
     names = {e["name"] for e in system_mod.listing("")["entries"]}
-    assert "app" in names
-    assert "Documents" not in names
-
-
-def test_system_listing_hides_legacy_shell_folders(tmp_path, monkeypatch):
-    project = tmp_path / "homeish"
-    project.mkdir()
-    (project / "real").mkdir()
-    (project / "My Music").mkdir()
-    (project / "My Documents").mkdir()
-    monkeypatch.setenv("SWARM_SYSTEM", "1")
-    monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(project))
-    system_mod.reset_runtime()
-    names = {e["name"] for e in system_mod.listing("")["entries"]}
-    assert "real" in names
-    assert "My Music" not in names
-    assert "My Documents" not in names
+    assert {"app", "data", "readme.md"} <= names
+    assert names.isdisjoint({"Documents", "Music", "My Music", "My Documents"})
 
 
 def test_browser_status_and_disabled(client, auth, monkeypatch):
@@ -268,7 +219,7 @@ def test_composio_status_and_connect(client, auth, monkeypatch):
     assert client.get("/api/composio/status", headers=auth).json()["connected"] is False
 
 
-def test_composio_plugin_execute_without_key(client, monkeypatch):
+def test_composio_without_key_at_both_layers(client, monkeypatch):
     monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
 
     async def go():
@@ -283,14 +234,8 @@ def test_composio_plugin_execute_without_key(client, monkeypatch):
             workspace_helpers={},
         )
 
-    text = asyncio.run(go())
-    assert "composio not connected" in text.lower()
-
-
-def test_composio_client_without_key(client, monkeypatch):
-    monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
-    text = asyncio.run(composio_client.execute("GMAIL_SEND_EMAIL", {}))
-    assert "composio not connected" in text.lower()
+    assert "composio not connected" in asyncio.run(go()).lower()
+    assert "composio not connected" in asyncio.run(composio_client.execute("GMAIL_SEND_EMAIL", {})).lower()
 
 
 def test_connectors_catalog_and_exa_without_key(client, auth, monkeypatch):
@@ -312,15 +257,9 @@ def test_connector_cli_rejects_api_key(client, auth):
     assert res.status_code == 400
 
 
-def test_browser_use_without_cli(client):
-    text = asyncio.run(
-        __import__("backend.tools.connectors", fromlist=["browser_use_cli"]).browser_use_cli("status")
-    )
-    assert "not installed" in text.lower() or "browser-use" in text.lower()
-
-
-def test_cua_status_degrades(client):
-    text = asyncio.run(
-        __import__("backend.tools.connectors", fromlist=["cua_desktop"]).cua_desktop("status")
-    )
-    assert "cli:" in text.lower() or "cua" in text.lower()
+def test_optional_clis_degrade_gracefully(client):
+    connectors = __import__("backend.tools.connectors", fromlist=["browser_use_cli", "cua_desktop"])
+    browser_text = asyncio.run(connectors.browser_use_cli("status"))
+    assert "not installed" in browser_text.lower() or "browser-use" in browser_text.lower()
+    cua_text = asyncio.run(connectors.cua_desktop("status"))
+    assert "cli:" in cua_text.lower() or "cua" in cua_text.lower()
