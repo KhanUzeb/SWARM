@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import logging
 import os
 import re
 import subprocess
@@ -35,6 +36,9 @@ SHELL_OUTPUT_CAP = 4000
 MEMORY_INJECT_LIMIT = 12
 RETRY_DELAY_SECONDS = 0.8
 CUTOFF_NOTE = "\n\n[reply cut off]"
+CUTOFF_MARKER = "[reply cut off — stopped]"
+
+_logger = logging.getLogger("swarm.agent")
 
 DEMO_STREAM_DELAY = 0.012
 
@@ -434,6 +438,14 @@ def classify_error(exc: BaseException) -> str:
     if "connection" in name or "connect" in lowered or "network" in lowered:
         return "[agent error: couldn't reach the model]"
     return "[agent error: couldn't reach the model]"
+
+
+def is_model_not_found(exc: BaseException | None) -> bool:
+    if exc is None:
+        return False
+    status = getattr(exc, "status_code", None)
+    lowered = str(exc).lower()
+    return status == 404 or ("model" in lowered and ("not found" in lowered or "does not exist" in lowered))
 
 
 def is_retryable(exc: BaseException) -> bool:
@@ -948,6 +960,21 @@ async def generate_reply(
                     return result
                 except Exception as retry_exc:  # noqa: BLE001
                     last_exc = retry_exc
+
+    if (model_override or "").strip() and is_model_not_found(last_exc):
+        # The pinned model is gone (rotated id, outage) — fall back to the
+        # agent default once instead of failing the turn. Partial tokens
+        # already streamed stay visible; the fallback continues the reply.
+        _logger.warning("model %s unavailable, falling back to agent default", model_override)
+        fallback = await generate_reply(
+            agent_row, channel_id, history,
+            on_tools_ready=on_tools_ready,
+            on_stream_start=on_stream_start,
+            on_token=on_token,
+            model_override=None,
+        )
+        fallback["model_fallback"] = True
+        return fallback
 
     return {
         "reply": classify_error(last_exc or RuntimeError("couldn't reach the model")),

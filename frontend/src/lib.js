@@ -88,6 +88,12 @@ export function isAgentError(body) {
   return String(body || "").trim().startsWith("[agent error:");
 }
 
+/** An agent reply the user can resume: hard errors plus stopped/cut-off streams. */
+export function isResumable(body) {
+  const text = String(body || "");
+  return isAgentError(text) || text.includes("[reply cut off");
+}
+
 /** Compact display id for a model: drop provider prefix, cap length. */
 export function shortModel(modelId, maxLen = 28) {
   const raw = String(modelId || "").trim();

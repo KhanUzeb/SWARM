@@ -509,8 +509,10 @@ Auth required, `author` must match. Idempotent — same
 ### `POST /api/messages/{message_id}/retry`
 Auth required. Re-runs an agent after a classified provider/network
 failure. The target message must be an agent message whose body starts
-with `[agent error:`. The server finds the most recent human message
-(or `[routine:…]` system message) in the same thread scope, deletes the
+with `[agent error:` **or** ends with a stopped-stream marker
+(`[reply cut off — stopped]` / `[reply cut off]`) — the UI labels the
+latter case **Resume**. The server finds the most recent human message
+(or `[routine:.]` system message) in the same thread scope, deletes the
 error message, broadcasts `message_deleted`, and schedules `_run_agent`
 again in the background.
 ```json
@@ -519,6 +521,23 @@ again in the background.
 ```
 400 if the message is not a retryable agent error or no trigger is found,
 404 if the message or agent does not exist, 429 rate limited.
+
+### `POST /api/channels/{channel_id}/stop`
+Auth required. Cancels in-flight agent runs in the channel (the
+composer Stop button). Returns `{"ok": true, "stopped": N}`. Partially
+streamed text is persisted as an agent message with a trailing
+`[reply cut off — stopped]` marker so nothing shown is lost; the run's
+work session records `work_cancelled`.
+
+### Speech-to-text
+- `GET /api/stt/status` — `{available, provider, model}`. Backed by
+  Groq Whisper (`whisper-large-v3-turbo`); unavailable without a Groq key.
+- `POST /api/stt/transcribe?filename=voice.webm` — raw audio body
+  (10 MB max), returns `{"ok": true, "text", "model"}`. 503 when
+  unconfigured, 422 on empty body, 413 over the cap, 502 when the
+  speech backend is unreachable or returns no transcript. The composer
+  mic records with MediaRecorder and inserts the transcript into the
+  draft; failures surface inline, never as exceptions.
 
 ### `GET /api/messages/{message_id}/thread`
 Auth required. One-level thread: the parent message plus every
@@ -856,6 +875,10 @@ Live `message` events from a human/agent/system write may omit
   (`https://openrouter.ai/api/v1`). `OPENROUTER_MODEL` overrides the
   mapped model name; otherwise Groq model ids are mapped to OpenRouter
   slugs when a mapping exists, else the original id is sent.
+  A per-message model override that resolves to a missing model
+  (404 / model-not-found) falls back to the agent default exactly
+  once (`model_fallback: true` on the result) instead of failing the
+  turn.
 - **Classified failures**: missing key, rate limit, timeout, bad
   model, and network errors become a short in-channel line
   (`[agent error: …]`), not a raw exception string. They are posted as

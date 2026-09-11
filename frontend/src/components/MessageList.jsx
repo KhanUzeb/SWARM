@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Avatar, RichBody, Tooltip } from "../ui.jsx";
-import { fmtTime, isAgentError, shortModel, EMOJI } from "../lib.js";
+import { fmtTime, isAgentError, isResumable, shortModel, EMOJI } from "../lib.js";
 
 export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, streamText = {}, workByMessage, eventsByWork, canModerate }) {
   const endRef = useRef(null);
@@ -178,6 +178,8 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
   };
   const isMe = m.author === myHandle;
   const failedAgent = m.author_kind === "agent" && isAgentError(m.body);
+  const stoppedAgent = m.author_kind === "agent" && !failedAgent && String(m.body || "").includes("[reply cut off");
+  const resumable = m.author_kind === "agent" && isResumable(m.body);
 
   const kind = m.author_kind || "human";
   const avatarKind = kind === "system" ? "system" : agent ? "agent" : "human";
@@ -239,8 +241,8 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
   }
 
   return (
-    <div className={`msg-row ${kind} ${grouped ? "grouped" : ""} ${m.streaming || streaming ? "streaming" : ""} ${failedAgent ? "failed" : ""}`}>
-      <div className={`msg-bubble agent-bubble${failedAgent ? " error-bubble" : ""}`}>
+    <div className={`msg-row ${kind} ${grouped ? "grouped" : ""} ${m.streaming || streaming ? "streaming" : ""}${failedAgent ? " failed" : ""}${stoppedAgent ? " stopped" : ""}`}>
+      <div className={`msg-bubble agent-bubble${failedAgent ? " error-bubble" : ""}${stoppedAgent ? " stopped-bubble" : ""}`}>
         {!grouped && (
           <div className="msg-bubble-header">
             <Avatar name={label} kind={avatarKind} size="sm" />
@@ -276,15 +278,15 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
           <AgentTrace events={workEvents} />
         )}
 
-        {failedAgent && onRetry && (
+        {resumable && onRetry && (
           <div className="msg-retry-row">
             <button type="button" className="msg-retry-btn" onClick={() => onRetry(m)} disabled={retrying}>
-              {retrying ? "Retrying…" : "Retry"}
+              {retrying ? "Retrying…" : stoppedAgent ? "Resume" : "Retry"}
             </button>
           </div>
         )}
 
-        {kind !== "system" && !m.streaming && m.id != null && !failedAgent && (
+        {kind !== "system" && !m.streaming && m.id != null && !resumable && (
           <div className="msg-actions">
             <Tooltip content="Reply">
               <button onClick={() => onReply(m.parent_id || m.id)} aria-label="Reply">

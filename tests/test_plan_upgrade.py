@@ -280,6 +280,87 @@ def test_messages_model_column_migrates(tmp_path, monkeypatch):
     assert history[0]["model"] == "x-model"
 
 
+def test_stop_endpoint_cancels_nothing_by_default(client, auth):
+    res = client.post("/api/channels/general/stop", headers=auth)
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "stopped": 0}
+    assert client.post("/api/channels/nope/stop", headers=auth).status_code in (403, 404)
+
+
+def test_retry_accepts_stopped_cutoff(client, auth, monkeypatch):
+    import asyncio
+
+    import backend.db as db_mod
+
+    async def seed():
+        await db_mod.add_message("general", "uzeb", "please help", "human")
+        return await db_mod.add_message(
+            "general", "swarm", "partial thought\n[reply cut off — stopped]", "agent")
+
+    error_msg = asyncio.run(seed())
+
+    async def fake_reply(*_args, **_kwargs):
+        return {"reply": "resumed", "tool_events": [], "usage": {}, "model": "m"}
+
+    monkeypatch.setattr("backend.main.agent.generate_reply", fake_reply)
+    res = client.post(f"/api/messages/{error_msg['id']}/retry", headers=auth)
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+
+
+def test_model_override_falls_back_when_gone(client, monkeypatch):
+    import asyncio
+
+    import backend.agent as agent_mod
+    import backend.ai_support.resolver as resolver_mod
+
+    async def yes_ready():
+        return True
+
+    async def fake_attempts(model):
+        return [(object(), model, "groq")]
+
+    calls = []
+
+    async def fake_complete(_client, model, *_args, **_kwargs):
+        calls.append(model)
+        if model == "bad-model-xyz":
+            err = RuntimeError("model bad-model-xyz does not exist")
+            err.status_code = 404
+            raise err
+        return "fallback answer", [], None
+
+    monkeypatch.setattr(resolver_mod, "any_provider_ready", yes_ready)
+    monkeypatch.setattr(resolver_mod, "iter_provider_attempts", fake_attempts)
+    monkeypatch.setattr(resolver_mod, "iter_openai_compatible_attempts", fake_attempts)
+    monkeypatch.setattr(agent_mod, "_complete_stream", fake_complete)
+    monkeypatch.setattr(agent_mod, "RETRY_DELAY_SECONDS", 0)
+
+    row = {"name": "swarm", "system_prompt": "You are swarm.", "model": "row-model",
+           "history_window": 12, "max_tool_calls": 1, "tools": []}
+    history = [{"author_kind": "human", "author": "uzeb", "body": "hi"}]
+    result = asyncio.run(agent_mod.generate_reply(row, "general", history, model_override="bad-model-xyz"))
+    assert result["reply"] == "fallback answer"
+    assert result.get("model_fallback") is True
+    assert result["model"] != "bad-model-xyz"
+
+
+def test_stt_status_and_transcribe_guards(client, auth, monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    status = client.get("/api/stt/status", headers=auth)
+    assert status.status_code == 200
+    assert status.json()["available"] is False
+
+    denied = client.post("/api/stt/transcribe", headers=auth, content=b"")
+    assert denied.status_code == 503
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_test_stt")
+    empty = client.post("/api/stt/transcribe", headers=auth, content=b"")
+    assert empty.status_code == 422
+    big = client.post("/api/stt/transcribe", headers=auth, content=b"x" * (11 * 1024 * 1024))
+    assert big.status_code == 413
+
+
 def test_policy_endpoint(client, auth):
     res = client.post("/api/v2/policy/evaluate", json={
         "agent": "coder", "tool": "push_to_main", "target": "main",

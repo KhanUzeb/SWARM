@@ -27,6 +27,7 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 | Task-aware model routing + live work detail + context drawer | `backend/routing.py`, route endpoint, `CommandCenter` Auto-route, live `WorkDetail` modal, `ContextDrawer` in talk view, `RunMonitor` removed | Reverts routing + detail unification; RunMonitor does not come back |
 | Midnight Magic + Galaxy Dust identity + aurora backdrop | `styles.css`, `components.css`, `docs/VISUAL-IDENTITY.md` | Reverts to neutral charcoal; backdrop returns to flat canvas |
 | Chat model picker + live token streaming | `messages.model` column + migration, per-message override threading, composer chip, bubble model tags, stream-text bubbles | Reverts composer to Auto-only; replies lose model tags; tokens stop rendering live |
+| Stop/resume, outage fallbacks, voice input | channel task registry + stop endpoint, cutoff persist, cutoff-aware retry, model-not-found fallback, Groq Whisper STT, offline outbox with auto-flush, composer stop/mic/Auto-row polish | Reverts stop/resume/outbox/voice; errors and cutoffs stop being resumable |
 
 ## Feature summary (post-merge)
 

@@ -75,6 +75,9 @@ export default function App() {
   const [selectedWork, setSelectedWork] = useState(null);
   const [streamingAgents, setStreamingAgents] = useState({});
   const [streamText, setStreamText] = useState({});
+  const [outbox, setOutbox] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("swarm.outbox") || "{}"); } catch { return {}; }
+  });
   const [chatModel, setChatModelState] = useState(() => {
     try { return localStorage.getItem("swarm.chat_model") || ""; } catch { return ""; }
   });
@@ -113,6 +116,7 @@ export default function App() {
   const workingWith = [...new Set(
     activeWorkHere.flatMap(s => (eventsByWork[s.id] || []).map(e => e.payload?.agent).filter(Boolean))
   )];
+  const chatBusy = !!typing || Object.keys(streamText).length > 0;
   const workByMessage = {};
   for (const s of workSessions) {
     for (const e of eventsByWork[s.id] || []) {
@@ -474,27 +478,96 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [user]);
 
+  function persistOutbox(next) {
+    setOutbox(next);
+    try { localStorage.setItem("swarm.outbox", JSON.stringify(next)); } catch { /* private mode */ }
+  }
+
+  function queueMessage(channelId, entry) {
+    persistOutbox(prev => ({ ...prev, [channelId]: [...(prev[channelId] || []), entry] }));
+  }
+
   // ── Send ──
   async function sendMessage(text, parentId = null, opts = null) {
     if (!tokenRef.current) return false;
     const model = (opts && "model" in opts ? opts.model : chatModel) || null;
-    const body = { author: user.handle, body: text, author_kind: "human", parent_id: parentId };
+    const channelId = channelRef.current;
+    const author = user.handle;
+    const body = { author, body: text, author_kind: "human", parent_id: parentId };
     if (model) body.model = model;
     try {
-      const res = await apiJson(`/api/channels/${channelRef.current}/messages`, {
+      const res = await apiJson(`/api/channels/${channelId}/messages`, {
         token: tokenRef.current, method: "POST", body,
       });
       if (!res.ok) {
+        if (res.status === 0 || res.status >= 500) {
+          // Server/network outage: queue for automatic resend, don't drop.
+          queueMessage(channelId, { author, text, parentId, model });
+          flash("Connection lost — message queued, will send on reconnect", "warning");
+          return true;
+        }
         setSendFailure({ text, parentId, model, detail: res.data?.detail || "Message could not be sent" });
         return false;
       }
       setSendFailure(prev => (prev?.text === text && prev?.parentId === parentId ? null : prev));
       remember(res.data);
-      loadContextStats(channelRef.current);
+      loadContextStats(channelId);
       return true;
     } catch {
-      setSendFailure({ text, parentId, model, detail: "Network error — check your connection" });
-      return false;
+      // Fetch threw (offline): queue for automatic resend, don't drop.
+      queueMessage(channelId, { author, text, parentId, model });
+      flash("You're offline — message queued, will send on reconnect", "warning");
+      return true;
+    }
+  }
+
+  // Flush the offline outbox whenever the socket reconnects.
+  useEffect(() => {
+    if (wsStatus !== "connected" || !tokenRef.current) return;
+    const pending = outbox[channelRef.current] || [];
+    if (!pending.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const entry of pending) {
+        if (cancelled) return;
+        const body = { author: entry.author, body: entry.text, author_kind: "human", parent_id: entry.parentId };
+        if (entry.model) body.model = entry.model;
+        try {
+          const res = await apiJson(`/api/channels/${channelRef.current}/messages`, {
+            token: tokenRef.current, method: "POST", body,
+          });
+          if (!res.ok) return; // keep the rest queued; try again next reconnect
+          if (res.data) remember(res.data);
+        } catch {
+          return;
+        }
+        persistOutbox(prev => {
+          const rest = (prev[channelRef.current] || []).slice(1);
+          const next = { ...prev };
+          if (rest.length) next[channelRef.current] = rest;
+          else delete next[channelRef.current];
+          return next;
+        });
+      }
+      loadContextStats(channelRef.current);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsStatus]);
+
+  async function stopChat() {
+    try {
+      const res = await apiJson(`/api/channels/${channelRef.current}/stop`, {
+        token: tokenRef.current, method: "POST",
+      });
+      if (res.ok) {
+        const n = res.data?.stopped || 0;
+        flash(n ? `Stopped ${n} running repl${n === 1 ? "y" : "ies"} — partial text kept` : "Nothing running", n ? "warning" : "info");
+      } else {
+        flash(res.data?.detail || "Could not stop", "error");
+      }
+    } catch {
+      flash("Could not stop — check your connection", "error");
     }
   }
 
@@ -735,6 +808,13 @@ export default function App() {
                 onClose={() => setShowContext(false)}
               />
             )}
+            {(outbox[channel] || []).length > 0 && (
+              <div className="send-failure-banner" role="status">
+                <span className="send-failure-text">
+                  {(outbox[channel] || []).length} queued — sending on reconnect
+                </span>
+              </div>
+            )}
             <Composer
               onSend={(text, opts) => sendMessage(text, null, opts)}
               channelName={current.name}
@@ -749,6 +829,8 @@ export default function App() {
               token={token}
               model={chatModel}
               onModelChange={setChatModel}
+              working={chatBusy}
+              onStop={stopChat}
             />
           </>
         )}
@@ -848,6 +930,7 @@ export default function App() {
           chatModel={chatModel}
           onModelChange={setChatModel}
           streamText={streamText}
+          onStop={stopChat}
           onReact={onReact}
           onUnreact={onUnreact}
           onDelete={onDelete}
@@ -942,7 +1025,7 @@ function AgentsView({ agents, onOpenChannel }) {
   );
 }
 
-function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onUnreact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions, token, chatModel, onModelChange, streamText }) {
+function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onUnreact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions, token, chatModel, onModelChange, streamText, onStop }) {
   const parent = messages[parentId];
   const replies = threadReplies.length > 0 ? threadReplies : Object.values(messages).filter(m => m.parent_id === parentId);
   const replyOrder = replies.map(r => r.id);
@@ -980,7 +1063,7 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
           </div>
         </div>
       )}
-      <Composer onSend={onSend} placeholder="Reply in thread…" compact threadParent token={token} model={chatModel} onModelChange={onModelChange} />
+      <Composer onSend={onSend} placeholder="Reply in thread…" compact threadParent token={token} model={chatModel} onModelChange={onModelChange} working={chatBusy} onStop={onStop} />
     </aside>
   );
 }

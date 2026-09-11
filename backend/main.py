@@ -183,12 +183,23 @@ async def lifespan(app: FastAPI):
 app.router.lifespan_context = lifespan
 
 
-def _track_task(coro: Any, label: str) -> asyncio.Task:
+_channel_tasks: dict[str, set[asyncio.Task]] = {}
+
+
+def _track_task(coro: Any, label: str, channel_id: str | None = None) -> asyncio.Task:
     task = asyncio.create_task(coro, name=label)
     _background_tasks.add(task)
+    if channel_id:
+        _channel_tasks.setdefault(channel_id, set()).add(task)
 
     def finished(done: asyncio.Task) -> None:
         _background_tasks.discard(done)
+        if channel_id:
+            tasks = _channel_tasks.get(channel_id)
+            if tasks is not None:
+                tasks.discard(done)
+                if not tasks:
+                    _channel_tasks.pop(channel_id, None)
         if done.cancelled():
             return
         exc = done.exception()
@@ -201,6 +212,16 @@ def _track_task(coro: Any, label: str) -> asyncio.Task:
 
     task.add_done_callback(finished)
     return task
+
+
+def _stop_channel_tasks(channel_id: str) -> int:
+    tasks = list(_channel_tasks.get(channel_id) or ())
+    stopped = 0
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+            stopped += 1
+    return stopped
 
 
 # --------------------------------------------------------------- status ---
@@ -960,8 +981,13 @@ async def api_retry_agent_message(message_id: int, handle: str = Depends(require
         raise HTTPException(404, "no such message")
     channel_id = msg["channel_id"]
     await _require_channel(channel_id, handle)
-    if msg.get("author_kind") != "agent" or not agent.is_agent_error(msg.get("body") or ""):
-        raise HTTPException(400, "only agent error messages can be retried")
+    body = msg.get("body") or ""
+    if msg.get("author_kind") != "agent" or not (
+        agent.is_agent_error(body)
+        or agent.CUTOFF_MARKER in body
+        or agent.CUTOFF_NOTE.strip() in body
+    ):
+        raise HTTPException(400, "only agent error or stopped messages can be retried")
 
     agent_row = await db.fetch_agent(msg["author"])
     if agent_row is None or agent_row.get("archived"):
@@ -990,8 +1016,75 @@ async def api_retry_agent_message(message_id: int, handle: str = Depends(require
         "message_id": message_id,
         "ids": ids,
     })
-    _track_task(_run_agent(channel_id, agent_row), "agent retry")
+    _track_task(_run_agent(channel_id, agent_row), "agent retry", channel_id=channel_id)
     return {"ok": True, "trigger_id": trigger["id"], "agent": agent_row["name"]}
+
+
+@app.post("/api/channels/{channel_id}/stop")
+async def api_stop_channel(channel_id: str, handle: str = Depends(require_auth)):
+    """Stop in-flight agent runs in a channel (Stop button / outage response)."""
+    await _require_channel(channel_id, handle)
+    stopped = _stop_channel_tasks(channel_id)
+    return {"ok": True, "stopped": stopped}
+
+
+STT_MODEL = "whisper-large-v3-turbo"
+STT_MAX_BYTES = 10 * 1024 * 1024
+
+
+async def _stt_key() -> str | None:
+    spec = get_provider("groq") or {}
+    return await ai_store.resolve_key("groq", env_fallback=spec.get("env_fallback") or "GROQ_API_KEY")
+
+
+@app.get("/api/stt/status")
+async def api_stt_status(handle: str = Depends(require_auth)):
+    key = await _stt_key()
+    return {
+        "available": bool(key),
+        "provider": "groq" if key else None,
+        "model": STT_MODEL if key else None,
+    }
+
+
+@app.post("/api/stt/transcribe")
+async def api_stt_transcribe(request: Request, handle: str = Depends(require_auth)):
+    """Transcribe a voice note (raw audio body, e.g. audio/webm from the
+    composer mic) with the speech-to-text backend. 503 when unconfigured."""
+    key = await _stt_key()
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail="speech-to-text is not configured — set GROQ_API_KEY or connect Groq",
+        )
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=422, detail="empty audio body")
+    if len(body) > STT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="voice note is too large (10 MB max)")
+    content_type = request.headers.get("content-type", "audio/webm")
+    filename = (request.query_params.get("filename") or "voice.webm")[:64]
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {key}"},
+                files={"file": (filename, body, content_type)},
+                data={"model": STT_MODEL, "response_format": "json"},
+            )
+    except Exception as exc:  # noqa: BLE001 — network outage
+        raise HTTPException(status_code=502, detail=f"speech backend unreachable: {exc}")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="speech backend rejected the audio")
+    try:
+        text = (response.json().get("text") or "").strip()
+    except Exception:  # noqa: BLE001
+        text = ""
+    if not text:
+        raise HTTPException(status_code=502, detail="speech backend returned no transcript")
+    return {"ok": True, "text": text, "model": STT_MODEL}
 
 
 @app.get("/api/messages/{message_id}/thread")
@@ -1890,7 +1983,8 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
         if not mentioned:
             return
         _track_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1,
-                                           model_override=model_override), "agent handoff")
+                                           model_override=model_override),
+                      "agent handoff", channel_id=channel_id)
         return
 
     if kind in ("human", "system") and ch_kind == "group" and not mentioned and not mentioned_teams:
@@ -1931,7 +2025,8 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
         # the same way unless the message @mentions specific bots.
         # @team-id expands to that team's bots in roster order.
         _track_task(_run_agents_in_order(channel_id, to_run, depth=depth,
-                                           model_override=model_override), "agent reply batch")
+                                           model_override=model_override),
+                      "agent reply batch", channel_id=channel_id)
 
 
 async def _run_agents_in_order(channel_id: str, agents: list[dict], *, depth: int = 0,
@@ -2028,7 +2123,11 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
     async def on_stream_start() -> None:
         await hub.broadcast(channel_id, {"type": "agent_stream_start", "author": name})
 
+    streamed: list[str] = []
+
     async def on_token(delta: str) -> None:
+        if len("".join(streamed)) < 30000:
+            streamed.append(delta)
         await hub.broadcast(channel_id, {"type": "agent_token", "author": name, "delta": delta})
 
     try:
@@ -2066,7 +2165,16 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
         return result
     except asyncio.CancelledError:
         with suppress(Exception):
+            partial = "".join(streamed).strip()
+            if partial:
+                cutoff = await db.add_message(
+                    channel_id, name,
+                    f"{partial}\n{agent.CUTOFF_MARKER}", "agent",
+                    model=(model_override or "").strip() or agent_row.get("model"))
+                await hub.broadcast(channel_id, {"type": "message", "message": cutoff})
+                await work.link_message(session["id"], int(cutoff["id"]))
             await _emit_work_event(channel_id, session, "work_cancelled", {}, name)
+            await _set_status(name, "idle")
         raise
     except Exception as exc:  # noqa: BLE001
         _logger.error(
