@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS messages (
     author      TEXT NOT NULL,
     author_kind TEXT NOT NULL DEFAULT 'human',   -- 'human' | 'agent' | 'system'
     body        TEXT NOT NULL,
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    model       TEXT                             -- model id that produced an agent reply
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at);
@@ -387,6 +388,11 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
     )
     for old, new in GROQ_MODEL_ALIASES.items():
         await db.execute("UPDATE agents SET model = ? WHERE model = ?", (new, old))
+
+    cur = await db.execute("PRAGMA table_info(messages)")
+    msg_cols = {row[1] for row in await cur.fetchall()}
+    if "model" not in msg_cols:
+        await db.execute("ALTER TABLE messages ADD COLUMN model TEXT")
 
     cur = await db.execute("PRAGMA table_info(channels)")
     ch_cols = {row[1] for row in await cur.fetchall()}
@@ -790,14 +796,23 @@ async def add_message(
     body: str,
     author_kind: str = "human",
     parent_id: int | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     ts = time.time()
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "INSERT INTO messages (channel_id, parent_id, author, author_kind, body, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (channel_id, parent_id, author, author_kind, body, ts),
-        )
+        try:
+            cur = await db.execute(
+                "INSERT INTO messages (channel_id, parent_id, author, author_kind, body, created_at, model) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (channel_id, parent_id, author, author_kind, body, ts, model),
+            )
+        except Exception:  # noqa: BLE001 — pre-migration database without the model column
+            cur = await db.execute(
+                "INSERT INTO messages (channel_id, parent_id, author, author_kind, body, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (channel_id, parent_id, author, author_kind, body, ts),
+            )
+            model = None
         await db.commit()
         msg_id = cur.lastrowid
     return {
@@ -808,6 +823,7 @@ async def add_message(
         "author_kind": author_kind,
         "body": body,
         "created_at": ts,
+        "model": model,
     }
 
 
@@ -2142,7 +2158,7 @@ async def search_workspace(
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT m.id, m.channel_id, m.author, m.author_kind, m.body, m.created_at, "
-            "m.parent_id, c.name AS channel_name, c.kind AS channel_kind "
+            "m.parent_id, m.model, c.name AS channel_name, c.kind AS channel_kind "
             "FROM messages m JOIN channels c ON c.id = m.channel_id "
             "WHERE m.body LIKE ? COLLATE NOCASE "
             "ORDER BY m.created_at DESC, m.id DESC LIMIT ?",

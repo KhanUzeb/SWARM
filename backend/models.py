@@ -125,6 +125,7 @@ class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=8000)
     author_kind: str = Field(default="human", pattern=r"^human$")
     parent_id: int | None = None
+    model: str | None = Field(default=None, max_length=200)
 
 
 class CustomToolCreate(BaseModel):

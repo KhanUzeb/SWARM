@@ -131,6 +131,7 @@ def test_retry_once_then_succeeds(client, monkeypatch):
     assert result["reply"] == "hello after retry"
     assert calls["n"] == 2
     assert calls["model"] == DEFAULT_GROQ_MODEL
+    assert result["model"] == DEFAULT_GROQ_MODEL
 
 
 def test_tool_call_caps(monkeypatch):

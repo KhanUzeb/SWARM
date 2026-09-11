@@ -119,7 +119,7 @@ def test_agent_lifecycle_create_patch_duplicate(client, auth):
 
 
 def test_dm_triggers_without_mention_room_requires_it(client, auth, monkeypatch):
-    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None, **_kwargs):
         if on_stream_start is not None:
             await on_stream_start()
         if on_token is not None:
@@ -191,7 +191,7 @@ def test_skills_crud(client, auth):
 
 
 def test_routines_and_due(client, auth, monkeypatch):
-    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None, **_kwargs):
         return {"reply": "digest ready", "tool_events": [], "usage": {}}
 
     monkeypatch.setattr("backend.agent.generate_reply", fake_reply)
@@ -250,7 +250,7 @@ def test_agent_failure_is_persisted_and_status_resets(client, auth, monkeypatch)
 
 
 def test_approvals_roundtrip(client, auth, monkeypatch):
-    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None, **_kwargs):
         events = [{
             "tool": "request_approval",
             "args": {"action": "send outreach", "detail": "email Dana"},
@@ -303,7 +303,7 @@ def test_sandbox_api_and_writes_stay_inside(client, auth, tmp_path, monkeypatch)
 
 
 def test_handoff_from_agent_mention(client, auth, monkeypatch):
-    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None, **_kwargs):
         name = agent_row["name"]
         reply = "handoff to @ledger" if name == "swarm" else "logged"
         if on_stream_start is not None:
@@ -329,7 +329,7 @@ def test_handoff_from_agent_mention(client, auth, monkeypatch):
 
 
 def test_group_chat_triggers_members_without_mention(client, auth, monkeypatch):
-    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None, **_kwargs):
         if on_stream_start is not None:
             await on_stream_start()
         if on_token is not None:

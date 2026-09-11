@@ -31,8 +31,14 @@ to leave broken.
 | author_kind | TEXT    | `human` \| `agent` \| `system` |
 | body        | TEXT    | max 8000 chars, enforced at the pydantic layer |
 | created_at  | REAL    | unix timestamp |
+| model       | TEXT    | nullable. Model id that produced an agent reply; shown as a tag on the bubble |
 
 Indexed on `(channel_id, created_at)` and `(parent_id)`.
+
+A human message may carry an optional `model` (max 200 chars, `POST
+/api/channels/{id}/messages` body). It overrides the replying agents'
+model for that turn only — the composer chip (`Auto` = agent default)
+— and the resolved model is persisted on the agent reply above.
 
 ### `users`
 

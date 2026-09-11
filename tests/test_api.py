@@ -232,7 +232,7 @@ def test_ws_auth_and_catchup(client, auth, token):
 
 
 def test_mention_streams_then_persists(client, auth, monkeypatch):
-    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None, **_kwargs):
         if on_tools_ready is not None:
             await on_tools_ready([])
         if on_stream_start is not None:

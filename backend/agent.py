@@ -814,7 +814,7 @@ async def generate_reply(
     on_token: OnToken | None = None,
     model_override: str | None = None,
 ) -> dict[str, Any]:
-    """Returns {"reply": str, "tool_events": [{"tool", "args", "result"}], "usage": {...}}.
+    """Returns {"reply": str, "tool_events": [{"tool", "args", "result"}], "usage": {...}, "model": str}.
     tool_events is populated in order — caller (main.py) persists each as
     a system message before posting the final reply, per FR2.2.
 
@@ -828,6 +828,7 @@ async def generate_reply(
         )
         window = history_window_of(agent_row)
         await _maybe_write_summary(agent_row["name"], channel_id, history, window)
+        result["model"] = result.get("model") or "demo"
         return result
 
     name = agent_row["name"]
@@ -916,6 +917,7 @@ async def generate_reply(
             "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect a provider in Command Center → AI providers]",
             "tool_events": [],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "model": model,
         }
 
     attempts = await iter_provider_attempts(model)
@@ -924,6 +926,7 @@ async def generate_reply(
             "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect a provider in Command Center → AI providers]",
             "tool_events": [],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "model": model,
         }
 
     for client, used_model, _provider_id in attempts:
@@ -931,6 +934,7 @@ async def generate_reply(
             result = await attempt(client, used_model)
             await _maybe_write_summary(name, channel_id, history, window)
             result["context"] = package["stats"]
+            result["model"] = used_model
             return result
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
@@ -940,6 +944,7 @@ async def generate_reply(
                     result = await attempt(client, used_model)
                     await _maybe_write_summary(name, channel_id, history, window)
                     result["context"] = package["stats"]
+                    result["model"] = used_model
                     return result
                 except Exception as retry_exc:  # noqa: BLE001
                     last_exc = retry_exc
@@ -948,6 +953,7 @@ async def generate_reply(
         "reply": classify_error(last_exc or RuntimeError("couldn't reach the model")),
         "tool_events": [],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        "model": model,
     }
 
 

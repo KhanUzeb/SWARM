@@ -161,7 +161,7 @@ def test_seeded_core_team_and_create_team(client, auth, monkeypatch):
     )
     assert denied.status_code == 403
 
-    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None):
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None, on_stream_start=None, on_token=None, **_kwargs):
         return {"reply": f"ok {agent_row['name']}", "tool_events": [], "usage": {}}
 
     monkeypatch.setattr("backend.agent.generate_reply", fake_reply)

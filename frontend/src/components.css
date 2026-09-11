@@ -1344,3 +1344,21 @@
 .report-card { border: 1px solid var(--state-success); border-radius: var(--radius-md); padding: 12px; background: rgba(93,163,122,0.06); }
 .report-card h4 { margin: 0 0 4px; }
 .talk-context-bar { display: flex; justify-content: flex-end; padding: 2px 12px; }
+
+/* ── Chat model picker + live token stream ── */
+.composer-model-row { display: flex; justify-content: flex-start; padding: 0 4px 6px; }
+.composer-model-picker { position: relative; }
+.model-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-text-muted); background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-full); padding: 3px 10px; cursor: pointer; }
+.model-chip:hover { color: var(--color-text-primary); border-color: var(--color-border-strong); }
+.model-chip.set { color: var(--color-text-primary); border-color: var(--accent); background: var(--accent-soft); }
+.model-chip-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--state-idle); flex-shrink: 0; }
+.model-chip.set .model-chip-dot { background: var(--state-running); box-shadow: 0 0 6px var(--state-running); }
+.composer-model-pop { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: var(--z-dropdown); width: 300px; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.composer-model-pop .model-picker { width: 100%; }
+.msg-model { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: var(--radius-full); padding: 1px 8px; margin-left: 6px; }
+.msg-model .model-chip-dot { width: 6px; height: 6px; }
+.msg-row.streaming-live .msg-bubble { border-color: var(--state-running); }
+.stream-caret { display: inline-block; width: 8px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--accent); animation: caret-blink 1s steps(2) infinite; }
+@keyframes caret-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .stream-caret { animation: none; } }
+

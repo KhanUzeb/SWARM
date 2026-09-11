@@ -212,6 +212,74 @@ def test_route_endpoint_picks_connected_provider(client, auth, monkeypatch):
     assert body["model"] == "openai/gpt-oss-120b"
 
 
+def test_chat_model_override_reaches_agent_and_persists(client, auth, monkeypatch):
+    import time as time_mod
+
+    seen = {}
+
+    async def fake_reply(agent_row, channel_id, history, on_tools_ready=None,
+                         on_stream_start=None, on_token=None, model_override=None, **_kwargs):
+        seen["override"] = model_override
+        if on_stream_start is not None:
+            await on_stream_start()
+        if on_token is not None:
+            await on_token("live ")
+            await on_token("reply")
+        return {"reply": "live reply", "tool_events": [], "usage": {},
+                "model": model_override or "agent-default"}
+
+    monkeypatch.setattr("backend.agent.generate_reply", fake_reply)
+    monkeypatch.setattr("backend.main.agent.generate_reply", fake_reply)
+
+    posted = client.post(
+        "/api/channels/dm-swarm/messages",
+        json={"author": "uzeb", "body": "answer with override", "model": "openai/gpt-oss-20b"},
+        headers=auth,
+    )
+    assert posted.status_code == 200, posted.text
+
+    deadline = time_mod.time() + 10.0
+    agent_msgs = []
+    while time_mod.time() < deadline:
+        history = client.get("/api/channels/dm-swarm/messages", headers=auth).json()
+        agent_msgs = [m for m in history if m.get("author_kind") == "agent"]
+        if agent_msgs:
+            break
+        time_mod.sleep(0.1)
+    assert agent_msgs, "no agent reply arrived"
+    assert seen["override"] == "openai/gpt-oss-20b"
+    assert agent_msgs[-1]["model"] == "openai/gpt-oss-20b"
+    assert agent_msgs[-1]["body"] == "live reply"
+
+
+def test_messages_model_column_migrates(tmp_path, monkeypatch):
+    import asyncio
+
+    import backend.db as db_mod
+
+    db_path = tmp_path / "swarm.db"
+    monkeypatch.setenv("SWARM_DB_PATH", str(db_path))
+    db_mod.DB_PATH = db_path
+
+    async def setup():
+        import aiosqlite
+
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " channel_id TEXT NOT NULL, parent_id INTEGER, author TEXT NOT NULL,"
+                " author_kind TEXT NOT NULL DEFAULT 'human', body TEXT NOT NULL,"
+                " created_at REAL NOT NULL)")
+            await conn.commit()
+        await db_mod.init_db()
+
+    asyncio.run(setup())
+    msg = asyncio.run(db_mod.add_message("general", "swarm", "hi", "agent", model="x-model"))
+    assert msg["model"] == "x-model"
+    history = asyncio.run(db_mod.get_history("general"))
+    assert history[0]["model"] == "x-model"
+
+
 def test_policy_endpoint(client, auth):
     res = client.post("/api/v2/policy/evaluate", json={
         "agent": "coder", "tool": "push_to_main", "target": "main",

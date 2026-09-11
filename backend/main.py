@@ -888,7 +888,7 @@ async def api_post_message(
         channel_id, payload.author, payload.body, payload.author_kind, payload.parent_id
     )
     await hub.broadcast(channel_id, {"type": "message", "message": msg})
-    await _maybe_trigger_agents(channel_id, msg)
+    await _maybe_trigger_agents(channel_id, msg, model_override=(payload.model or "").strip() or None)
     return msg
 
 
@@ -1847,7 +1847,8 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
         hub.mark_offline(handle)
 
 
-async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -> None:
+async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
+                              model_override: str | None = None) -> None:
     if depth > HANDOFF_DEPTH:
         return
     kind = msg.get("author_kind")
@@ -1888,7 +1889,8 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
         mentioned = mentioned + [a for a in team_bots if a["name"] not in {x["name"] for x in mentioned}]
         if not mentioned:
             return
-        _track_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1), "agent handoff")
+        _track_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1,
+                                           model_override=model_override), "agent handoff")
         return
 
     if kind in ("human", "system") and ch_kind == "group" and not mentioned and not mentioned_teams:
@@ -1928,12 +1930,14 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0) -
         # 1:1 always hears you without an @mention. Group members hear
         # the same way unless the message @mentions specific bots.
         # @team-id expands to that team's bots in roster order.
-        _track_task(_run_agents_in_order(channel_id, to_run, depth=depth), "agent reply batch")
+        _track_task(_run_agents_in_order(channel_id, to_run, depth=depth,
+                                           model_override=model_override), "agent reply batch")
 
 
-async def _run_agents_in_order(channel_id: str, agents: list[dict], *, depth: int = 0) -> None:
+async def _run_agents_in_order(channel_id: str, agents: list[dict], *, depth: int = 0,
+                               model_override: str | None = None) -> None:
     for a in agents:
-        await _run_agent(channel_id, a, depth=depth)
+        await _run_agent(channel_id, a, depth=depth, model_override=model_override)
 
 
 async def _set_status(name: str, status: str) -> None:
@@ -1976,7 +1980,7 @@ def _work_owner_from_history(history: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
-                   source: str | None = None) -> dict:
+                   source: str | None = None, model_override: str | None = None) -> dict:
     if agent_row.get("archived"):
         return {"reply": "", "tool_events": []}
     name = agent_row["name"]
@@ -2033,6 +2037,7 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
             on_tools_ready=persist_tools,
             on_stream_start=on_stream_start,
             on_token=on_token,
+            model_override=model_override,
         )
         await persist_tools(result["tool_events"])
         if any(e["tool"] == "create_agent" and "created bot" in str(e.get("result") or "")
@@ -2041,7 +2046,8 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
             # client to refresh its sidebar lists.
             await hub.broadcast_all({"type": "agents_changed"})
 
-        msg = await db.add_message(channel_id, name, result["reply"], "agent")
+        msg = await db.add_message(channel_id, name, result["reply"], "agent",
+                                     model=result.get("model"))
         await hub.broadcast(channel_id, {"type": "message", "message": msg})
         await work.link_message(session["id"], int(msg["id"]))
         await _emit_work_event(channel_id, session, "message_linked",

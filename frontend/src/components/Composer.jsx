@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Avatar } from "../ui.jsx";
+import { shortModel } from "../lib.js";
+import ModelPicker from "../ai-support/ModelPicker.jsx";
 
-export function Composer({ onSend, placeholder, channelName, agents, compact, threadParent, workingWith, offline, sendFailed, contextStats, contextError, onRefreshContext }) {
+export function Composer({ onSend, placeholder, channelName, agents, compact, threadParent, workingWith, offline, sendFailed, contextStats, contextError, onRefreshContext, token, model, onModelChange }) {
   const [draft, setDraft] = useState("");
   const [mention, setMention] = useState({ open: false, index: 0, items: [], query: "" });
   const [slash, setSlash] = useState({ open: false, index: 0 });
   const [sending, setSending] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
   const inputRef = useRef(null);
   const mentionRef = useRef(null);
 
@@ -84,7 +87,7 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
     if (!text || sending) return; // lock while the send is in flight
     setSending(true);
     try {
-      const ok = await onSend(text);
+      const ok = await onSend(text, { model: model || null });
       if (ok === false) return;
       setDraft("");
       setMention({ open: false, index: 0, items: [], query: "" });
@@ -154,6 +157,37 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
           Send failed — your draft is kept. Fix the connection and send again.
         </div>
       )}
+      <div className="composer-model-row">
+        <div className="composer-model-picker">
+          <button
+            type="button"
+            className={`model-chip${model ? " set" : ""}`}
+            onClick={() => setModelOpen(o => !o)}
+            aria-expanded={modelOpen}
+            aria-label={model ? `Model: ${model}. Change model` : "Model: Auto. Choose a model"}
+            title={model ? `Answering with ${model}` : "Auto — each agent answers with its default model"}
+          >
+            <span className="model-chip-dot" aria-hidden />
+            {model ? shortModel(model) : "Auto"}
+            <span aria-hidden> ▾</span>
+          </button>
+          {modelOpen && (
+            <div className="composer-model-pop">
+              <ModelPicker
+                token={token}
+                value={model || ""}
+                onChange={(id) => { onModelChange?.(id); setModelOpen(false); }}
+                placeholder="Search models"
+              />
+              {model && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { onModelChange?.(""); setModelOpen(false); }}>
+                  Reset to Auto
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
       <div className="composer-pill">
         <button
           type="button"

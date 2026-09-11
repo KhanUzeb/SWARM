@@ -88,6 +88,14 @@ export function isAgentError(body) {
   return String(body || "").trim().startsWith("[agent error:");
 }
 
+/** Compact display id for a model: drop provider prefix, cap length. */
+export function shortModel(modelId, maxLen = 28) {
+  const raw = String(modelId || "").trim();
+  if (!raw) return "";
+  const short = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+  return short.length > maxLen ? `${short.slice(0, maxLen - 1)}…` : short;
+}
+
 export function roleLine(prompt) {
   const text = String(prompt || "").replace(/\s+/g, " ").trim();
   if (!text) return "custom bot";

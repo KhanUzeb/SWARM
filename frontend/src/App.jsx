@@ -74,6 +74,15 @@ export default function App() {
   const [showContext, setShowContext] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
   const [streamingAgents, setStreamingAgents] = useState({});
+  const [streamText, setStreamText] = useState({});
+  const [chatModel, setChatModelState] = useState(() => {
+    try { return localStorage.getItem("swarm.chat_model") || ""; } catch { return ""; }
+  });
+
+  function setChatModel(value) {
+    setChatModelState(value || "");
+    try { localStorage.setItem("swarm.chat_model", value || ""); } catch { /* private mode */ }
+  }
 
   const wsRef = useRef(null);
   const wsGen = useRef(0);
@@ -170,6 +179,12 @@ export default function App() {
       setTyping("");
       setStreamingAgents(prev => {
         if (!prev[m.author]) return prev;
+        const next = { ...prev };
+        delete next[m.author];
+        return next;
+      });
+      setStreamText(prev => {
+        if (!(m.author in prev)) return prev;
         const next = { ...prev };
         delete next[m.author];
         return next;
@@ -343,11 +358,16 @@ export default function App() {
       else if (msg.type === "work" && msg.event) ingestWorkEventRef.current?.(msg.event);
       else if (msg.type === "agent_stream_start" && msg.author) {
         setStreamingAgents(prev => ({ ...prev, [msg.author]: true }));
+        setStreamText(prev => ({ ...prev, [msg.author]: "" }));
         setTyping(msg.author);
       }
       else if (msg.type === "agent_token" && msg.author) {
         setStreamingAgents(prev => ({ ...prev, [msg.author]: true }));
         setTyping(msg.author);
+        const delta = typeof msg.delta === "string" ? msg.delta : "";
+        if (delta) {
+          setStreamText(prev => ({ ...prev, [msg.author]: ((prev[msg.author] || "") + delta).slice(-30000) }));
+        }
       }
       else if (msg.type === "status") { /* agent status updates */ }
       else if (msg.type === "error") flash(msg.detail || "Error", "error");
@@ -431,6 +451,8 @@ export default function App() {
 
   useEffect(() => {
     if (token && channel) {
+      setStreamText({});
+      setStreamingAgents({});
       loadChannelMessages(channel);
       disconnectWs();
       connectWs();
@@ -453,15 +475,17 @@ export default function App() {
   }, [user]);
 
   // ── Send ──
-  async function sendMessage(text, parentId = null) {
+  async function sendMessage(text, parentId = null, opts = null) {
     if (!tokenRef.current) return false;
+    const model = (opts && "model" in opts ? opts.model : chatModel) || null;
     const body = { author: user.handle, body: text, author_kind: "human", parent_id: parentId };
+    if (model) body.model = model;
     try {
       const res = await apiJson(`/api/channels/${channelRef.current}/messages`, {
         token: tokenRef.current, method: "POST", body,
       });
       if (!res.ok) {
-        setSendFailure({ text, parentId, detail: res.data?.detail || "Message could not be sent" });
+        setSendFailure({ text, parentId, model, detail: res.data?.detail || "Message could not be sent" });
         return false;
       }
       setSendFailure(prev => (prev?.text === text && prev?.parentId === parentId ? null : prev));
@@ -469,15 +493,15 @@ export default function App() {
       loadContextStats(channelRef.current);
       return true;
     } catch {
-      setSendFailure({ text, parentId, detail: "Network error — check your connection" });
+      setSendFailure({ text, parentId, model, detail: "Network error — check your connection" });
       return false;
     }
   }
 
   async function retryFailedSend() {
     if (!sendFailure) return;
-    const { text, parentId } = sendFailure;
-    const ok = await sendMessage(text, parentId);
+    const { text, parentId, model } = sendFailure;
+    const ok = await sendMessage(text, parentId, { model });
     if (ok) setSendFailure(null);
   }
 
@@ -653,6 +677,7 @@ export default function App() {
               reactions={reactions}
               channelId={channel}
               streamingAgents={streamingAgents}
+              streamText={streamText}
               workByMessage={workByMessage}
               eventsByWork={eventsByWork}
               canModerate={meRole === "admin"}
@@ -711,7 +736,7 @@ export default function App() {
               />
             )}
             <Composer
-              onSend={(text) => sendMessage(text)}
+              onSend={(text, opts) => sendMessage(text, null, opts)}
               channelName={current.name}
               agents={agents}
               placeholder={`Message ${current.name}…`}
@@ -721,6 +746,9 @@ export default function App() {
               contextStats={contextStats}
               contextError={contextError}
               onRefreshContext={() => loadContextStats(channelRef.current)}
+              token={token}
+              model={chatModel}
+              onModelChange={setChatModel}
             />
           </>
         )}
@@ -815,7 +843,11 @@ export default function App() {
           allAgents={allAgents}
           user={user}
           onClose={() => setThreadId(null)}
-          onSend={(text) => sendMessage(text, threadId)}
+          onSend={(text, opts) => sendMessage(text, threadId, opts)}
+          token={token}
+          chatModel={chatModel}
+          onModelChange={setChatModel}
+          streamText={streamText}
           onReact={onReact}
           onUnreact={onUnreact}
           onDelete={onDelete}
@@ -910,7 +942,7 @@ function AgentsView({ agents, onOpenChannel }) {
   );
 }
 
-function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onUnreact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions }) {
+function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onUnreact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions, token, chatModel, onModelChange, streamText }) {
   const parent = messages[parentId];
   const replies = threadReplies.length > 0 ? threadReplies : Object.values(messages).filter(m => m.parent_id === parentId);
   const replyOrder = replies.map(r => r.id);
@@ -931,12 +963,12 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
       <ScrollArea className="thread-body">
         {parent && (
           <div className="thread-parent">
-            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} streamText={streamText} />
           </div>
         )}
         <Divider />
         {replyOrder.length > 0 && (
-          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} />
+          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} streamText={streamText} />
         )}
       </ScrollArea>
       {sendFailure && (
@@ -948,7 +980,7 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
           </div>
         </div>
       )}
-      <Composer onSend={onSend} placeholder="Reply in thread…" compact threadParent />
+      <Composer onSend={onSend} placeholder="Reply in thread…" compact threadParent token={token} model={chatModel} onModelChange={onModelChange} />
     </aside>
   );
 }

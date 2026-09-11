@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Avatar, RichBody, Tooltip } from "../ui.jsx";
-import { fmtTime, isAgentError, EMOJI } from "../lib.js";
+import { fmtTime, isAgentError, shortModel, EMOJI } from "../lib.js";
 
-export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, workByMessage, eventsByWork, canModerate }) {
+export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, streamText = {}, workByMessage, eventsByWork, canModerate }) {
   const endRef = useRef(null);
   const logRef = useRef(null);
   const [pinned, setPinned] = useState(true);
@@ -22,13 +22,16 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }
 
+  const streamChars = Object.values(streamText).reduce((n, t) => n + String(t || "").length, 0);
+
   useEffect(() => {
     if (endRef.current && pinned && !hasMore) {
       endRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
     }
-  }, [order.length, hasMore, pinned]);
+  }, [order.length, hasMore, pinned, streamChars]);
 
   const roots = order.map(id => messages[id]).filter(Boolean);
+  const liveStreams = Object.entries(streamText).filter(([, text]) => text && text.length > 0);
 
   if (roots.length === 0 && !loadingMore) {
     return (
@@ -93,7 +96,26 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
           );
         })}
 
-        {typing && (
+        {liveStreams.map(([author, text]) => {
+          const who = (allAgents || []).find(a => a.name === author);
+          return (
+            <div className="msg-row agent streaming-live" key={`stream-${author}`}>
+              <div className="msg-bubble agent-bubble">
+                <div className="msg-bubble-header">
+                  <Avatar name={who?.display_name || author} kind="agent" size="sm" />
+                  <span className="msg-author">{who?.display_name || author}</span>
+                  <span className="streaming-badge" role="status" aria-label={`${author} is replying`}>
+                    <span className="pulse-dot violet" aria-hidden /> streaming
+                  </span>
+                </div>
+                <RichBody body={text} />
+                <span className="stream-caret" aria-hidden />
+              </div>
+            </div>
+          );
+        })}
+
+        {typing && !liveStreams.length && (
           <div className="typing-indicator" role="status" aria-live="polite">
             <span className="typing-dots"><span /><span /><span /></span>
             <span className="typing-text">{typing} is typing…</span>
@@ -224,6 +246,12 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
             <Avatar name={label} kind={avatarKind} size="sm" />
             <span className="msg-author">{label}</span>
             {agent?.job && <span className="msg-role">{agent.job}</span>}
+            {m.model && (
+              <span className="msg-model" title={`Answered with ${m.model}`}>
+                <span className="model-chip-dot" aria-hidden />
+                {shortModel(m.model, 22)}
+              </span>
+            )}
             {(m.streaming || streaming) && (
               <span className="streaming-badge" role="status" aria-label={`${label} is replying`}>
                 <span className="pulse-dot violet" aria-hidden /> streaming
