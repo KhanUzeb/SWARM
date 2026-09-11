@@ -19,7 +19,7 @@ Human posts in #general, a Bot 1:1, or a group chat
 | No Nostr, git, canvases, huddles | Named jobs + 1:1s + routines + approvals shipped |
 | `docker compose up` in ~10 min | Spec (`SPEC.md`) matches running code |
 
-**Status:** Swarm has admin-managed Bots, human DMs, `@team` groups, audit export, computer-use, browser-use, Composio apps, optional admin password hashing (PBKDF2), chat retry on provider/network failures, unified work sessions with a live Work rail, agent memory + knowledge base with a context meter, and message/channel management (author-or-admin delete). See [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
+**Status:** Swarm has admin-managed Bots, human DMs, `@team` groups, audit export, computer-use, browser-use, Composio apps, optional admin password hashing (PBKDF2), per-message chat model picker with live token streaming, Stop/Resume on agent replies, offline outbox with auto-resend, unified work sessions with a live Work rail and tabbed run detail, task-aware model routing, agent memory + knowledge base with a context meter, and message/channel management (author-or-admin delete). The composer is text-only by decision (see `docs/adr/002-text-only-composer.md`). See [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 ```
 swarm/
