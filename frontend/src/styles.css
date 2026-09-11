@@ -8,41 +8,69 @@
  */
 
 :root {
-  /* ── Color Primitives ── */
-  --color-bg: #0e0a0d;
-  --color-bg-elevated: #161016;
-  --color-bg-surface: #1e141d;
-  --color-bg-hover: #281a27;
-  --color-bg-glass: rgba(22, 16, 22, 0.82);
-  --color-border-subtle: rgba(255, 235, 240, 0.045);
-  --color-border: rgba(255, 235, 240, 0.075);
-  --color-border-strong: rgba(255, 235, 240, 0.11);
-  --color-bubble-agent: #251824;
-  --color-bubble-agent-hover: #2e1d2c;
+  /* ── Color Primitives (plan §2: near-neutral charcoal; saturated color reserved for state/identity) ── */
+  --color-bg: #101012;
+  --color-bg-elevated: #161618;
+  --color-bg-surface: #1c1c1f;
+  --color-bg-hover: #242428;
+  --color-bg-glass: rgba(22, 22, 24, 0.82);
+  --color-border-subtle: rgba(255, 255, 255, 0.05);
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.12);
+  --color-bubble-agent: #1e1e22;
+  --color-bubble-agent-hover: #26262c;
   --color-bubble-user: linear-gradient(135deg, #f2822e 0%, #d1541f 100%);
   --color-bubble-user-text: #2b1206;
   --color-bubble-user-muted: rgba(43, 18, 6, 0.62);
-  
-  --color-text-primary: #f6f1ec;
-  --color-text-secondary: #c9bcae;
-  --color-text-muted: #8d7f76;
-  --color-text-subtle: #61565a;
-  
-  --color-brand: #b678c2;
-  --color-brand-bg: #7c3f7e;
-  --color-brand-hover: #c892d1;
-  --color-brand-subtle: rgba(182, 120, 194, 0.14);
-  --color-brand-glow: rgba(124, 63, 126, 0.4);
-  
-  --color-success: #6fa287;
-  --color-success-bg: rgba(111, 162, 135, 0.15);
-  --color-warning: #ef7d3c;
-  --color-warning-bg: rgba(239, 125, 60, 0.15);
-  --color-error: #ff6363;
-  --color-error-bg: rgba(255, 99, 99, 0.15);
-  
-  --color-online: #6fa287;
-  --color-busy: #ef7d3c;
+
+  --color-text-primary: #f4f2ee;
+  --color-text-secondary: #c4c2bd;
+  --color-text-muted: #8f8d89;
+  --color-text-subtle: #63615e;
+
+  /* Semantic token aliases (plan §35) */
+  --bg-canvas: var(--color-bg);
+  --bg-surface: var(--color-bg-surface);
+  --bg-elevated: var(--color-bg-elevated);
+  --bg-hover: var(--color-bg-hover);
+  --border-subtle: var(--color-border-subtle);
+  --border-strong: var(--color-border-strong);
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+  --accent: #7c8cf8;
+  --accent-soft: rgba(124, 140, 248, 0.14);
+  --state-running: #7c8cf8;
+  --state-success: #5da37a;
+  --state-warning: #e8933c;
+  --state-danger: #e5605c;
+  --state-idle: #62666d;
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.42);
+  --duration-fast: 140ms;
+  --duration-normal: 220ms;
+  --duration-slow: 340ms;
+
+  --color-brand: #7c8cf8;
+  --color-brand-bg: #4a56c4;
+  --color-brand-hover: #93a0fa;
+  --color-brand-subtle: rgba(124, 140, 248, 0.14);
+  --color-brand-glow: rgba(124, 140, 248, 0.35);
+
+  --color-success: #5da37a;
+  --color-success-bg: rgba(93, 163, 122, 0.15);
+  --color-warning: #e8933c;
+  --color-warning-bg: rgba(232, 147, 60, 0.15);
+  --color-error: #e5605c;
+  --color-error-bg: rgba(229, 96, 92, 0.15);
+
+  --color-online: #5da37a;
+  --color-busy: #e8933c;
   --color-offline: #62666d;
   
   /* ── Typography ── */
@@ -152,27 +180,29 @@ body {
   font-feature-settings: "cv01", "ss03", "liga", "kern", "calt";
 }
 
-/* Ambient aurora backdrop (Pinterest-2026 hues, whisper-quiet) + film grain.
-   App surfaces stay translucent so depth reads at the margins. */
+/* Calm by default (plan §2): near-flat charcoal canvas. Active work creates
+   motion; decoration never competes with it. Aurora kept behind a flag. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: 0;
-  background:
-    radial-gradient(900px 520px at 10% -6%, rgba(124, 63, 126, 0.30), transparent 62%),
-    radial-gradient(760px 520px at 96% 108%, rgba(239, 125, 60, 0.13), transparent 60%),
-    radial-gradient(680px 560px at 88% -8%, rgba(111, 162, 135, 0.09), transparent 60%),
-    radial-gradient(1000px 700px at 50% 55%, rgba(46, 20, 44, 0.35), transparent 70%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 240px);
 }
 body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.055;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  content: none;
+}
+body.decorated::before {
+  background:
+    radial-gradient(900px 520px at 10% -6%, rgba(124, 140, 248, 0.16), transparent 62%),
+    radial-gradient(760px 520px at 96% 108%, rgba(232, 147, 60, 0.08), transparent 60%),
+    radial-gradient(1000px 700px at 50% 55%, rgba(20, 22, 44, 0.35), transparent 70%);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 #root { position: relative; z-index: 1; }
 

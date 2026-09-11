@@ -1,6 +1,11 @@
 import { Badge, Button, Dropdown, Tooltip } from "../ui.jsx";
 
+const VIEW_ALIASES = { dashboard: "home", home: "home", workflows: "work", runs: "work", work: "work", talk: "chat", chat: "chat", agents: "agents", knowledge: "knowledge" };
+const VIEW_TARGETS = { home: "dashboard", work: "work", chat: "talk", agents: "agents", knowledge: "knowledge" };
+
 export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpenCommandPalette, onViewChange, currentView, approvals, onResolveApproval, wsStatus, workActive, workAttention, workConnected, onToggleWorkRail, workRailOpen, participants }) {
+  const normalizedView = VIEW_ALIASES[currentView] || currentView;
+  const go = (v) => onViewChange(VIEW_TARGETS[v] || v);
   const pendingApprovals = approvals.filter(a => a.status === "pending" && a.channel_id === channel?.id);
   const working = agents.filter(a => a.status === "working").length;
   const attention = (workAttention || []).length;
@@ -41,13 +46,13 @@ export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpen
 
       <div className="topbar-center">
         <div className="view-tabs" role="tablist">
-          {[["dashboard", "Overview"], ["workflows", "Workflows"], ["runs", "Runs"], ["talk", "Talk"], ["knowledge", "Knowledge"]].map(([v, label]) => (
+          {[["home", "Home"], ["work", "Work"], ["chat", "Chat"], ["agents", "Agents"], ["knowledge", "Knowledge"]].map(([v, label]) => (
             <button
               key={v}
               role="tab"
-              aria-selected={currentView === v}
-              className={`view-tab ${currentView === v ? "active" : ""}`}
-              onClick={() => onViewChange(v)}
+              aria-selected={normalizedView === v}
+              className={`view-tab ${normalizedView === v ? "active" : ""}`}
+              onClick={() => go(v)}
             >
               {label}
             </button>

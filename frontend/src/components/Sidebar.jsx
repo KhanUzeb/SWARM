@@ -2,9 +2,17 @@ import { useState } from "react";
 import { Avatar, Badge, Tooltip, ScrollArea, Dropdown } from "../ui.jsx";
 import { initials, statusLabel } from "../lib.js";
 
-export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings, onDeleteChannel }) {
+const PRIMARY_NAV = [
+  { id: "home", label: "Home", icon: "⌂" },
+  { id: "work", label: "Work", icon: "◉" },
+  { id: "chat", label: "Chat", icon: "✎" },
+  { id: "agents", label: "Agents", icon: "⚙" },
+  { id: "knowledge", label: "Knowledge", icon: "▤" },
+];
+
+export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings, onDeleteChannel, currentView, onViewChange, workAttentionCount, pinned = [] }) {
   const [search, setSearch] = useState("");
-  const [section, setSection] = useState("channels");
+  const [collapsed, setCollapsed] = useState(false);
 
   const q = search.trim().toLowerCase();
   const matchChannel = (c) => !q || (c.name || "").toLowerCase().includes(q);
@@ -19,16 +27,35 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
   const matchedTeams = (teams || []).filter(t => !q || (t.name || "").toLowerCase().includes(q));
 
   return (
-    <aside id="sidebar">
+    <aside id="sidebar" className={collapsed ? "collapsed" : ""} aria-label="Primary">
       <div className="sidebar-header">
         <div className="brand">
           <span className="brand-mark">swarm</span>
         </div>
-        <button className="btn btn-ghost btn-icon tooltip-trigger" data-tooltip="New message" onClick={onNewDM}>
+        <button className="btn btn-ghost btn-icon" onClick={() => setCollapsed(c => !c)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed}>⇥</button>
+        <button className="btn btn-ghost btn-icon tooltip-trigger" data-tooltip="New message" onClick={onNewDM} aria-label="New message">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
       </div>
 
+      <nav className="primary-nav" aria-label="Primary destinations">
+        {PRIMARY_NAV.map(item => (
+          <button
+            key={item.id}
+            className={`primary-link ${currentView === item.id || (item.id === "chat" && currentView === "talk") ? "active" : ""}`}
+            onClick={() => onViewChange?.(item.id === "chat" ? "talk" : item.id)}
+            title={collapsed ? item.label : undefined}
+          >
+            <span aria-hidden>{item.icon}</span>
+            {!collapsed && <span>{item.label}</span>}
+            {!collapsed && item.id === "work" && (workAttentionCount || 0) > 0 && (
+              <span className="nav-count" role="status">{workAttentionCount} need you</span>
+            )}
+          </button>
+        ))}
+      </nav>
+
+      {!collapsed && (
       <div className="sidebar-search">
         <input
           type="search"
@@ -39,6 +66,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
           aria-label="Filter channels and agents"
         />
       </div>
+      )}
 
       <ScrollArea className="sidebar-scroll">
         <nav className="sidebar-nav" aria-label="Channels and agents">

@@ -15,6 +15,8 @@ import { ComputerPanel } from "./components/ComputerPanel.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
 import { LoginScreen } from "./components/LoginScreen.jsx";
 import { CommandCenter, RunMonitor } from "./components/CommandCenter.jsx";
+import { WorkHome, WorkDetail as WorkRunDetail } from "./components/WorkHome.jsx";
+import { ContextDrawer } from "./components/ContextDrawer.jsx";
 import { KnowledgeView } from "./components/KnowledgeView.jsx";
 import { WorkRail, WorkRailSheet, WorkDetail } from "./components/WorkRail.jsx";
 import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js";
@@ -599,6 +601,11 @@ export default function App() {
         onLogout={handleLogout}
         onOpenSettings={() => setMainView("dashboard")}
         onDeleteChannel={onDeleteChannel}
+        currentView={mainView}
+        onViewChange={(v) => setMainView(
+          v === "home" ? "dashboard" : v === "work" ? "work" : v === "chat" ? "talk" : v
+        )}
+        workAttentionCount={workAttention.length}
       />
 
       <div className="workspace-shell">
@@ -625,7 +632,8 @@ export default function App() {
         />
 
         <main id="main">
-          {["dashboard", "workflows", "runs"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
+          {["dashboard", "home"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
+          {["work", "workflows", "runs"].includes(mainView) && <WorkHome token={token} onOpenRun={setSelectedRun} />}
           {mainView === "talk" && (
             <MessageList
               messages={messages}
