@@ -20,6 +20,7 @@ from typing import Any
 import aiosqlite
 
 from . import db
+from .work_state import event_lock as _loop_event_lock
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS work_sessions (
@@ -54,7 +55,10 @@ ALLOWED_TYPES = {
 
 TERMINAL = {"completed", "failed", "cancelled"}
 
-_event_lock = asyncio.Lock()
+
+def _event_lock() -> asyncio.Lock:
+    """Per-loop event lock (see work_state.event_lock)."""
+    return _loop_event_lock()
 
 
 async def init_db() -> None:
@@ -168,7 +172,7 @@ async def append_event(
         raise ValueError(f"unsupported work event type: {event_type}")
     # Strip anything that must never leak to the UI.
     safe = _strip_sensitive(payload)
-    async with _event_lock:
+    async with _event_lock():
         async with aiosqlite.connect(db.DB_PATH) as conn:
             cur = await conn.execute(
                 "SELECT COALESCE(MAX(seq), 0) + 1 FROM work_events WHERE work_id=?", (work_id,))

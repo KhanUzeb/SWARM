@@ -22,6 +22,7 @@ from pathlib import Path
 import aiosqlite
 
 from . import db
+from .work_state import event_lock
 
 _logger = logging.getLogger("swarm.v2")
 
@@ -29,7 +30,6 @@ OAUTH_STATE_TTL_SECONDS = 600
 
 _run_tasks: dict[str, asyncio.Task] = {}
 _oauth_states: dict[str, dict[str, Any]] = {}
-_event_lock = asyncio.Lock()
 
 
 def _sweep_oauth_states(now: float | None = None) -> None:
@@ -355,7 +355,7 @@ async def claim_run(run_id: str, owner: str) -> bool:
 
 
 async def append_event(run_id: str, event_type: str, payload: dict[str, Any] | None = None, step_id: str | None = None) -> dict[str, Any]:
-    async with _event_lock:
+    async with event_lock():
         async with aiosqlite.connect(db.DB_PATH) as conn:
             cur = await conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id=?", (run_id,))
             (seq,) = await cur.fetchone()

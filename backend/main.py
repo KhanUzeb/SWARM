@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import agent, context, db, knowledge, v2, work
+from . import agent, context, db, evals, knowledge, memory_graph, policy, v2, work, work_state
 from .ai_support import store as ai_store
 from .ai_support.agent_templates import get_agent_templates
 from .ai_support.catalog import list_all_models, list_provider_models
@@ -443,6 +443,105 @@ async def api_v2_resolve_run_approval(run_id: str, step_id: str, payload: Approv
         if session:
             await work.append_event(session["id"], "work_cancelled", {"step_id": step_id}, step_id)
     return await v2.get_run(run_id, handle)
+
+
+@app.get("/api/v2/work-states")
+async def api_v2_work_states(handle: str = Depends(require_auth)):
+    return {
+        "states": sorted(work_state.TRANSITIONS.keys()),
+        "transitions": {k: sorted(v) for k, v in work_state.TRANSITIONS.items()},
+        "terminal": sorted(work_state.TERMINAL),
+    }
+
+
+@app.get("/api/v2/runs/{run_id}/progress")
+async def api_v2_run_progress(run_id: str, handle: str = Depends(require_auth)):
+    run = await v2.get_run(run_id, handle)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    events = await v2.list_events(run_id, handle)
+    state = work_state.derive_state(events, run.get("status", "queued"))
+    progress = work_state.summarize_progress(events)
+    return {"run_id": run_id, "state": state, "status": run.get("status"), **progress}
+
+
+@app.post("/api/v2/runs/{run_id}/verify")
+async def api_v2_verify_run(run_id: str, payload: dict[str, Any], handle: str = Depends(require_auth)):
+    run = await v2.get_run(run_id, handle)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    checks = payload.get("checks") or []
+    passed = bool(payload.get("passed", True))
+    event_type = "verification_passed" if passed else "verification_failed"
+    await v2.append_event(run_id, "verification_started", {"checks": checks})
+    await v2.append_event(run_id, event_type, {"checks": checks, "summary": payload.get("summary", "")})
+    contract = work_state.build_result_contract(
+        status="completed" if passed else "failed",
+        summary=str(payload.get("summary", "")),
+        evidence=list(payload.get("evidence") or []),
+        artifacts=list(payload.get("artifacts") or []),
+        verification=[{"checks": checks, "passed": passed}],
+        warnings=list(payload.get("warnings") or []),
+        confidence=float(payload.get("confidence", 0.8 if passed else 0.2)),
+        needs_human_review=bool(payload.get("needs_human_review", not passed)),
+    )
+    return {"run_id": run_id, "event": event_type, "result": contract}
+
+
+@app.post("/api/v2/policy/evaluate")
+async def api_v2_policy_evaluate(payload: dict[str, Any], handle: str = Depends(require_auth)):
+    evaluation = policy.evaluate(
+        agent=str(payload.get("agent", "")),
+        tool=str(payload.get("tool", "")),
+        target=str(payload.get("target", "")),
+        action_type=str(payload.get("action_type", "")),
+        risk=str(payload.get("risk", "medium")),
+        overrides=payload.get("overrides"),
+    )
+    card = policy.approval_card(
+        {"title": payload.get("title") or payload.get("tool") or "Action",
+         "impact": payload.get("impact") or [], "verification": payload.get("verification") or [],
+         "risk": evaluation["risk"], "reversible": bool(payload.get("reversible", False)),
+         "scope": payload.get("scope") or {}},
+        evaluation,
+    )
+    return {"evaluation": evaluation, "approval_card": card}
+
+
+@app.get("/api/v2/evals/tasks")
+async def api_v2_eval_tasks(category: str | None = None, handle: str = Depends(require_auth)):
+    try:
+        return evals.list_tasks(category)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/api/v2/evals/tasks")
+async def api_v2_eval_create_task(payload: dict[str, Any], handle: str = Depends(require_auth)):
+    try:
+        return evals.register_task(
+            str(payload.get("id")), str(payload.get("category")),
+            str(payload.get("prompt", "")), list(payload.get("checks") or []))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/api/v2/evals/score")
+async def api_v2_eval_score(payload: dict[str, Any], handle: str = Depends(require_auth)):
+    return evals.score_run(list(payload.get("events") or []), int(payload.get("human_effort", 0)))
+
+
+@app.post("/api/knowledge/relations")
+async def api_create_relation(payload: dict[str, Any], handle: str = Depends(require_auth)):
+    src, rel, dst = str(payload.get("src", "")), str(payload.get("rel", "")), str(payload.get("dst", ""))
+    if not src or not rel or not dst:
+        raise HTTPException(status_code=422, detail="src, rel and dst are required")
+    return await memory_graph.add_relation(src, rel, dst, payload.get("metadata") or {})
+
+
+@app.get("/api/knowledge/relations")
+async def api_related(entity: str, handle: str = Depends(require_auth)):
+    return await memory_graph.related(entity)
 
 
 # --------------------------------------------------------------- work sessions ---
