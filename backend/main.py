@@ -146,7 +146,7 @@ class Hub:
 hub = Hub()
 _routine_task: asyncio.Task | None = None
 ROUTINE_TICK_SECONDS = 20
-HANDOFF_DEPTH = 2
+HANDOFF_DEPTH = 3
 
 
 @asynccontextmanager
@@ -1142,6 +1142,7 @@ async def api_create_agent(payload: AgentCreate, handle: str = Depends(require_a
         payload.tools,
         payload.job,
         payload.display_name,
+        payload.avatar,
     )
     await db.mark_workspace_onboarded()
     return created
@@ -2103,6 +2104,7 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
             on_stream_start=on_stream_start,
             on_token=on_token,
             model_override=model_override,
+            delegate_depth=depth,
         )
         await persist_tools(result["tool_events"])
         if any(e["tool"] == "create_agent" and "created bot" in str(e.get("result") or "")

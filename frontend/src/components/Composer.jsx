@@ -26,7 +26,7 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
   ];
 
   const allMentions = useCallback(() => {
-    const agentNames = (agents || []).map(a => ({ name: a.name, label: a.display_name || a.name, kind: "agent" }));
+    const agentNames = (agents || []).map(a => ({ name: a.name, label: a.display_name || a.name, kind: "agent", avatar: a.avatar }));
     return [{ name: "channel", label: "Everyone in channel", kind: "channel" }, ...agentNames];
   }, [agents]);
 
@@ -261,7 +261,7 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
                   role="option"
                   aria-selected={i === mention.index}
                 >
-                  {item.kind === "agent" ? <Avatar name={item.label} kind="agent" size="sm" /> : <span className="mention-icon">@</span>}
+                  {item.kind === "agent" ? <Avatar name={item.label} kind="agent" size="sm" avatar={item.avatar} /> : <span className="mention-icon">@</span>}
                   <span className="mention-label">{item.label}</span>
                 </button>
               </li>

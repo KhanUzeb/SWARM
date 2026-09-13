@@ -191,7 +191,7 @@ export default function ModelPicker({
           <ul className="model-picker-list" role="listbox" aria-label="Models">
             {loading && !filtered.length && <li className="empty-state">Fetching models from API…</li>}
             {!loading && !filtered.length && (
-              <li className="empty-state">{note || "No models match."}</li>
+              <li className="empty-state">{note || "No models found — connect a provider in Command Center → AI providers."}</li>
             )}
             {filtered.slice(0, 80).map((m, i) => (
               <li key={`${m.provider_id || ""}:${m.id}`}>

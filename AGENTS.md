@@ -128,9 +128,12 @@ Rules (Rakazo-shaped, enforced in review):
 - Triggers: `@mention` in rooms (whole-word, case-insensitive); every
   message in a bot's 1:1 (`dm-<name>`) and group rooms; `[routine:…]`
   ticks. Multi-mentions reply **sequentially in mention order**.
-- Agent replies can `@handoff` to another bot (depth cap 2).
-- Tools are capped per trigger (default 6, hard cap 12); every tool call
-  persists as a `system` audit message in-channel.
+- Agent replies can `@handoff` to another bot (depth cap 3), or call
+  `delegate_task` to run another bot as a headless sub-agent
+  (depth cap 2; sub-agents never approve/spawn/delegate at the cap).
+- Tools are capped per trigger (default 6, hard cap 24); rooms offer
+  tools on every work-like turn — only clear smalltalk stays text-only.
+  Every tool call persists as a `system` audit message in-channel.
 - Streaming: `agent_stream_start` / `agent_token` frames, then one
   persisted `message`. Partial streams persist with a cutoff marker.
 - Failures become `[agent error: …]` messages (never raw exceptions,

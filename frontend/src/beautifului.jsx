@@ -21,7 +21,7 @@ export function AgentMessage({ agent, body, streaming, tools = [], thinking, sou
   return (
     <div className={`agent-msg ${streaming ? "streaming" : ""}`}>
       <div className="agent-msg-head">
-        <Avatar name={agent?.display_name || agent?.name} kind="agent" size="sm" />
+        <Avatar name={agent?.display_name || agent?.name} kind="agent" size="sm" avatar={agent?.avatar} />
         <span className="agent-msg-name">{agent?.display_name || agent?.name}</span>
         <Badge variant="brand" className="agent-msg-job">{agent?.job || "agent"}</Badge>
         {streaming && <span className="agent-msg-streaming"><span className="pulse-dot" /> thinking…</span>}

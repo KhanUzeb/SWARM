@@ -78,8 +78,8 @@ export function WorkRail({
           </div>
         )}
         {visible.length === 0 && !error && (
-          <EmptyState kind="work" title={filter === "attention" ? "Nothing needs you" : "No active work"}
-            message={filter === "attention" ? "Approvals and failures will surface here." : "Mention an agent in chat or launch a run to see live progress."} />
+          <EmptyState kind="work" title={filter === "attention" ? "All clear" : "No active work"}
+            message={filter === "attention" ? "Nothing needs you — approvals and failures will pop up here." : "Mention an agent in chat or launch a run, then watch them go."} />
         )}
         {!connected && !error && (sessions || []).length === 0 && (
           <div className="work-skeletons" aria-label="Loading work">
@@ -124,18 +124,22 @@ function WorkCard({ session, events, agents, approvals, selected, onSelect, onCa
   const approvalEvents = events.filter(e => e.type === "approval_requested");
   const pendingApproval = (approvals || []).find(a =>
     a.status === "pending" && a.channel_id === session.channel_id && (!agentName || a.agent_name === agentName));
+  const needsYou = !!session.requires_action || session.status === "waiting_for_approval";
 
   return (
-    <article className={`work-card tone-${tone}${selected ? " selected" : ""}`} aria-live={session.requires_action ? "assertive" : "polite"}>
+    <article className={`work-card tone-${tone}${selected ? " selected" : ""}${needsYou ? " needs-you" : ""}`} aria-live={needsYou ? "assertive" : "polite"}>
       <button className="work-card-main" onClick={onSelect} aria-expanded={selected}>
         <span className="work-card-top">
           <Badge variant={tone}>{workStatusLabel(session.status)}</Badge>
           <span className="work-source">{sourceLabel(session.source)}</span>
         </span>
         <span className="work-objective">{session.objective || "Working…"}</span>
+        <span className="work-meta-line">
+          {workElapsed(session)}{uniqueTools(tools).length > 0 && ` · ${uniqueTools(tools).length} tool${uniqueTools(tools).length === 1 ? "" : "s"}`}
+        </span>
         {agentName && (
           <span className="work-agent">
-            <Avatar name={agent?.display_name || agentName} kind="agent" size="sm" />
+            <Avatar name={agent?.display_name || agentName} kind="agent" size="sm" avatar={agent?.avatar} />
             <span className="work-agent-name">{agent?.display_name || agentName}</span>
             {agent?.job && <span className="work-agent-role">{agent.job}</span>}
           </span>
@@ -185,7 +189,7 @@ function WorkCard({ session, events, agents, approvals, selected, onSelect, onCa
 
       {expanded && (
         <ol className="work-timeline">
-          {events.length === 0 && <li className="work-timeline-empty">No events yet — replaying…</li>}
+          {events.length === 0 && <li className="work-timeline-empty">No events yet — the bots are stretching…</li>}
           {events.map(e => (
             <li key={e.seq} className={`work-timeline-row type-${e.type}`}>
               <span className="work-timeline-seq">#{e.seq}</span>
@@ -216,6 +220,18 @@ function uniqueTools(events) {
     if (t && !names.includes(t)) names.push(t);
   }
   return names;
+}
+
+function workElapsed(session) {
+  const toMs = (t) => typeof t === "number" ? (t < 1e12 ? t * 1000 : t) : Date.parse(t) || 0;
+  const start = toMs(session.created_at);
+  if (!start) return "";
+  const terminal = ["completed", "failed", "cancelled"].includes(session.status);
+  const end = terminal && session.updated_at ? toMs(session.updated_at) : Date.now();
+  const s = Math.max(0, Math.floor((end - start) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor(s / 60) % 60).padStart(2, "0")}m`;
 }
 
 function sourceLabel(source) {
@@ -265,7 +281,7 @@ export function WorkDetail({ session, events, token, agents, approvals, busy, on
       <h2 className="work-detail-objective">{session.objective || "Working…"}</h2>
       {agentName && (
         <div className="work-agent">
-          <Avatar name={agent?.display_name || agentName} kind="agent" size="sm" />
+          <Avatar name={agent?.display_name || agentName} kind="agent" size="sm" avatar={agent?.avatar} />
           <span className="work-agent-name">{agent?.display_name || agentName}</span>
           {agent?.job && <span className="work-agent-role">{agent.job}</span>}
         </div>

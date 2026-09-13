@@ -10,7 +10,7 @@ const PRIMARY_NAV = [
   { id: "knowledge", label: "Knowledge", icon: "▤" },
 ];
 
-export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings, onDeleteChannel, currentView, onViewChange, workAttentionCount, pinned = [] }) {
+export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings, onDeleteChannel, currentView, onViewChange, workAttentionCount, pinned = [], open = false, onClose }) {
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState(false);
 
@@ -27,7 +27,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
   const matchedTeams = (teams || []).filter(t => !q || (t.name || "").toLowerCase().includes(q));
 
   return (
-    <aside id="sidebar" className={collapsed ? "collapsed" : ""} aria-label="Primary">
+    <aside id="sidebar" className={`${collapsed ? "collapsed" : ""}${open ? " open" : ""}`} aria-label="Primary">
       <div className="sidebar-header">
         <div className="brand">
           <span className="brand-mark">swarm</span>
@@ -191,6 +191,7 @@ function AgentItem({ agent, active, onClick }) {
   return (
     <li className="channel-item">
       <button className={`channel-link agent-link ${active ? "active" : ""}`} onClick={onClick}>
+        <Avatar name={agent.display_name || agent.name} kind="agent" size="sm" avatar={agent.avatar} />
         <span className={`status-dot ${statusColor}`} />
         <span className="channel-name truncate">{agent.display_name || agent.name}</span>
         {agent.status === "needs_approval" && <Badge variant="warning" className="ml-auto">!</Badge>}

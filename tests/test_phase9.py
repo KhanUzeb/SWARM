@@ -14,15 +14,15 @@ def test_model_aliases_and_tool_budget():
     assert AgentCreate(name="x", system_prompt="hi", model="llama-3.1-8b-instant").model == FAST_GROQ_MODEL
     assert agent.max_tool_calls_of({}) == agent.MAX_TOOL_CALLS == 6
     assert agent.max_tool_calls_of({"max_tool_calls": 2}) == 2
-    assert agent.max_tool_calls_of({"max_tool_calls": 99}) == agent.TOOL_CALL_HARD_CAP == 12
+    assert agent.max_tool_calls_of({"max_tool_calls": 99}) == agent.TOOL_CALL_HARD_CAP == 24
     assert AgentCreate(name="x", system_prompt="hi").max_tool_calls == 6
-    assert AgentPatch(max_tool_calls=12).max_tool_calls == 12
+    assert AgentPatch(max_tool_calls=24).max_tool_calls == 24
     try:
-        AgentPatch(max_tool_calls=13)
+        AgentPatch(max_tool_calls=25)
     except Exception:  # noqa: BLE001 — pydantic ValidationError
         pass
     else:
-        raise AssertionError("max_tool_calls=13 should be rejected")
+        raise AssertionError("max_tool_calls=25 should be rejected")
 
 
 def test_memory_roundtrip_and_context(client):

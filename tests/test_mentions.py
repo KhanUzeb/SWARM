@@ -21,9 +21,15 @@ def test_should_offer_tools():
     small_talk = [{"author_kind": "human", "body": "@swarm hi"}]
     assert not should_offer_tools(small_talk)
     assert not should_offer_tools([{"author_kind": "human", "body": "hey @swarm how are you"}])
+    assert not should_offer_tools([{"author_kind": "human", "body": "thanks!"}])
+    # Rooms default to work: anything that isn't clear smalltalk gets tools,
+    # so asking a bot to do something actually runs instead of just chatting.
     for body in ("@swarm ls the sandbox", "@swarm search history for shipping",
                  "@swarm remember the ship date", "@swarm open gmail and screenshot the inbox",
-                 "@swarm navigate to the docs"):
+                 "@swarm navigate to the docs",
+                 "@swarm summarize this week", "@swarm what's blocking the release?",
+                 "@swarm draft the update", "@swarm plan the release",
+                 "hey @swarm can you summarize the thread?"):
         assert should_offer_tools([{"author_kind": "human", "body": body}])
     # Channel kind gates plain small talk.
     bare_hi = [{"author_kind": "human", "body": "hi"}]

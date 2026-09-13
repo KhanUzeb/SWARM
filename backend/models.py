@@ -183,11 +183,12 @@ class ReactionCreate(BaseModel):
 class AgentCreate(BaseModel):
     name: str = Field(default="", max_length=32)
     display_name: str = Field(default="", max_length=40)
+    avatar: str = Field(default="", max_length=500)
     system_prompt: str = Field(min_length=1, max_length=4000)
     model: str = Field(default=DEFAULT_GROQ_MODEL, min_length=1, max_length=200)
     channel_scope: str | None = None
     history_window: int = Field(default=12, ge=1, le=50)
-    max_tool_calls: int = Field(default=6, ge=1, le=12)
+    max_tool_calls: int = Field(default=6, ge=1, le=24)
     tools: list[str] | None = None
     job: str = Field(default=DEFAULT_JOB, min_length=1, max_length=64)
 
@@ -218,11 +219,12 @@ class AgentCreate(BaseModel):
 
 class AgentPatch(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=40)
+    avatar: str | None = Field(default=None, max_length=500)
     system_prompt: str | None = Field(default=None, min_length=1, max_length=4000)
     model: str | None = Field(default=None, min_length=1, max_length=200)
     channel_scope: str | None = None
     history_window: int | None = Field(default=None, ge=1, le=50)
-    max_tool_calls: int | None = Field(default=None, ge=1, le=12)
+    max_tool_calls: int | None = Field(default=None, ge=1, le=24)
     tools: list[str] | None = None
     job: str | None = Field(default=None, min_length=1, max_length=64)
 

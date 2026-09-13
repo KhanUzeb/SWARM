@@ -72,18 +72,19 @@ a duplicate row or an error.
 | channel_scope   | TEXT    | nullable FK-ish → channels.id. NULL = every channel |
 | created_at      | REAL    | |
 | history_window  | INTEGER | last N channel messages injected; default 12, cap 50 |
-| max_tool_calls  | INTEGER | cap per trigger; default 6, hard cap 12 |
+| max_tool_calls  | INTEGER | cap per trigger; default 6, hard cap 24 |
 | tools           | TEXT    | JSON array of allowed tool names |
 | job             | TEXT    | primary job title; default `Teammate` |
 | status          | TEXT    | `idle` \| `working` \| `needs_approval` |
 | display_name    | TEXT    | friendly name shown in the UI; `@name` stays the mention handle |
+| avatar          | TEXT    | bot profile picture: an emoji or an image URL (max 500 chars); `''` = initials tile |
 | archived_at     | REAL    | NULL = active. Set by `DELETE /api/agents/{name}` (soft-delete) |
 
-Allowed tool names include **34 builtins** (`read_only_shell`,
+Allowed tool names include **35 builtins** (`read_only_shell`,
 `search_channel_history`, `remember`, `recall`, `forget`,
 `knowledge_search`, `knowledge_save`, `list_workspace`,
 `read_workspace`, `write_workspace`, `fetch_url`, `channel_digest`,
-  `save_skill`, `request_approval`, `create_agent`, computer-use `computer_run` /
+  `save_skill`, `request_approval`, `create_agent`, `delegate_task`, computer-use `computer_run` /
 `computer_open` / `computer_screenshot`, browser-use
 `browser_navigate` / `browser_snapshot` / `browser_click` /
 `browser_type` / `browser_press` / `browser_wait` /
@@ -623,7 +624,7 @@ Harness fields are optional; omitted values use the defaults above.
 ```
 
 ### `PATCH /api/agents/{name}`
-Auth required. Any subset of `display_name`, `system_prompt`, `model`,
+Auth required. Any subset of `display_name`, `avatar`, `system_prompt`, `model`,
 `channel_scope`, `history_window`, `max_tool_calls`, `tools`, `job`.
 `channel_scope: null` unscope the agent. Seeded personas (`swarm`,
 `ledger`) are editable like any other.
@@ -760,7 +761,7 @@ Live `message` events from a human/agent/system write may omit
     (`re.search(r"@name\b")` — `@swarmy` does not trigger `@swarm`).
     Agents are looked up scoped to the channel the message was posted in.
   - After an agent reply, `@mentions` of *other* Bots in that reply
-    hand off work (depth capped at 2 hops) so you are not the router.
+    hand off work (depth capped at 3 hops) so you are not the router.
 - **Multiple mentions**: if a message mentions more than one agent,
   they reply **sequentially, in the order they're mentioned in the
   text** — not the order they're registered, not concurrently. The DM
@@ -797,10 +798,10 @@ Live `message` events from a human/agent/system write may omit
   still overrides every agent globally if set.
 - **Tools available**: the agent's `tools` list, exposed via function
   calling. In a 1:1 (`kind=dm`), a group (`kind=group`), and on `[routine:…]` ticks, tools are
-  always offered. In a room they are offered **only when the latest
-  human message looks like a file/history/memory/skill/workspace/
-  computer/system/browser/app request**. Greetings in a room (`@swarm hi`) still get a text-only
-  completion.
+  always offered. In a room they are offered **for everything except
+  clear smalltalk** (`@swarm hi`, `thanks`, `ok` → text-only). A work-like
+  request (`@swarm summarize this week`) always gets tools, so asking a
+  Bot to do something runs instead of just chatting about it.
   - `read_only_shell` runs in a sandboxed working directory
     (`SWARM_SANDBOX_DIR`; default `/tmp/swarm-sandbox`, or `%TEMP%\swarm-sandbox`
     on Windows), 10s timeout, output capped at 4000 chars, minimal `PATH`
@@ -845,6 +846,12 @@ Live `message` events from a human/agent/system write may omit
   - `browser_use` wraps the Browser Use CLI (`browser-use`) with an
     allowlisted action list. `cua_desktop` wraps the CUA driver
     (`cua-driver` / `cua_driver` SDK) for host-desktop computer-use.
+  - `delegate_task(agent, task)` runs another Bot as a sub-agent: the
+    target runs headlessly with its own tools against channel history
+    plus the task, and its reply returns as the tool result (nothing is
+    posted). Delegation chains are capped at 2 deep; sub-agents never
+    approve, spawn, or delegate further at the cap. Failures come back
+    as text, never exceptions.
   - Each reply injects `profiles/<name>.md` or `profiles/jobs/<id>.md`.
   - Capped at the agent's `max_tool_calls` per single trigger (not
     per message — if two agents are mentioned, each gets its own cap).
@@ -908,7 +915,7 @@ All FR numbers below are implemented as of Phase 10 unless noted.
 | FR1.4 | No bare 500s leaking stack traces | ✅ (all known error paths return structured JSON) |
 | FR2.1 | Shell + history-search tools via Groq function calling | ✅ |
 | FR2.2 | Every tool call posted as a channel system message | ✅ |
-| FR2.3 | 10s tool timeout, per-agent tool-call cap | ✅ (default 6, hard cap 12) |
+| FR2.3 | 10s tool timeout, per-agent tool-call cap | ✅ (default 6, hard cap 24) |
 | FR3.1 | `parent_id` threading | ✅ |
 | FR3.2 | Idempotent reactions | ✅ |
 | FR4.1 | `agents` table replaces hardcoded persona | ✅ |

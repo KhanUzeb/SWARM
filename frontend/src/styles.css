@@ -239,7 +239,7 @@ body::after {
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   grid-template-areas: "sidebar workspace";
   height: 100dvh;
-  min-height: 600px;
+  min-height: 0;
   overflow: hidden;
   background: rgba(14, 10, 13, 0.72);
 }
@@ -796,6 +796,11 @@ body::after {
 .avatar-agent { background: linear-gradient(135deg, #c86bff 0%, #7c5cf0 100%); color: #ffffff; }
 .avatar-system { background: var(--color-bg-hover); color: var(--color-text-muted); }
 .avatar-image { object-fit: cover; }
+/* Bot profile picture: emoji or short glyph on a neutral tile. */
+.avatar-emoji { background: var(--color-bg-hover); font-size: 18px; text-transform: none; letter-spacing: 0; }
+.avatar-emoji.avatar-sm { font-size: 14px; }
+.avatar-emoji.avatar-lg { font-size: 24px; }
+.avatar-emoji.avatar-xl { font-size: 30px; }
 
 .avatar-stack { display: flex; }
 .avatar-stack .avatar { margin-left: -8px; border: 2px solid var(--color-bg-elevated); }

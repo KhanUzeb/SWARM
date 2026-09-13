@@ -73,6 +73,7 @@ export default function App() {
   const [workRailOpen, setWorkRailOpen] = useState(() => localStorage.getItem("swarm_work_rail") !== "0");
   const [showContext, setShowContext] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [streamingAgents, setStreamingAgents] = useState({});
   const [streamText, setStreamText] = useState({});
   const [outbox, setOutbox] = useState(() => {
@@ -472,7 +473,7 @@ export default function App() {
         e.preventDefault();
         setWorkRailOpen(o => { localStorage.setItem("swarm_work_rail", o ? "0" : "1"); return !o; });
       }
-      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); setSelectedWork(null); }
+      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); setSelectedWork(null); setSidebarOpen(false); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -687,7 +688,7 @@ export default function App() {
         channels={channels}
         agents={allAgents}
         teams={teams}
-        onSelectChannel={setChannel}
+        onSelectChannel={(id) => { setChannel(id); setSidebarOpen(false); }}
         activeChannel={channel}
         wsStatus={wsStatus}
         meRole={meRole}
@@ -700,11 +701,16 @@ export default function App() {
         onOpenSettings={() => setMainView("dashboard")}
         onDeleteChannel={onDeleteChannel}
         currentView={mainView}
-        onViewChange={(v) => setMainView(
+        onViewChange={(v) => { setSidebarOpen(false); setMainView(
           v === "home" ? "dashboard" : v === "work" ? "work" : v === "chat" ? "talk" : v
-        )}
+        ); }}
         workAttentionCount={workAttention.length}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
+      {sidebarOpen && (
+        <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden />
+      )}
 
       <div className="workspace-shell">
         <TopBar
@@ -713,6 +719,7 @@ export default function App() {
           onToggleComputer={() => setComputerOpen(o => !o)}
           computerOpen={computerOpen}
           onOpenCommandPalette={() => setCmdOpen(true)}
+          onOpenSidebar={() => setSidebarOpen(true)}
           onViewChange={setMainView}
           currentView={mainView}
           approvals={approvals}
@@ -941,6 +948,7 @@ export default function App() {
           onRetrySend={retryFailedSend}
           onDismissSendFailure={() => setSendFailure(null)}
           reactions={reactions}
+          working={chatBusy}
         />
       )}
 
@@ -1007,7 +1015,7 @@ function AgentsView({ agents, onOpenChannel }) {
         {agents.map(a => (
           <Card key={a.name} interactive padded onClick={() => onOpenChannel(a.dm_channel_id)}>
             <div className="agent-card-head">
-              <Avatar name={a.display_name || a.name} kind="agent" size="lg" />
+              <Avatar name={a.display_name || a.name} kind="agent" size="lg" avatar={a.avatar} />
               <div className="agent-card-meta">
                 <span className="agent-card-name">{a.display_name || a.name}</span>
                 <span className="agent-card-handle text-mono-xs text-subtle">@{a.name}</span>
@@ -1025,7 +1033,7 @@ function AgentsView({ agents, onOpenChannel }) {
   );
 }
 
-function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onUnreact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions, token, chatModel, onModelChange, streamText, onStop }) {
+function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClose, onSend, onReact, onUnreact, onDelete, canModerate, onRetry, retryingId, sendFailure, onRetrySend, onDismissSendFailure, reactions, token, chatModel, onModelChange, streamText, onStop, working }) {
   const parent = messages[parentId];
   const replies = threadReplies.length > 0 ? threadReplies : Object.values(messages).filter(m => m.parent_id === parentId);
   const replyOrder = replies.map(r => r.id);
@@ -1063,7 +1071,7 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
           </div>
         </div>
       )}
-      <Composer onSend={onSend} placeholder="Reply in thread…" compact threadParent token={token} model={chatModel} onModelChange={onModelChange} working={chatBusy} onStop={onStop} />
+      <Composer onSend={onSend} placeholder="Reply in thread…" compact threadParent token={token} model={chatModel} onModelChange={onModelChange} working={working} onStop={onStop} />
     </aside>
   );
 }
@@ -1071,6 +1079,7 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
 function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
   const [name, setName] = useState("");
   const [detail, setDetail] = useState("");
+  const [avatar, setAvatar] = useState("");
   const [members, setMembers] = useState([]);
   const [busy, setBusy] = useState(false);
   const [templates, setTemplates] = useState([]);
@@ -1110,6 +1119,7 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
       body = {
         name: name.trim(),
         display_name: name.trim(),
+        avatar: avatar.trim().slice(0, 500),
         system_prompt: detail.trim() || `You are ${name.trim()}, a helpful specialist teammate.`,
         job: tpl ? tpl.job : "Teammate",
       };
@@ -1149,6 +1159,7 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
             </div>
           )}
           <Input autoFocus value={name} onChange={e => { setName(e.target.value); setSelectedTemplate(null); }} placeholder={action === "dm" ? "Person handle" : action === "agent" ? "Agent handle" : "Name"} />
+          {isAgent && <Input value={avatar} onChange={e => setAvatar(e.target.value)} placeholder="Avatar — an emoji or image URL (optional)" aria-label="Bot avatar" />}
           {needsDetail && <Textarea value={detail} onChange={e => { setDetail(e.target.value); setSelectedTemplate(null); }} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}
           {needsMembers && (
             <label className="quick-members">

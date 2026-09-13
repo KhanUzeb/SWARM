@@ -44,8 +44,10 @@ Human posts in #general, a bot 1:1, or a group chat
 
 ## Features
 
-- **Bots as teammates** — named bots with jobs, 1:1 DMs, group chats,
-  `@team` pods, skills (`/standup`, `/digest`, …), routines, and approvals.
+- **Bots as teammates** — named bots with jobs, profile pictures, 1:1 DMs,
+  group chats, `@team` pods, skills (`/standup`, `/digest`, …), routines,
+  approvals, bot-to-bot handoffs, and `delegate_task` orchestration
+  (one bot can ask a specialist bot to do a subtask and report back).
 - **Bring your own model** — 15 providers (Groq, OpenRouter, OpenAI,
   Anthropic, Gemini, Mistral, DeepSeek, xAI, …) plus a generic
   **Custom OpenAI-compatible** endpoint for Ollama / LM Studio / vLLM.

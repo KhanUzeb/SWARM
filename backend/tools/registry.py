@@ -198,12 +198,13 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "create_agent",
-            "description": (
+                "description": (
                 "Provision a dedicated teammate bot for the user's need "
                 "(e.g. fitness tracking, meeting notes, research). The bot gets "
                 "its own 1:1 DM channel the user can open from the sidebar. "
                 "Give it a short slug name, a job title, and a focused "
-                "system_prompt describing its role."
+                "system_prompt describing its role. Optionally an avatar "
+                "(an emoji or an image URL) so it has a face in chat."
             ),
             "parameters": {
                 "type": "object",
@@ -212,12 +213,34 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
                     "job": {"type": "string"},
                     "system_prompt": {"type": "string"},
                     "display_name": {"type": "string"},
+                    "avatar": {"type": "string"},
                     "tools": {
                         "type": "array",
                         "items": {"type": "string"},
                     },
                 },
                 "required": ["name", "job", "system_prompt"],
+            },
+        },
+    },
+    "delegate_task": {
+        "type": "function",
+        "function": {
+            "name": "delegate_task",
+            "description": (
+                "Ask another bot to do a subtask and report back. The other bot "
+                "runs with its own tools against this channel's history plus "
+                "your task, and its reply comes back as this tool's result — "
+                "nothing is posted to the channel. Use it when a specialist "
+                "fits part of the job better than you."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string"},
+                    "task": {"type": "string"},
+                },
+                "required": ["agent", "task"],
             },
         },
     },
@@ -637,6 +660,7 @@ class ToolRegistry:
         sandbox_dir: str,
         shell_runner: Callable[[str], str],
         workspace_helpers: dict[str, Callable[..., Any]],
+        delegate_depth: int = 0,
     ) -> str:
         if name not in allowed:
             return f"(tool {name} is disabled for this agent)"
@@ -645,6 +669,7 @@ class ToolRegistry:
                 name, args, agent_name=agent_name, channel_id=channel_id,
                 sandbox_dir=sandbox_dir, shell_runner=shell_runner,
                 workspace_helpers=workspace_helpers,
+                delegate_depth=delegate_depth,
             )
         if name in self._custom:
             return await self._exec_custom(self._custom[name], args)
@@ -667,6 +692,7 @@ class ToolRegistry:
         sandbox_dir: str,
         shell_runner: Callable[[str], str],
         workspace_helpers: dict[str, Callable[..., Any]],
+        delegate_depth: int = 0,
     ) -> str:
         if name == "read_only_shell":
             return shell_runner(args.get("command", ""))
@@ -757,6 +783,12 @@ class ToolRegistry:
             )
         if name == "create_agent":
             return await self._exec_create_agent(args)
+        if name == "delegate_task":
+            from .. import agent as agent_mod
+            return await agent_mod.generate_delegate_reply(
+                args.get("agent", ""), args.get("task", ""), channel_id,
+                parent_name=agent_name, depth=delegate_depth,
+            )
         if name == "computer_run":
             from . import computer
             return computer.computer_run(args.get("command", ""))
@@ -869,6 +901,7 @@ class ToolRegistry:
             created = await db.create_agent(
                 raw, prompt, "", None,
                 tools=tool_names, job=job, display_name=display,
+                avatar=(args.get("avatar") or "").strip()[:500] or None,
                 tools_locked=locked,
             )
         except Exception as exc:  # noqa: BLE001 — e.g. raced duplicate insert

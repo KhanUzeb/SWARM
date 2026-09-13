@@ -102,7 +102,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
             <div className="msg-row agent streaming-live" key={`stream-${author}`}>
               <div className="msg-bubble agent-bubble">
                 <div className="msg-bubble-header">
-                  <Avatar name={who?.display_name || author} kind="agent" size="sm" />
+                  <Avatar name={who?.display_name || author} kind="agent" size="sm" avatar={who?.avatar} />
                   <span className="msg-author">{who?.display_name || author}</span>
                   <span className="streaming-badge" role="status" aria-label={`${author} is replying`}>
                     <span className="pulse-dot violet" aria-hidden /> streaming
@@ -245,7 +245,7 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
       <div className={`msg-bubble agent-bubble${failedAgent ? " error-bubble" : ""}${stoppedAgent ? " stopped-bubble" : ""}`}>
         {!grouped && (
           <div className="msg-bubble-header">
-            <Avatar name={label} kind={avatarKind} size="sm" />
+            <Avatar name={label} kind={avatarKind} size="sm" avatar={agent?.avatar} />
             <span className="msg-author">{label}</span>
             {agent?.job && <span className="msg-role">{agent.job}</span>}
             {m.model && (

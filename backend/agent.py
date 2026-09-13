@@ -30,7 +30,11 @@ from .tools.registry import BUILTIN_SCHEMAS, get_registry, reload_registry
 
 HISTORY_WINDOW = 12
 MAX_TOOL_CALLS = 6
-TOOL_CALL_HARD_CAP = 12
+TOOL_CALL_HARD_CAP = 24
+# How deep one agent may orchestrate another via delegate_task (0 = the
+# delegating turn itself). Chains longer than this return a stopped message
+# instead of recursing, so A→B→C→… can never loop forever.
+DELEGATE_DEPTH_CAP = 2
 SHELL_TIMEOUT_SECONDS = 10
 SHELL_OUTPUT_CAP = 4000
 MEMORY_INJECT_LIMIT = 12
@@ -56,25 +60,21 @@ def _default_sandbox_dir() -> str:
 SANDBOX_DIR = _default_sandbox_dir()
 
 # Fast Groq models (e.g. openai/gpt-oss-20b) call tools on "hi" unless
-# we withhold the tool schema. Only offer tools when the last human message
-# actually looks like a file/history/memory request.
-_TOOL_HINT = re.compile(
-    r"\b("
-    r"ls|dir|cat|grep|findstr|find|files?|folder|directory|sandbox|shell|cwd|"
-    r"inspect|look\s+up|search(?:\s+the)?\s+history|earlier\s+messages?|"
-    r"what\s+did\s+we|last\s+time|"
-    r"remember|recall|forget|notes?|memor(?:y|ies)|"
-    r"knowledge|kb\b|docs?|facts?|learn(?:ed|ing)?|"
-    r"workspace|write|read|fetch|url|digest|save|skill|routine|schedule|approv|"
-    r"computer|screenshot|browser|navigate|click|type|press|"
-    r"composio|gmail|github|slack|notion|toolkit|"
-    r"exa|tavily|firecrawl|crawl|scrape|research|"
-    r"host|system|machine|repo|pytest|git|"
-    r"handoff|draft|"
-    r"bot|teammate|spin\s+up|create\s+an?\s+\w+\s+(bot|agent|assistant|helper|tracker|coach)"
-    r")\b",
+# we withhold the tool schema. Tools are offered on every work-like turn;
+# only clear smalltalk in a shared room gets a text-only reply, so asking
+# a bot to do something actually runs tools instead of just talking about it.
+# @mentions are stripped before matching, so "@swarm hi" and
+# "hey @swarm how are you" both read as smalltalk.
+_SMALLTALK = re.compile(
+    r"^\s*"
+    r"(hi+|hey+|hello+|yo|sup|morning|evening|afternoon|"
+    r"thanks?|thank\s+you|thx|please|ok+|okay|sure|got\s+it|"
+    r"bye+|good\s*(morning|night|evening)|lol|lmao|haha|what'?s\s+up\??)"
+    r"(\s+how\s+are\s+you\??)?"
+    r"\s*[!?.…]*\s*$",
     re.I,
 )
+_MENTION_STRIP = re.compile(r"@\w+")
 _SLASH_SKILL = re.compile(r"/([a-zA-Z0-9_\-]+)")
 _TOOL_POLICY = (
     "You are a persistent named teammate. Finish the job and only stop when "
@@ -97,7 +97,10 @@ _TOOL_POLICY = (
     "research, coaching), offer to provision a dedicated bot with create_agent "
     "— a short slug name, a job title, and a focused system_prompt — and "
     "point them at its new 1:1 DM channel. "
-    "You may @mention another bot to hand off work. Follow your profile.md."
+    "You may @mention another bot to hand off work, or call delegate_task "
+    "to have another bot do a subtask for you and report back — use it when "
+    "a specialist's skills fit part of the job better than yours. "
+    "Follow your profile.md."
 )
 
 OnToolsReady = Callable[[list[dict[str, Any]]], Awaitable[None]]
@@ -122,8 +125,10 @@ def tools_schema_for(names: list[str]) -> list[dict[str, Any]]:
 def should_offer_tools(
     history: list[dict[str, Any]], *, channel_kind: str | None = None
 ) -> bool:
-    """True if this turn looks like work. DMs and routines always offer tools.
-    Shared rooms still skip greetings so small models don't tool-call 'hi'."""
+    """True if this turn looks like work. DMs, groups, and routines always
+    offer tools. In shared rooms only clear smalltalk ("hi", "thanks", "ok")
+    skips tools — everything else is treated as potential work so a request
+    like "summarize this week" can actually run instead of just chatting."""
     if channel_kind in ("dm", "group"):
         return True
     for m in reversed(history):
@@ -131,9 +136,11 @@ def should_offer_tools(
         if m.get("author_kind") == "system" and body.startswith("[routine:"):
             return True
         if m.get("author_kind") == "human":
-            if body.lstrip().startswith("/") or _TOOL_HINT.search(body):
+            if body.lstrip().startswith("/"):
                 return True
-            return False
+            clean = _MENTION_STRIP.sub(" ", body)
+            clean = re.sub(r"\s+", " ", clean)
+            return not _SMALLTALK.match(clean)
     return False
 
 
@@ -583,6 +590,7 @@ async def _execute_tool(
     agent_name: str,
     channel_id: str,
     allowed: list[str],
+    delegate_depth: int = 0,
 ) -> str:
     helpers = {
         "list": _run_list_workspace,
@@ -599,6 +607,7 @@ async def _execute_tool(
         sandbox_dir=SANDBOX_DIR,
         shell_runner=_run_shell_tool,
         workspace_helpers=helpers,
+        delegate_depth=delegate_depth,
     )
 
 
@@ -615,6 +624,7 @@ async def _run_with_client(
     on_stream_start: OnStreamStart | None,
     on_token: OnToken | None,
     trace: Any,
+    delegate_depth: int = 0,
 ) -> dict[str, Any]:
     cap = max_tool_calls_of(agent_row)
     schemas = tools_schema_for(allowed) if use_tools and allowed else []
@@ -696,6 +706,7 @@ async def _run_with_client(
                 agent_name=agent_row["name"],
                 channel_id=channel_id,
                 allowed=allowed,
+                delegate_depth=delegate_depth,
             )
             tool_events.append({"tool": tc["name"], "args": args, "result": result})
             messages.append({
@@ -825,6 +836,9 @@ async def generate_reply(
     on_stream_start: OnStreamStart | None = None,
     on_token: OnToken | None = None,
     model_override: str | None = None,
+    delegate_depth: int = 0,
+    exclude_tools: list[str] | None = None,
+    force_tools: bool = False,
 ) -> dict[str, Any]:
     """Returns {"reply": str, "tool_events": [{"tool", "args", "result"}], "usage": {...}, "model": str}.
     tool_events is populated in order — caller (main.py) persists each as
@@ -852,6 +866,12 @@ async def generate_reply(
     )
     window = history_window_of(agent_row)
     allowed = agent_tools(agent_row)
+    if exclude_tools:
+        allowed = [t for t in allowed if t not in set(exclude_tools)]
+    if delegate_depth >= DELEGATE_DEPTH_CAP and "delegate_task" in allowed:
+        # Delegation chains stop here — the sub-agent finishes the work
+        # itself instead of orchestrating a further sub-agent.
+        allowed = [t for t in allowed if t != "delegate_task"]
     notes, summary = await db.get_context_memories(name, channel_id, MEMORY_INJECT_LIMIT)
     from . import context as context_mod
     package = await context_mod.build_context(
@@ -881,7 +901,7 @@ async def generate_reply(
         group_mates=group_mates, display_name=agent_row.get("display_name"),
         profile=profile,
     )
-    use_tools = should_offer_tools(history, channel_kind=channel_kind) and bool(allowed)
+    use_tools = (force_tools or should_offer_tools(history, channel_kind=channel_kind)) and bool(allowed)
 
     # A provider fallback must not announce a second visible stream if the
     # first provider failed after opening one.
@@ -920,6 +940,7 @@ async def generate_reply(
             on_stream_start=safe_stream_start,
             on_token=safe_token,
             trace=trace,
+            delegate_depth=delegate_depth,
         )
 
     last_exc: BaseException | None = None
@@ -972,6 +993,9 @@ async def generate_reply(
             on_stream_start=on_stream_start,
             on_token=on_token,
             model_override=None,
+            delegate_depth=delegate_depth,
+            exclude_tools=exclude_tools,
+            force_tools=force_tools,
         )
         fallback["model_fallback"] = True
         return fallback
@@ -982,6 +1006,73 @@ async def generate_reply(
         "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         "model": model,
     }
+
+
+async def generate_delegate_reply(
+    target_name: str,
+    task: str,
+    channel_id: str,
+    *,
+    parent_name: str,
+    depth: int = 0,
+) -> str:
+    """Run one bot as a sub-agent of another and return its reply as text.
+
+    When a bot calls the ``delegate_task`` tool, it runs the target bot
+    headlessly (no streaming, no channel post) against recent channel
+    history plus the delegated task, with tools forced on. The result comes
+    back as the tool result so the delegating bot can use it and reply.
+    Chains are capped by DELEGATE_DEPTH_CAP; the delegated bot never posts,
+    approves, or spawns — it only answers the parent.
+    """
+    target = (target_name or "").strip().lower()
+    job = (task or "").strip()
+    if not target:
+        return "(delegate_task needs a bot name)"
+    if not job:
+        return "(delegate_task needs a task description)"
+    if depth >= DELEGATE_DEPTH_CAP:
+        return f"(delegation depth cap reached — @{target} was not asked; finish the work yourself)"
+    if target == (parent_name or "").strip().lower():
+        return "(a bot cannot delegate to itself — do the task yourself)"
+    row = await db.fetch_agent(target)
+    if row is None or row.get("archived"):
+        return f"(no active bot named @{target})"
+    window = history_window_of(row)
+    try:
+        history = await db.get_history(channel_id, limit=max(window * 2, window))
+    except Exception:  # noqa: BLE001 — delegate with task-only context
+        history = []
+    history = list(history) + [{
+        "id": 0,
+        "channel_id": channel_id,
+        "parent_id": None,
+        "author": parent_name,
+        "author_kind": "human",
+        "body": f"[delegated task from @{parent_name}] {job}",
+        "created_at": time.time(),
+    }]
+    # Sub-agents answer the parent: no further delegation at the cap, and
+    # never approval prompts or bot-spawning from inside a delegation.
+    exclude = ["create_agent", "request_approval"]
+    if depth + 1 >= DELEGATE_DEPTH_CAP:
+        exclude.append("delegate_task")
+    try:
+        result = await generate_reply(
+            row, channel_id, history,
+            delegate_depth=depth + 1,
+            exclude_tools=exclude,
+            force_tools=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — delegation must never crash the parent turn
+        _logger.warning("delegation to %s failed: %s", target, exc)
+        return f"(@{target} could not run the task: {exc})"
+    reply = (result.get("reply") or "").strip()
+    if reply.startswith("[agent error:"):
+        return f"(@{target} failed: {reply})"
+    if len(reply) > 2000:
+        reply = reply[:2000] + "\n…[truncated]"
+    return f"@{target} reports:\n{reply}" if reply else f"(@{target} returned an empty reply)"
 
 
 async def _maybe_write_summary(

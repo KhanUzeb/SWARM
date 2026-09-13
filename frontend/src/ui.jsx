@@ -161,12 +161,22 @@ function CodeBlock({ lang, text }) {
 
 // ── UI Primitives ──
 
-function Avatar({ name, kind = "human", size = "md", src }) {
+function Avatar({ name, kind = "human", size = "md", src, avatar }) {
   const sizes = { sm: "avatar-sm", md: "", lg: "avatar-lg", xl: "avatar-xl" };
   const kindClass = { human: "avatar-human", agent: "avatar-agent", system: "avatar-system" }[kind] || "avatar-human";
-  
-  if (src) return <img className={`avatar ${sizes[size]} avatar-image`} src={src} alt={name} />;
-  
+  const pfp = (avatar || src || "").trim();
+  const isImage = /^https?:\/\//i.test(pfp) || pfp.startsWith("data:image");
+
+  if (isImage) return <img className={`avatar ${sizes[size]} avatar-image`} src={pfp} alt={name} loading="lazy" />;
+
+  if (pfp) {
+    return (
+      <div className={`avatar ${sizes[size]} avatar-emoji`} aria-label={name} role="img">
+        {pfp}
+      </div>
+    );
+  }
+
   return (
     <div className={`avatar ${sizes[size]} ${kindClass}`} aria-label={name}>
       {initials(name)}

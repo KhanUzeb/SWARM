@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS agents (
     job             TEXT NOT NULL DEFAULT '{DEFAULT_JOB}',
     status          TEXT NOT NULL DEFAULT 'idle',
     display_name    TEXT NOT NULL DEFAULT '',
+    avatar          TEXT NOT NULL DEFAULT '',
     archived_at     REAL,
     tools_locked    INTEGER NOT NULL DEFAULT 0
 );
@@ -378,6 +379,10 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
             )
     if "archived_at" not in cols:
         await db.execute("ALTER TABLE agents ADD COLUMN archived_at REAL")
+    if "avatar" not in cols:
+        await db.execute(
+            "ALTER TABLE agents ADD COLUMN avatar TEXT NOT NULL DEFAULT ''"
+        )
     if "tools_locked" not in cols:
         await db.execute("ALTER TABLE agents ADD COLUMN tools_locked INTEGER NOT NULL DEFAULT 0")
     await db.execute(
@@ -1190,21 +1195,23 @@ async def create_agent(
     tools: list[str] | None = None,
     job: str = DEFAULT_JOB,
     display_name: str | None = None,
+    avatar: str | None = None,
     tools_locked: bool = False,
 ) -> dict[str, Any]:
     tool_names = tools if tools is not None else list(DEFAULT_TOOLS)
     job_title = (job or DEFAULT_JOB).strip() or DEFAULT_JOB
     model = resolve_groq_model(model)
     label = (display_name or "").strip() or pretty_name(name)
+    pfp = (avatar or "").strip()[:500]
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO agents (name, system_prompt, model, channel_scope, "
-            "created_at, history_window, max_tool_calls, tools, job, status, display_name, tools_locked) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)",
+            "created_at, history_window, max_tool_calls, tools, job, status, display_name, avatar, tools_locked) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?)",
             (
                 name, system_prompt, model, channel_scope, time.time(),
                 history_window, max_tool_calls, json.dumps(tool_names), job_title, label,
-                1 if tools_locked else 0,
+                pfp, 1 if tools_locked else 0,
             ),
         )
         await db.commit()
@@ -1213,6 +1220,7 @@ async def create_agent(
     return {
         "name": name,
         "display_name": label,
+        "avatar": pfp,
         "system_prompt": system_prompt,
         "model": model,
         "channel_scope": channel_scope,
@@ -1233,7 +1241,7 @@ async def update_agent(name: str, fields: dict[str, Any]) -> dict[str, Any] | No
     allowed = {
         "system_prompt", "model", "channel_scope",
         "history_window", "max_tool_calls", "tools", "job", "status",
-        "display_name",
+        "display_name", "avatar",
     }
     sets: list[str] = []
     values: list[Any] = []
