@@ -68,5 +68,5 @@ Three rules make the loop trustworthy:
 
 "Best" means **daily-driver ready**: real work, real agents, every day.
 Four frontiers in order — Talk view defects, onboarding flow, work rail
-depth, agent quality — all inside `VISION.md` scope. See
+depth, agent quality — all inside `docs/PRODUCT.md` scope. See
 [`docs/adr/001-daily-driver-best.md`](adr/001-daily-driver-best.md).

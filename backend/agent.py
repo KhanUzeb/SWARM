@@ -926,7 +926,7 @@ async def generate_reply(
 
     if not await any_provider_ready():
         return {
-            "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect a provider in Command Center → AI providers]",
+            "reply": "[agent error: no API key — set GROQ_API_KEY or SWARM_OPENAI_COMPAT_API_KEY in .env, or connect a provider in Command Center → AI providers]",
             "tool_events": [],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
             "model": model,
@@ -935,7 +935,7 @@ async def generate_reply(
     attempts = await iter_provider_attempts(model)
     if not attempts:
         return {
-            "reply": "[agent error: no API key — set GROQ_API_KEY in .env or connect a provider in Command Center → AI providers]",
+            "reply": "[agent error: no API key — set GROQ_API_KEY or SWARM_OPENAI_COMPAT_API_KEY in .env, or connect a provider in Command Center → AI providers]",
             "tool_events": [],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
             "model": model,

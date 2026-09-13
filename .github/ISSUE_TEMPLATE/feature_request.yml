@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose an idea for Swarm
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem does this solve?
+      placeholder: I want bots to use my local Ollama server without a cloud key.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change? API, UI, or provider behavior?
+      placeholder: Add a Custom OpenAI-compatible provider with a configurable base URL.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else could solve this, and why not?
+    validations:
+      required: false

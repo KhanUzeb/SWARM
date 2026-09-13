@@ -1,0 +1,14 @@
+# Docker build context exclusions.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.git/
+.scratch/

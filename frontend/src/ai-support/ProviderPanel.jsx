@@ -114,6 +114,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
       <ul className="provider-list">
         {!providers.length && <li className="empty-state">Loading providers…</li>}
         {providers.map((p) => {
+          if (p.id === "custom") return <CustomProviderCard key="custom" provider={p} token={token} draft={draftFor(p)} busy={busy} setBusy={setBusy} setDrafts={setDrafts} draftFor={draftFor} flash={flash} load={load} onStatusChange={onStatusChange} />;
           const draft = draftFor(p);
           return (
             <li key={p.id} className={`provider-card${p.connected ? " connected" : ""}`}>
@@ -209,6 +210,108 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
           );
         })}
       </ul>
+      <details className="provider-advanced">
+        <summary>Advanced: self-hosted endpoints &amp; env fallbacks</summary>
+        <p className="hint">
+          Operators can point the Custom provider at Ollama, LM Studio, vLLM, or any
+          OpenAI-compatible gateway with <code>SWARM_OPENAI_COMPAT_BASE_URL</code> and{" "}
+          <code>SWARM_OPENAI_COMPAT_API_KEY</code>. UI-connected keys stay encrypted in
+          SQLite and are never returned by the API.
+        </p>
+      </details>
     </div>
+  );
+}
+
+function CustomProviderCard({ provider: p, token, draft, busy, setBusy, setDrafts, draftFor, flash, load, onStatusChange }) {
+  async function connectCustom() {
+    const key = (draft.key || "").trim();
+    const model = (draft.model || "").trim();
+    if (!model) {
+      flash?.("Enter the exact model id your server serves (e.g. qwen3:4b)", true);
+      return;
+    }
+    if (key && key.length < 8) {
+      flash?.("Key looks too short — clear it for keyless local servers", true);
+      return;
+    }
+    setBusy(p.id);
+    try {
+      const res = await api(`/api/ai-support/connect/${p.id}`, {
+        token,
+        method: "POST",
+        body: { api_key: key || "local-no-key", model },
+      });
+      if (res.ok) {
+        flash?.(`Custom endpoint using ${model}`);
+        setDrafts((d) => ({ ...d, [p.id]: { key: "", model: d[p.id]?.model } }));
+        bustCache("/api/status", "/api/ai-support");
+        await load();
+        onStatusChange?.();
+      } else flash?.("Couldn't connect the custom endpoint", true);
+    } catch {
+      flash?.("Couldn't connect the custom endpoint", true);
+    }
+    setBusy(null);
+  }
+
+  return (
+    <li className={`provider-card${p.connected ? " connected" : ""}`}>
+      <div className="provider-head">
+        <span className="provider-name">{p.name}</span>
+        <span className="provider-meta">Ollama · LM Studio · vLLM · any OpenAI-compatible server</span>
+        <span className={`provider-badge${p.connected ? " on" : ""}`}>
+          {p.connected ? (p.via === "env" ? "Env" : "Connected") : "Not connected"}
+        </span>
+      </div>
+      <p className="provider-desc">
+        Bring your own model server. Base URL comes from{" "}
+        <code>SWARM_OPENAI_COMPAT_BASE_URL</code> (default{" "}
+        <code>http://127.0.0.1:11434/v1</code>). Leave the key empty for keyless
+        local servers.
+      </p>
+      {!p.connected ? (
+        <>
+          <label className="field-label" htmlFor="key-custom">API key (optional for local)</label>
+          <input
+            id="key-custom"
+            type="password"
+            autoComplete="off"
+            placeholder="Optional — blank for local servers"
+            value={draft.key}
+            onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: { ...draftFor(p), key: e.target.value } }))}
+          />
+          <label className="field-label" htmlFor="model-custom">Model id (exact, as served)</label>
+          <input
+            id="model-custom"
+            type="text"
+            autoComplete="off"
+            placeholder="e.g. qwen3:4b"
+            value={draft.model || ""}
+            onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: { ...draftFor(p), model: e.target.value } }))}
+          />
+          <div className="provider-actions">
+            <button type="button" className="btn primary" disabled={busy === p.id} onClick={connectCustom}>
+              {busy === p.id ? "Connecting…" : "Connect endpoint"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="provider-actions">
+          <span className="hint">Model: {p.model || draft.model || "custom"}</span>
+          {p.via !== "env" && (
+            <button type="button" className="btn ghost" disabled={busy === p.id} onClick={async () => {
+              setBusy(p.id);
+              try {
+                const res = await api(`/api/ai-support/connect/${p.id}`, { token, method: "DELETE", json: false });
+                if (res.ok) { flash?.("Disconnected custom endpoint"); bustCache("/api/status", "/api/ai-support"); await load(); onStatusChange?.(); }
+                else flash?.("Couldn't disconnect", true);
+              } catch { flash?.("Couldn't disconnect", true); }
+              setBusy(null);
+            }}>Disconnect</button>
+          )}
+        </div>
+      )}
+    </li>
   );
 }

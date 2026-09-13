@@ -1,8 +1,8 @@
 # DEPLOY.md
 
 This deployment targets one VPS. It does not use Kubernetes or split the
-database, cache, and object storage into separate services. See `PROJECT.md`
-for the reason.
+database, cache, and object storage into separate services — single-host
+simplicity is the point (see docs/PRODUCT.md for scope).
 
 ## Build & run
 

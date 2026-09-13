@@ -168,6 +168,23 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         },
         "note": "Native Messages API — use OpenRouter for Claude in chat-completions today.",
     },
+    "custom": {
+        "id": "custom",
+        "name": "Custom (OpenAI-compatible)",
+        "kind": "openai_compatible",
+        "auth": "api_key",
+        "priority": 90,
+        "key_url": "",
+        "models": [],
+        "default_model": "",
+        # Generic BYO endpoint (Rakazo-style): point at Ollama, LM Studio,
+        # vLLM, llama.cpp, or any OpenAI-compatible gateway you operate.
+        # SWARM_OPENAI_COMPAT_BASE_URL wins over the stored default.
+        "env_fallback": "SWARM_OPENAI_COMPAT_API_KEY",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model_aliases": {},
+        "note": "Bring your own OpenAI-compatible server (Ollama, LM Studio, vLLM). Set SWARM_OPENAI_COMPAT_BASE_URL or connect with a key + model.",
+    },
 }
 
 _PUBLIC_KEYS = frozenset({

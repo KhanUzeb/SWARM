@@ -692,6 +692,20 @@ def _key_set(name: str) -> bool:
     return bool((os.environ.get(name) or "").strip().strip('"').strip("'"))
 
 
+def _revision() -> str:
+    for env_name in ("GIT_SHA", "SWARM_REVISION", "RAKAZO_IMAGE_TAG"):
+        value = (os.environ.get(env_name) or "").strip()
+        if value:
+            return value[:40]
+    return "dev"
+
+
+@app.get("/health")
+async def api_health():
+    """Public liveness probe (Rakazo-style): status + revision, no secrets."""
+    return {"status": "ok", "service": "swarm", "revision": _revision()}
+
+
 @app.get("/api/status")
 async def api_status(handle: str | None = Depends(optional_auth)):
     """Boolean-only — never returns raw keys. Connection details require auth."""
@@ -708,6 +722,7 @@ async def api_status(handle: str | None = Depends(optional_auth)):
     from .tools import browser as browser_mod
     from .tools import connectors
     from .tools import system as system_mod
+    from . import computer_providers as computers
     body: dict[str, Any] = {
         "groq": providers_ready.get("groq", False),
         "openrouter": providers_ready.get("openrouter", False),
@@ -716,6 +731,7 @@ async def api_status(handle: str | None = Depends(optional_auth)):
         "providers_ready": providers_ready,
         "browser": browser_mod.enabled(),
         "system": system_mod.enabled(),
+        "computer_provider": computers.get_provider(),
     }
     for row in await connectors.catalog_status():
         body[row["id"]] = bool(row.get("connected"))
@@ -1625,6 +1641,7 @@ async def api_compact_channel(channel_id: str, payload: dict | None = None,
 
 @app.get("/api/computer")
 async def api_computer(handle: str = Depends(require_auth)):
+    from . import computer_providers as computers
     from .tools import computer as computer_mod
     from .tools import system as system_mod
     await system_mod.hydrate_root()
@@ -1632,6 +1649,11 @@ async def api_computer(handle: str = Depends(require_auth)):
     return {
         "workspace": agent.SANDBOX_DIR,
         "shared": True,
+        "provider": computers.status(),
+        "homes": {
+            "team": computers.status().get("team_home"),
+            "private": "private/<agent> under the team home",
+        },
         "files": agent.list_workspace_files(),
         "activity": await db.get_recent_system_messages(20),
         "computer": computer_mod.status(),

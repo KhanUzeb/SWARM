@@ -1,0 +1,36 @@
+name: Bug report
+description: Report something broken in Swarm
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, and what went wrong?
+      placeholder: Post in #general with @swarm, expected a reply, got an error bubble instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, including provider and model if an agent reply failed.
+      placeholder: "1. docker compose up\n2. register\n3. connect Groq\n4. @swarm hi"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, deploy method (docker / uvicorn), commit hash, browser.
+      placeholder: Windows 11, uvicorn, abc1234, Chrome 130
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (redact secrets and tokens)
+      description: Backend logs or browser console output. Never paste API keys or tokens.
+      placeholder: "[agent error: ...]"
+    validations:
+      required: false

@@ -14,6 +14,6 @@ Implementation lives in `backend/ai_support/`, modeled after [Hugging Face tau `
 
 Connect a provider in the UI to store an encrypted API key in SQLite. Environment variables remain available as fallbacks.
 
-**Providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together AI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen.
+**Providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together AI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen, plus **Custom (OpenAI-compatible)** for self-hosted endpoints (Ollama, LM Studio, vLLM) via `SWARM_OPENAI_COMPAT_BASE_URL`.
 
 **Apps (not an LLM provider):** Composio lives in Computer → Apps (`/api/composio/*`, `COMPOSIO_API_KEY`). A Composio key does not make an LLM provider ready.

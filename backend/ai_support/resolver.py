@@ -76,6 +76,12 @@ def _normalize_base_url(url: str | None) -> str | None:
 def openai_compatible_config(auth: RuntimeProviderAuth) -> OpenAICompatibleConfig:
     spec = get_provider(auth.provider_id) or {}
     raw_base = auth.base_url or spec.get("base_url") or "https://api.openai.com/v1"
+    if auth.provider_id == "custom":
+        # Generic BYO endpoint: explicit env wins so operators can point at
+        # Ollama / LM Studio / vLLM without a code change (Rakazo-style).
+        env_base = (os.environ.get("SWARM_OPENAI_COMPAT_BASE_URL") or "").strip()
+        if env_base:
+            raw_base = env_base
     base = _normalize_base_url(str(raw_base)) or "https://api.openai.com/v1"
     return OpenAICompatibleConfig(
         provider_id=auth.provider_id,

@@ -765,7 +765,7 @@ Live `message` events from a human/agent/system write may omit
   they reply **sequentially, in the order they're mentioned in the
   text** — not the order they're registered, not concurrently. The DM
   owner is prepended when the channel is a 1:1. This was a real bug
-  during V2 build (see PROJECT.md "what changed") — the fix runs all
+  during V2 build (see docs/PRODUCT.md) — the fix runs all
   mentioned agents inside a single background task rather than one
   task per agent.
 - **Status**: `_run_agent` sets `working`, then `idle`, or
