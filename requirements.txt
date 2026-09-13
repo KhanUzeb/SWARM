@@ -1,7 +1,7 @@
 fastapi>=0.115
 uvicorn[standard]>=0.52.4
 python-dotenv>=1.0
-aiosqlite>=0.20
+aiosqlite>=0.22.1
 websockets>=17.1
 httpx>=0.28.1
 openai>=1.30
