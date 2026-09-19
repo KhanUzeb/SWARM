@@ -59,7 +59,7 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(false);
   const [computerOpen, setComputerOpen] = useState(() => localStorage.getItem("swarm_computer") !== "0");
   const [panelTab, setPanelTab] = useState("files");
-  const [mainView, setMainView] = useState("dashboard");
+  const [mainView, setMainView] = useState("talk");
   const [cmdOpen, setCmdOpen] = useState(false);
   const [typing, setTyping] = useState("");
   const [meRole, setMeRole] = useState("member");
@@ -672,8 +672,8 @@ export default function App() {
     { id: "cmd-view-talk", group: "View", label: "Go to Talk", keywords: ["chat", "message"], action: () => setMainView("talk") },
     { id: "cmd-view-paper", group: "View", label: "Go to Paper", keywords: ["paper", "latex", "doc"], action: () => setMainView("paper") },
     { id: "cmd-view-files", group: "View", label: "Go to Files", keywords: ["files", "sandbox"], action: () => setMainView("files") },
-    ...rooms.map(c => ({ id: `ch-${c.id}`, group: "Channels", label: c.name, keywords: [c.name], action: () => setChannel(c.id) })),
-    ...allAgents.map(a => ({ id: `ag-${a.name}`, group: "Agents", label: a.display_name || a.name, keywords: [a.name, a.job], action: () => setChannel(a.dm_channel_id) })),
+    ...rooms.map(c => ({ id: `ch-${c.id}`, group: "Channels", label: c.name, keywords: [c.name], action: () => { setChannel(c.id); setMainView("talk"); } })),
+    ...allAgents.map(a => ({ id: `ag-${a.name}`, group: "Agents", label: a.display_name || a.name, keywords: [a.name, a.job], action: () => { setChannel(a.dm_channel_id); setMainView("talk"); } })),
   ], [rooms, allAgents]);
 
   // ── Render ──
@@ -688,7 +688,7 @@ export default function App() {
         channels={channels}
         agents={allAgents}
         teams={teams}
-        onSelectChannel={(id) => { setChannel(id); setSidebarOpen(false); }}
+        onSelectChannel={(id) => { setChannel(id); setMainView("talk"); setSidebarOpen(false); }}
         activeChannel={channel}
         wsStatus={wsStatus}
         meRole={meRole}
@@ -787,7 +787,7 @@ export default function App() {
 
           {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
           {mainView === "files" && <FilesView computer={computer} />}
-          {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => setChannel(id)} />}
+          {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => { setChannel(id); setMainView("talk"); }} />}
           {mainView === "knowledge" && <KnowledgeView token={token} flash={flash} />}
         </main>
 
@@ -802,11 +802,6 @@ export default function App() {
                 </div>
               </div>
             )}
-            <div className="talk-context-bar">
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowContext(s => !s)} aria-expanded={showContext}>
-                {showContext ? "Hide context" : "Context"}
-              </button>
-            </div>
             {showContext && (
               <ContextDrawer
                 stats={contextStats}
@@ -833,6 +828,8 @@ export default function App() {
               contextStats={contextStats}
               contextError={contextError}
               onRefreshContext={() => loadContextStats(channelRef.current)}
+              contextDetailsOpen={showContext}
+              onToggleContextDetails={() => setShowContext(s => !s)}
               token={token}
               model={chatModel}
               onModelChange={setChatModel}

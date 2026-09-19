@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Avatar, RichBody, Tooltip } from "../ui.jsx";
+import { LoadingState, Shimmer } from "../beautifului.jsx";
 import { fmtTime, isAgentError, isResumable, shortModel, EMOJI } from "../lib.js";
 
 export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, streamText = {}, workByMessage, eventsByWork, canModerate }) {
@@ -105,7 +106,8 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
                   <Avatar name={who?.display_name || author} kind="agent" size="sm" avatar={who?.avatar} />
                   <span className="msg-author">{who?.display_name || author}</span>
                   <span className="streaming-badge" role="status" aria-label={`${author} is replying`}>
-                    <span className="pulse-dot violet" aria-hidden /> streaming
+                    <span className="pulse-dot violet" aria-hidden />
+                    <Shimmer>streaming</Shimmer>
                   </span>
                 </div>
                 <RichBody body={text} />
@@ -117,8 +119,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
 
         {typing && !liveStreams.length && (
           <div className="typing-indicator" role="status" aria-live="polite">
-            <span className="typing-dots"><span /><span /><span /></span>
-            <span className="typing-text">{typing} is typing…</span>
+            <LoadingState label={`${typing} is replying`} />
           </div>
         )}
 
@@ -268,8 +269,11 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
           </div>
         )}
         {(m.streaming || streaming) && !m.body && (
-          <div className="streaming-placeholder" aria-hidden>
-            <span className="typing-dots"><span /><span /><span /></span>
+          <div className="streaming-placeholder">
+            <LoadingState
+              label={`${label} is replying`}
+              startedAt={typeof m.created_at === "number" ? m.created_at * 1000 : (Date.parse(m.created_at) || Date.now())}
+            />
           </div>
         )}
         <RichBody body={m.body || ""} />

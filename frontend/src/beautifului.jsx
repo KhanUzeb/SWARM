@@ -1,6 +1,47 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Avatar, Badge, Button, Card, Tooltip } from "./ui.jsx";
 import { fmtTime, statusLabel } from "./lib.js";
+
+/** Wall-clock elapsed label for in-flight agent work (Rakazo-style). */
+export function formatElapsed(startedAtMs, nowMs) {
+  const totalTenths = Math.round(Math.max(0, nowMs - startedAtMs) / 100);
+  const minutes = Math.floor(totalTenths / 600);
+  const seconds = (totalTenths % 600) / 10;
+  if (minutes === 0) return `${seconds.toFixed(1)}s`;
+  return `${minutes}m ${seconds.toFixed(1)}s`;
+}
+
+function useElapsed(startedAtMs) {
+  const [mountedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(timer);
+  }, []);
+  return formatElapsed(startedAtMs ?? mountedAt, now);
+}
+
+/** Shimmer sweep across a short status label while an agent is working. */
+export function Shimmer({ children }) {
+  return <span className="bui-shimmer">{children}</span>;
+}
+
+/** Compact loading row: pixel grid + shimmer label + elapsed timer. */
+export function LoadingState({ label = "working", startedAt }) {
+  const elapsed = useElapsed(startedAt);
+  return (
+    <span className="bui-loading" role="status">
+      <span className="sr-only">{label}</span>
+      <span className="bui-pixel-grid" aria-hidden>
+        {Array.from({ length: 9 }).map((_, i) => (
+          <span key={i} className="bui-pixel" style={{ animationDelay: `${(i % 3 + Math.floor(i / 3)) * 90}ms` }} />
+        ))}
+      </span>
+      <span className="bui-loading-label"><Shimmer>{label}</Shimmer></span>
+      <span className="bui-loading-elapsed">{elapsed}</span>
+    </span>
+  );
+}
 
 /* ───────────────────────────────────────────────────────────
  * beautifului.dev primitives — AI-native interface components
@@ -198,7 +239,9 @@ export function ContextCard({ chunk }) {
 /**
  * 01 · Loading State — pixel-grid loader with shimmer
  */
-export function PixelLoader({ label = "Loading", elapsed }) {
+export function PixelLoader({ label = "Loading", startedAt, elapsed }) {
+  const liveElapsed = useElapsed(startedAt);
+  const shown = elapsed != null ? `${elapsed.toFixed(1)}s` : liveElapsed;
   return (
     <div className="pixel-loader">
       <div className="pixel-grid">
@@ -206,7 +249,7 @@ export function PixelLoader({ label = "Loading", elapsed }) {
           <span key={i} className="pixel" style={{ animationDelay: `${i * 60}ms` }} />
         ))}
       </div>
-      <span className="pixel-label">{label}{elapsed != null && <span className="pixel-elapsed text-mono-xs"> · {elapsed.toFixed(1)}s</span>}</span>
+      <span className="pixel-label"><Shimmer>{label}</Shimmer><span className="pixel-elapsed text-mono-xs"> · {shown}</span></span>
     </div>
   );
 }

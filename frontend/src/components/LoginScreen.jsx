@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Input, Card } from "../ui.jsx";
+import { Button, Input } from "../ui.jsx";
 
 export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
   const [handle, setHandle] = useState("");
@@ -26,14 +26,15 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
         <div className="login-orb login-orb-1" />
         <div className="login-orb login-orb-2" />
       </div>
-      <div className="login-card">
-        <div className="login-brand">
-          <span className="login-logo">swarm</span>
-          <span className="login-tagline">AI agents as teammates</span>
-        </div>
 
-        <h1 className="login-title">Sign in to your workspace</h1>
-        <p className="login-sub">Humans and agents in the same channels. One history, one audit trail.</p>
+      <div className="login-hero" aria-hidden>
+        <div className="login-mark" />
+        <span className="login-hero-name">swarm</span>
+        <p className="login-hero-line">AI teammates in your workspace — same channels, same audit trail.</p>
+      </div>
+
+      <div className="login-card">
+        <h1 className="login-title">{mode === "login" ? "Sign in" : "Create workspace"}</h1>
 
         <form onSubmit={submit} className="login-form">
           <label className="text-label" htmlFor="login-handle">Handle</label>
@@ -46,7 +47,9 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
             autoComplete="username"
           />
 
-          <label className="text-label" htmlFor="login-pass">Password {mode === "setup" && <span className="text-subtle">(new)</span>}</label>
+          <label className="text-label" htmlFor="login-pass">
+            Password {mode === "setup" && <span className="text-subtle">(new)</span>}
+          </label>
           <Input
             id="login-pass"
             type="password"
@@ -63,27 +66,28 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
           </Button>
         </form>
 
-        <p className="login-security text-subtle text-sm">
-          Passwords are hashed with PBKDF2 (100k rounds) and never stored in plain text.
-        </p>
+        <details className="login-security-details">
+          <summary>How passwords are stored</summary>
+          <p className="text-subtle text-sm">PBKDF2 with 100k rounds — never plain text on disk.</p>
+        </details>
 
         <div className="login-switch">
           {mode === "login" ? (
-            <span>New here? <button className="link-btn" onClick={() => { setMode("setup"); setError(""); }}>Create a workspace</button></span>
+            <span>New here? <button type="button" className="link-btn" onClick={() => { setMode("setup"); setError(""); }}>Create a workspace</button></span>
           ) : (
-            <span>Already registered? <button className="link-btn" onClick={() => { setMode("login"); setError(""); }}>Sign in instead</button></span>
+            <span>Already registered? <button type="button" className="link-btn" onClick={() => { setMode("login"); setError(""); }}>Sign in</button></span>
           )}
         </div>
 
         {demoMode && (
-          <button className="login-demo" onClick={() => onLogin("demo", "")}>
+          <button type="button" className="login-demo" onClick={() => onLogin("demo", "")}>
             Enter demo mode
           </button>
         )}
       </div>
 
       <div className="login-foot">
-        <span>Self-hosted · Open source</span>
+        <span>Self-hosted · {status === "connected" ? "relay ready" : "connecting…"}</span>
       </div>
     </div>
   );

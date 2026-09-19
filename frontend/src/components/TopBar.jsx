@@ -27,10 +27,12 @@ export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpen
             {channel?.topic && <span className="channel-topic">{channel.topic}</span>}
           </div>
           <div className="channel-presence-row">
-            <span className={`conn-state conn-${wsStatus || "offline"}`} title={`Connection: ${wsStatus || "offline"}`}>
-              <span className="conn-dot" aria-hidden />
-              {wsStatus === "connected" ? "Connected" : wsStatus === "connecting" ? "Connecting…" : "Offline"}
-            </span>
+            {wsStatus !== "connected" && (
+              <span className={`conn-state conn-${wsStatus || "offline"}`} title={`Connection: ${wsStatus || "offline"}`}>
+                <span className="conn-dot" aria-hidden />
+                {wsStatus === "connecting" ? "Connecting…" : "Offline"}
+              </span>
+            )}
             {(participants || []).length > 0 && (
               <span className="presence-avatars" title={`${participants.length} participant${participants.length === 1 ? "" : "s"}`}>
                 {participants.slice(0, 4).map(p => (

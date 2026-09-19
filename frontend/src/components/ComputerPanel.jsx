@@ -57,7 +57,10 @@ export function ComputerPanel({ computer, token, user, meRole, onClose, onRefres
         onSelectTab={selectTab}
         onClose={onClose}
         onRefresh={onRefresh}
-        subtitle={computer?.workspace || computer?.note?.slice(0, 48) || "Shared workspace"}
+        subtitle={[
+          computer?.provider?.provider && `Computer: ${computer.provider.provider}`,
+          computer?.workspace || computer?.note?.slice(0, 48) || "Shared workspace",
+        ].filter(Boolean).join(" · ")}
       />
 
       <div className="panel-group-tabs">
