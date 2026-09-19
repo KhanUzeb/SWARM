@@ -2,6 +2,7 @@ import { Badge, Button, Dropdown, Tooltip } from "../ui.jsx";
 
 const VIEW_ALIASES = { dashboard: "home", home: "home", workflows: "work", runs: "work", work: "work", talk: "chat", chat: "chat", agents: "agents", knowledge: "knowledge" };
 const VIEW_TARGETS = { home: "dashboard", work: "work", chat: "talk", agents: "agents", knowledge: "knowledge" };
+const VIEW_LABELS = { home: "Home", work: "Work", chat: "Chat", agents: "Agents", knowledge: "Knowledge" };
 
 export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpenCommandPalette, onViewChange, currentView, approvals, onResolveApproval, wsStatus, workActive, workAttention, workConnected, onToggleWorkRail, workRailOpen, participants, onOpenSidebar }) {
   const normalizedView = VIEW_ALIASES[currentView] || currentView;
@@ -24,6 +25,7 @@ export function TopBar({ channel, agents, onToggleComputer, computerOpen, onOpen
               {(channel?.name || "?").charAt(0).toUpperCase()}
             </span>
             <h1 className="channel-name">{channel?.name || "Select a channel"}</h1>
+            <span className="mobile-view-label">{VIEW_LABELS[normalizedView] || "Chat"}</span>
             {channel?.topic && <span className="channel-topic">{channel.topic}</span>}
           </div>
           <div className="channel-presence-row">

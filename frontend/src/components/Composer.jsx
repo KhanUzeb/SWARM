@@ -3,7 +3,7 @@ import { Avatar } from "../ui.jsx";
 import { shortModel } from "../lib.js";
 import ModelPicker from "../ai-support/ModelPicker.jsx";
 
-export function Composer({ onSend, placeholder, channelName, agents, compact, threadParent, workingWith, offline, sendFailed, contextStats, contextError, onRefreshContext, onToggleContextDetails, contextDetailsOpen, token, model, onModelChange, working, onStop }) {
+export function Composer({ onSend, placeholder, channelName, agents, compact, threadParent, workingWith, offline, sendFailed, contextStats, contextError, onRefreshContext, onToggleContextDetails, contextDetailsOpen, token, model, onModelChange, working, onStop, prefill, onPrefillConsumed }) {
   const [draft, setDraft] = useState("");
   const [mention, setMention] = useState({ open: false, index: 0, items: [], query: "" });
   const [slash, setSlash] = useState({ open: false, index: 0 });
@@ -110,6 +110,17 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [draft]);
+
+  useEffect(() => {
+    if (prefill == null || prefill === "") return;
+    setDraft(prefill);
+    onPrefillConsumed?.();
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      const len = prefill.length;
+      inputRef.current?.setSelectionRange(len, len);
+    });
+  }, [prefill, onPrefillConsumed]);
 
   useEffect(() => {
     if (mention.open && mentionRef.current) {
@@ -262,7 +273,6 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
           </svg>
         </button>
 
-
         {mention.open && (
           <ul className="mention-menu" ref={mentionRef} role="listbox">
             {mention.items.map((item, i) => (
@@ -300,6 +310,11 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
           </ul>
         )}
       </div>
+      {!compact && (
+        <p className="composer-hint text-subtle" aria-hidden>
+          <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline
+        </p>
+      )}
     </div>
   );
 }

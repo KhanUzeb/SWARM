@@ -3,12 +3,30 @@ import { Avatar, Badge, Tooltip, ScrollArea, Dropdown } from "../ui.jsx";
 import { initials, statusLabel } from "../lib.js";
 
 const PRIMARY_NAV = [
-  { id: "home", label: "Home", icon: "⌂" },
-  { id: "work", label: "Work", icon: "◉" },
-  { id: "chat", label: "Chat", icon: "✎" },
-  { id: "agents", label: "Agents", icon: "⚙" },
-  { id: "knowledge", label: "Knowledge", icon: "▤" },
+  { id: "home", label: "Home", icon: "home" },
+  { id: "work", label: "Work", icon: "work" },
+  { id: "chat", label: "Chat", icon: "chat" },
+  { id: "agents", label: "Agents", icon: "agents" },
+  { id: "knowledge", label: "Knowledge", icon: "knowledge" },
 ];
+
+function NavIcon({ name }) {
+  const common = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
+  switch (name) {
+    case "home":
+      return <svg {...common}><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" /></svg>;
+    case "work":
+      return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
+    case "chat":
+      return <svg {...common}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>;
+    case "agents":
+      return <svg {...common}><circle cx="12" cy="8" r="4" /><path d="M4 20v-1a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v1" /></svg>;
+    case "knowledge":
+      return <svg {...common}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>;
+    default:
+      return null;
+  }
+}
 
 export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings, onDeleteChannel, currentView, onViewChange, workAttentionCount, pinned = [], open = false, onClose }) {
   const [search, setSearch] = useState("");
@@ -46,7 +64,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
             onClick={() => onViewChange?.(item.id === "chat" ? "talk" : item.id)}
             title={collapsed ? item.label : undefined}
           >
-            <span aria-hidden>{item.icon}</span>
+            <span className="primary-link-icon" aria-hidden><NavIcon name={item.icon} /></span>
             {!collapsed && <span>{item.label}</span>}
             {!collapsed && item.id === "work" && (workAttentionCount || 0) > 0 && (
               <span className="nav-count" role="status">{workAttentionCount} need you</span>

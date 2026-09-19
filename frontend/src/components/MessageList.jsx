@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Avatar, RichBody, Tooltip } from "../ui.jsx";
 import { LoadingState, Shimmer } from "../beautifului.jsx";
 import { fmtTime, isAgentError, isResumable, shortModel, EMOJI } from "../lib.js";
 
-export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, streamText = {}, workByMessage, eventsByWork, canModerate }) {
+export function MessageList({ messages, order, agents, allAgents, user, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, replyCounts, reactions, channelId, onLoadMore, hasMore, loadingMore, typing, groupedWith, retryingId, streamingAgents, streamText = {}, workByMessage, eventsByWork, canModerate, onQuickStart, channelName }) {
   const endRef = useRef(null);
   const logRef = useRef(null);
   const [pinned, setPinned] = useState(true);
@@ -34,17 +34,35 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
   const roots = order.map(id => messages[id]).filter(Boolean);
   const liveStreams = Object.entries(streamText).filter(([, text]) => text && text.length > 0);
 
+  const quickStarts = buildQuickStarts(agents, allAgents, channelName);
+
   if (roots.length === 0 && !loadingMore) {
     return (
       <div id="log" className="log-empty">
-        <div className="empty-state">
+        <div className="empty-state talk-empty">
           <div className="empty-state-icon" aria-hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
           </div>
-          <div className="empty-state-title">Start a conversation</div>
-          <div className="empty-state-message">Message your team or @mention an agent to get started.</div>
+          <div className="empty-state-title">{channelName ? `#${channelName}` : "This room"}</div>
+          <div className="empty-state-message">@mention a teammate or send a message — every reply links to work you can follow.</div>
+          {onQuickStart && quickStarts.length > 0 && (
+            <div className="talk-quickstarts" role="list">
+              {quickStarts.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="talk-quickstart"
+                  role="listitem"
+                  onClick={() => onQuickStart(item.text)}
+                >
+                  <span className="talk-quickstart-label">{item.label}</span>
+                  {item.hint && <span className="talk-quickstart-hint">{item.hint}</span>}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -66,6 +84,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
 
         {roots.map((m, i) => {
           const prev = roots[i - 1];
+          const dayLabel = daySeparator(prev, m);
           const grouped = groupedWith(prev, m);
           const label = m.author_kind === "agent"
             ? (allAgents.find(a => a.name === m.author)?.display_name || m.author)
@@ -73,8 +92,13 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
           const agent = m.author_kind === "agent" ? allAgents.find(a => a.name === m.author) : null;
 
           return (
+            <Fragment key={m.id}>
+            {dayLabel && (
+              <div className="log-day-separator" role="separator" aria-label={dayLabel}>
+                <span>{dayLabel}</span>
+              </div>
+            )}
             <MessageRow
-              key={m.id}
               m={m}
               grouped={grouped}
               label={label}
@@ -94,6 +118,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
               workEvents={(workByMessage?.[m.id] && eventsByWork?.[workByMessage[m.id].id]) || []}
               canDelete={m.author === user?.handle || !!canModerate}
             />
+            </Fragment>
           );
         })}
 
@@ -257,11 +282,12 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
             )}
             {(m.streaming || streaming) && (
               <span className="streaming-badge" role="status" aria-label={`${label} is replying`}>
-                <span className="pulse-dot violet" aria-hidden /> streaming
+                <span className="pulse-dot violet" aria-hidden />
+                <Shimmer>streaming</Shimmer>
               </span>
             )}
             {work && (
-              <span className="msg-work-link" title={`Work: ${work.objective || work.id}`}>
+              <span className={`msg-work-link${work.status === "waiting_for_approval" ? " attention" : ""}`} title={`Work: ${work.objective || work.id}`}>
                 {work.status === "waiting_for_approval" ? "· needs approval" : `· ${work.status}`}
               </span>
             )}
@@ -358,6 +384,58 @@ function AgentTrace({ events }) {
       </ol>
     </details>
   );
+}
+
+function toDayKey(m) {
+  if (!m?.created_at) return "";
+  const ms = typeof m.created_at === "number" ? m.created_at * 1000 : Date.parse(m.created_at);
+  if (!ms) return "";
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function daySeparator(prev, m) {
+  if (!m) return null;
+  const cur = toDayKey(m);
+  if (!cur) return null;
+  if (!prev || toDayKey(prev) !== cur) {
+    const ms = typeof m.created_at === "number" ? m.created_at * 1000 : Date.parse(m.created_at);
+    const d = new Date(ms);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return "Today";
+    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+    return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  }
+  return null;
+}
+
+function buildQuickStarts(roomAgents, allAgents, channelName) {
+  const pool = (roomAgents && roomAgents.length ? roomAgents : allAgents) || [];
+  const picks = pool.slice(0, 3);
+  const items = picks.map((a) => ({
+    id: `agent-${a.name}`,
+    label: `@${a.name}`,
+    hint: a.job || "Agent",
+    text: `@${a.name} `,
+  }));
+  if (channelName && channelName !== "general") {
+    items.unshift({
+      id: "summarize",
+      label: "Summarize thread",
+      hint: "Catch up",
+      text: "@swarm Please summarize what we know so far in this channel. ",
+    });
+  } else {
+    items.unshift({
+      id: "standup",
+      label: "What’s blocking us?",
+      hint: "@swarm",
+      text: "@swarm What's blocking us right now? ",
+    });
+  }
+  return items.slice(0, 4);
 }
 
 function traceLabel(e) {

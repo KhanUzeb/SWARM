@@ -82,6 +82,7 @@ export default function App() {
   const [chatModel, setChatModelState] = useState(() => {
     try { return localStorage.getItem("swarm.chat_model") || ""; } catch { return ""; }
   });
+  const [composerPrefill, setComposerPrefill] = useState("");
 
   function setChatModel(value) {
     setChatModelState(value || "");
@@ -745,6 +746,8 @@ export default function App() {
               order={order}
               agents={agents}
               allAgents={allAgents}
+              channelName={current.name}
+              onQuickStart={(text) => setComposerPrefill(text)}
               user={user}
               onReply={onReply}
               onReact={onReact}
@@ -835,6 +838,8 @@ export default function App() {
               onModelChange={setChatModel}
               working={chatBusy}
               onStop={stopChat}
+              prefill={composerPrefill}
+              onPrefillConsumed={() => setComposerPrefill("")}
             />
           </>
         )}
@@ -907,7 +912,7 @@ export default function App() {
           </WorkRailSheet>
         );
       })()}
-      {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) setChannel(id); flash("Created", "success"); }} />}
+      {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) { setChannel(id); setMainView("talk"); } flash("Created", "success"); }} />}
 
       {computerOpen && (
         <ComputerPanel
@@ -1006,10 +1011,33 @@ function FilesView({ computer }) {
 }
 
 function AgentsView({ agents, onOpenChannel }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const filtered = agents.filter(a => !q
+    || (a.name || "").toLowerCase().includes(q)
+    || (a.display_name || "").toLowerCase().includes(q)
+    || (a.job || "").toLowerCase().includes(q));
   return (
     <div id="log" className="agents-view">
+      <header className="agents-view-head">
+        <div>
+          <h2 className="agents-view-title">Agents</h2>
+          <p className="agents-view-sub text-subtle">{agents.length} teammate{agents.length === 1 ? "" : "s"} · open a 1:1 to work</p>
+        </div>
+        <input
+          type="search"
+          className="input agents-view-search"
+          placeholder="Filter agents…"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          aria-label="Filter agents"
+        />
+      </header>
       <ScrollArea className="agents-grid">
-        {agents.map(a => (
+        {filtered.length === 0 && (
+          <p className="agents-view-empty text-subtle">No agents match “{query.trim()}”.</p>
+        )}
+        {filtered.map(a => (
           <Card key={a.name} interactive padded onClick={() => onOpenChannel(a.dm_channel_id)}>
             <div className="agent-card-head">
               <Avatar name={a.display_name || a.name} kind="agent" size="lg" avatar={a.avatar} />
