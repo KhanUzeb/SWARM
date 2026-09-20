@@ -1,12 +1,7 @@
 fastapi>=0.141.1
 uvicorn[standard]>=0.52.4
-<<<<<<< HEAD
 python-dotenv>=1.2.3
-aiosqlite>=0.20
-=======
-python-dotenv>=1.0
 aiosqlite>=0.22.1
->>>>>>> origin/dependabot/pip/aiosqlite-gte-0.22.1
 websockets>=17.1
 httpx>=0.28.1
 openai>=1.30
