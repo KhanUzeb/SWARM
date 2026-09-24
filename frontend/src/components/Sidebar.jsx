@@ -30,7 +30,16 @@ function NavIcon({ name }) {
 
 export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings, onDeleteChannel, currentView, onViewChange, workAttentionCount, pinned = [], open = false, onClose }) {
   const [search, setSearch] = useState("");
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem("swarm.sidebar_collapsed") === "1"; } catch { return false; }
+  });
+
+  function toggleCollapsed() {
+    setCollapsed(c => {
+      try { localStorage.setItem("swarm.sidebar_collapsed", c ? "0" : "1"); } catch { /* private mode */ }
+      return !c;
+    });
+  }
 
   const q = search.trim().toLowerCase();
   const matchChannel = (c) => !q || (c.name || "").toLowerCase().includes(q);
@@ -50,7 +59,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
         <div className="brand">
           <span className="brand-mark">swarm</span>
         </div>
-        <button className="btn btn-ghost btn-icon" onClick={() => setCollapsed(c => !c)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed}>⇥</button>
+        <button className="btn btn-ghost btn-icon" onClick={toggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed}>⇥</button>
         <button className="btn btn-ghost btn-icon tooltip-trigger" data-tooltip="New message" onClick={onNewDM} aria-label="New message">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
@@ -80,6 +89,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
           placeholder="Search channels, agents…"
           value={search}
           onChange={e => setSearch(e.target.value)}
+          onKeyDown={e => { if (e.key === "Escape") setSearch(""); }}
           className="input input-search"
           aria-label="Filter channels and agents"
         />
@@ -186,8 +196,8 @@ function Section({ title, children, action, actionLabel }) {
 function ChannelItem({ channel, active, onClick, dm, onDelete }) {
   return (
     <li className="channel-item">
-      <button className={`channel-link ${active ? "active" : ""}`} onClick={onClick}>
-        <span className={`channel-dot ${dm ? "dm" : ""}`} />
+      <button className={`channel-link ${active ? "active" : ""}`} onClick={onClick} aria-current={active ? "page" : undefined}>
+        <span className={`channel-dot ${dm ? "dm" : ""}`} aria-hidden />
         <span className="channel-name truncate">{channel.name}</span>
       </button>
       {onDelete && !dm && (
@@ -206,13 +216,14 @@ function ChannelItem({ channel, active, onClick, dm, onDelete }) {
 
 function AgentItem({ agent, active, onClick }) {
   const statusColor = { idle: "offline", working: "online", needs_approval: "warning" }[agent.status] || "offline";
+  const statusText = statusLabel(agent.status);
   return (
     <li className="channel-item">
-      <button className={`channel-link agent-link ${active ? "active" : ""}`} onClick={onClick}>
+      <button className={`channel-link agent-link ${active ? "active" : ""}`} onClick={onClick} aria-current={active ? "page" : undefined} aria-label={`${agent.display_name || agent.name}, ${statusText}`}>
         <Avatar name={agent.display_name || agent.name} kind="agent" size="sm" avatar={agent.avatar} />
-        <span className={`status-dot ${statusColor}`} />
+        <span className={`status-dot ${statusColor}`} aria-hidden />
         <span className="channel-name truncate">{agent.display_name || agent.name}</span>
-        {agent.status === "needs_approval" && <Badge variant="warning" className="ml-auto">!</Badge>}
+        {agent.status === "needs_approval" && <Badge variant="warning" className="ml-auto"><span aria-hidden>!</span><span className="sr-only">Needs approval</span></Badge>}
       </button>
     </li>
   );

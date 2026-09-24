@@ -10,8 +10,65 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
   const [sending, setSending] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelCatalog, setModelCatalog] = useState([]);
+  const [listening, setListening] = useState(false);
   const inputRef = useRef(null);
   const mentionRef = useRef(null);
+  const modelPickerRef = useRef(null);
+  const recogRef = useRef(null);
+
+  // Web Speech dictation (beautifului Prompt-Bar pattern). Rendered only
+  // where the browser supports it — no dead chrome elsewhere.
+  const canDictate = typeof window !== "undefined" &&
+    (window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  function toggleDictation() {
+    if (listening) { try { recogRef.current?.stop(); } catch { /* already stopped */ } return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+    rec.interimResults = false;
+    rec.onresult = (e) => {
+      const text = Array.from(e.results).map(r => r[0]?.transcript || "").join(" ").trim();
+      if (!text) return;
+      setDraft(d => (d && !/\s$/.test(d) ? `${d} ` : d) + text);
+      inputRef.current?.focus();
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recogRef.current = rec;
+    setListening(true);
+    try { rec.start(); } catch { setListening(false); }
+  }
+
+  useEffect(() => () => { try { recogRef.current?.abort?.(); } catch { /* unmount */ } }, []);
+
+  // Never lose a draft: persist per channel (+thread) and restore on return.
+  const draftKey = `swarm.draft.${channelName || "channel"}${compact ? ".thread" : ""}`;
+  useEffect(() => {
+    try { setDraft(localStorage.getItem(draftKey) || ""); }
+    catch { setDraft(""); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+  useEffect(() => {
+    try {
+      if (draft) localStorage.setItem(draftKey, draft);
+      else localStorage.removeItem(draftKey);
+    } catch { /* private mode */ }
+  }, [draft, draftKey]);
+
+  // Close the model popover on outside click / Escape.
+  useEffect(() => {
+    if (!modelOpen) return;
+    function onDown(e) { if (modelPickerRef.current && !modelPickerRef.current.contains(e.target)) setModelOpen(false); }
+    function onKey(e) { if (e.key === "Escape") setModelOpen(false); }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [modelOpen]);
 
   const providerOf = useCallback((modelId) => {
     const hit = (modelCatalog || []).find(m => m.id === modelId);
@@ -133,6 +190,12 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
   const ctxPct = contextStats && contextStats.budget_chars
     ? Math.min(100, Math.round((contextStats.total_chars / contextStats.budget_chars) * 100))
     : null;
+  const popupOpen = mention.open || slash.open;
+  const activeId = mention.open
+    ? `composer-mention-option-${mention.index}`
+    : slash.open
+      ? `composer-slash-option-${slash.index}`
+      : undefined;
 
   return (
     <div id="composer" className={offline ? "is-offline" : ""}>
@@ -187,7 +250,7 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
         </div>
       )}
       <div className="composer-model-row">
-        <div className="composer-model-picker">
+        <div className="composer-model-picker" ref={modelPickerRef}>
           <button
             type="button"
             className={`model-chip${model ? " set" : ""}`}
@@ -246,7 +309,29 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
           placeholder={placeholder || `Message ${channelName || "channel"}…`}
           rows={1}
           aria-label="Message input"
+          aria-describedby={compact ? undefined : "composer-hint"}
+          role="combobox"
+          aria-expanded={popupOpen}
+          aria-controls={mention.open ? "composer-mention-list" : slash.open ? "composer-slash-list" : undefined}
+          aria-activedescendant={activeId}
+          aria-autocomplete="list"
         />
+
+        {canDictate && (
+          <button
+            type="button"
+            className={`composer-mic-btn${listening ? " listening" : ""}`}
+            onClick={toggleDictation}
+            aria-pressed={listening}
+            aria-label={listening ? "Stop dictation" : "Dictate message"}
+            title={listening ? "Stop dictation" : "Dictate message (voice input)"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+              <rect x="9" y="2" width="6" height="12" rx="3" />
+              <path d="M5 10a7 7 0 0 0 14 0M12 17v4" />
+            </svg>
+          </button>
+        )}
 
         {working && (
           <button
@@ -267,6 +352,8 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
           onClick={send}
           disabled={!canSend || sending}
           aria-label={sending ? "Sending…" : "Send message"}
+          title="Send (Enter)"
+          aria-keyshortcuts="Enter"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" />
@@ -274,10 +361,11 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
         </button>
 
         {mention.open && (
-          <ul className="mention-menu" ref={mentionRef} role="listbox">
+          <ul className="mention-menu" ref={mentionRef} role="listbox" id="composer-mention-list" aria-label="Mention suggestions">
             {mention.items.map((item, i) => (
-              <li key={item.name}>
+              <li key={item.name} role="presentation">
                 <button
+                  id={`composer-mention-option-${i}`}
                   className={`mention-item ${i === mention.index ? "active" : ""}`}
                   onMouseDown={(e) => { e.preventDefault(); insertMention(item); }}
                   role="option"
@@ -292,10 +380,11 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
         )}
 
         {slash.open && slashItems().length > 0 && (
-          <ul className="mention-menu slash-menu" role="listbox" aria-label="Command suggestions">
+          <ul className="mention-menu slash-menu" role="listbox" id="composer-slash-list" aria-label="Command suggestions">
             {slashItems().map((item, i) => (
-              <li key={item.name}>
+              <li key={item.name} role="presentation">
                 <button
+                  id={`composer-slash-option-${i}`}
                   className={`mention-item ${i === slash.index ? "active" : ""}`}
                   onMouseDown={(e) => { e.preventDefault(); insertCommand(item); }}
                   role="option"
@@ -311,7 +400,7 @@ export function Composer({ onSend, placeholder, channelName, agents, compact, th
         )}
       </div>
       {!compact && (
-        <p className="composer-hint text-subtle" aria-hidden>
+        <p className="composer-hint text-subtle" id="composer-hint" aria-hidden>
           <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline
         </p>
       )}

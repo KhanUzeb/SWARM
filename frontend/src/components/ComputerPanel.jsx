@@ -42,7 +42,7 @@ export function ComputerPanel({ computer, token, user, meRole, onClose, onRefres
 
   if (!computer && activeTab === "files") {
     return (
-      <aside id="computer-panel">
+      <aside id="computer-panel" aria-label="Computer panel">
         <PanelChrome activeGroup={activeGroup} activeTab={activeTab} onSelectTab={selectTab} onClose={onClose} onRefresh={onRefresh} subtitle="Workspace offline" />
         <EmptyState kind="sandbox" title="Sandbox offline" message="Could not load workspace data. Agents can still use tools when configured." />
       </aside>
@@ -50,7 +50,7 @@ export function ComputerPanel({ computer, token, user, meRole, onClose, onRefres
   }
 
   return (
-    <aside id="computer-panel">
+    <aside id="computer-panel" aria-label="Computer panel">
       <PanelChrome
         activeGroup={activeGroup}
         activeTab={activeTab}

@@ -24,9 +24,11 @@
   --color-bubble-user-muted: rgba(255, 255, 255, 0.65);
 
   --color-text-primary: #f4f0fa;
-  --color-text-secondary: #b9b3cc;
-  --color-text-muted: #8b85a3;
-  --color-text-subtle: #5f5a76;
+  --color-text-secondary: #c6c0d9;
+  --color-text-muted: #a09ab8;
+  /* Subtle is decorative/meta only — never body text (contrast < 4.5:1).
+     Muted and above meet WCAG AA on the night surfaces. */
+  --color-text-subtle: #7e7894;
 
   /* Semantic token aliases (plan §35) */
   --bg-canvas: var(--color-bg);
@@ -121,6 +123,10 @@
   --transition-base: 200ms var(--ease-out);
   --transition-slow: 320ms var(--ease-out);
   
+  /* ── Focus & touch ── */
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-brand);
+  --touch-min: 36px;
+  --touch-comfort: 44px;
   /* ── Z-index ── */
   --z-dropdown: 100;
   --z-modal: 200;
@@ -168,6 +174,7 @@ html, body, #root {
 
 html {
   font-size: 15px;
+  color-scheme: dark light;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -215,6 +222,28 @@ body::after {
   }
 }
 #root { position: relative; z-index: 1; }
+
+/* Skip link: keyboard + screen-reader fast path past the sidebar.
+   Visually hidden until focused — no persistent chrome. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 999;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-brand-bg);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transform: translateY(-200%);
+  transition: transform var(--transition-fast);
+}
+.skip-link:focus-visible {
+  transform: none;
+  box-shadow: var(--focus-ring);
+}
 
 :focus-visible {
   outline: none;
@@ -1049,11 +1078,49 @@ body::after {
   .login-orb { animation: none !important; }
 }
 
+/* Higher-contrast preference: strengthen hairlines so surfaces don't
+   wash together when the OS asks for more distinction. */
+@media (prefers-contrast: more) {
+  :root {
+    --color-border: rgba(235, 230, 255, 0.18);
+    --color-border-strong: rgba(235, 230, 255, 0.28);
+    --color-text-muted: #b7b1cb;
+    --color-text-subtle: #9892ad;
+  }
+}
+
+/* Forced-colors (Windows High Contrast): drop decorative fills so the
+   OS palette owns surfaces; keep focus and state perceivable. */
+@media (forced-colors: active) {
+  .msg-actions, .dropdown-menu, .toast, .modal, .cmd-palette {
+    border: 1px solid CanvasText;
+  }
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+}
+
+/* Balanced display headings; body copy keeps a readable measure. */
+h1, h2, h3 { text-wrap: balance; }
+p, .body { overflow-wrap: break-word; }
+
 /* ── Focus Ring for Keyboard Navigation ── */
 :focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-brand);
+  box-shadow: var(--focus-ring);
 }
+
+/* Tooltips appear for keyboard focus as well as hover — parity for
+   non-pointer users (WCAG 1.4.13). */
+.tooltip-trigger:focus-visible[data-tooltip]::after,
+.tooltip-trigger:focus-visible[data-tooltip]::before {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(-4px);
+}
+.tooltip-trigger:focus-visible[data-tooltip]::before { transform: translateX(-50%); }
 
 /* ── Selection ── */
 ::selection { background: var(--color-brand-subtle); color: var(--color-text-primary); }

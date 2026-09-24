@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Single source of truth for rich-text parsing lives in lib.js —
+// this module only owns rendering (AGENTS.md: one source of truth).
+import { tokenizeBody, formatInline } from "./lib.js";
 
 // ── API & Utilities (ported from lib.js) ──
 
@@ -89,39 +92,7 @@ function renderMath(tex, display) {
   return `<code class="math-fallback">${escapeHtml(tex)}</code>`;
 }
 
-// ── Rich Text Tokenizer (simplified) ──
-
-function tokenizeBody(body) {
-  if (!body) return [{ type: "text", text: "" }];
-  const parts = [];
-  let last = 0;
-  const codeRegex = /```(\w*)\n([\s\S]*?)```/g;
-  const mathDisplayRegex = /\$\$([\s\S]*?)\$\$/g;
-  const mathInlineRegex = /\$([^\$\n]+?)\$/g;
-  
-  // Simple approach: split by code blocks first
-  const codeMatches = [...body.matchAll(codeRegex)];
-  if (codeMatches.length === 0) {
-    // Check for math
-    const displayMatches = [...body.matchAll(mathDisplayRegex)];
-    const inlineMatches = [...body.matchAll(mathInlineRegex)];
-    if (displayMatches.length === 0 && inlineMatches.length === 0) {
-      return [{ type: "text", text: body }];
-    }
-  }
-  
-  // For simplicity, return as text with basic formatting
-  return [{ type: "text", text: body }];
-}
-
-function formatInline(text) {
-  return escapeHtml(text)
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/`(.+?)`/g, "<code>$1</code>")
-    .replace(/@(\w+)/g, '<span class="mention">@$1</span>')
-    .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-}
+// ── Rich Text (parsing: lib.js; rendering: here) ──
 
 function RichBody({ body }) {
   const parts = useMemo(() => tokenizeBody(body), [body]);
@@ -140,21 +111,45 @@ function RichBody({ body }) {
 
 function CodeBlock({ lang, text }) {
   const [copied, setCopied] = useState(false);
+  const lines = String(text ?? "").split("\n");
   return (
     <div className="code-block">
       <div className="code-head">
         <span className="text-mono-xs text-subtle">{lang || "text"}</span>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1400);
-          } catch { /* ignore */ }
-        }}>
-          {copied ? "Copied" : "Copy"}
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          aria-label={copied ? "Copied to clipboard" : `Copy ${lang || "code"} to clipboard`}
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(text);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1400);
+            } catch { /* clipboard unavailable — selection still works */ }
+          }}
+        >
+          <span aria-live="polite">{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
-      <pre><code>{escapeHtml(text)}</code></pre>
+      <pre className="code-lines" tabIndex={0} aria-label={`${lang || "Code"} block, ${lines.length} line${lines.length === 1 ? "" : "s"}`}>
+        <code>
+          {lines.map((line, i) => {
+            const trimmed = line.trimStart();
+            const diffClass = trimmed.startsWith("+") && !trimmed.startsWith("+++")
+              ? " diff-add"
+              : trimmed.startsWith("-") && !trimmed.startsWith("---")
+                ? " diff-del"
+                : "";
+            return (
+              <span key={i} className={`code-line${diffClass}`}>
+                <span className="code-lineno" aria-hidden>{i + 1}</span>
+                <span className="code-linetext">{line === "" ? " " : line}</span>
+                {"\n"}
+              </span>
+            );
+          })}
+        </code>
+      </pre>
     </div>
   );
 }
@@ -196,7 +191,7 @@ function Badge({ children, variant = "neutral", className = "" }) {
   return <span className={`badge ${variants[variant]} ${className}`}>{children}</span>;
 }
 
-function Button({ children, variant = "secondary", size = "md", className = "", icon, loading, ...props }) {
+function Button({ children, variant = "secondary", size = "md", className = "", icon, loading, type = "button", ...props }) {
   const variants = {
     primary: "btn-primary",
     secondary: "btn-secondary",
@@ -205,15 +200,17 @@ function Button({ children, variant = "secondary", size = "md", className = "", 
     danger: "btn-danger",
   };
   const sizes = { sm: "btn-sm", md: "", lg: "btn-lg" };
-  
+
   return (
     <button
+      type={type}
       className={`btn ${variants[variant]} ${sizes[size]} ${className}`}
       disabled={loading || props.disabled}
+      aria-busy={loading || undefined}
       {...props}
     >
-      {loading && <span className="spinner spinner-sm" />}
-      {!loading && icon && <span className="btn-icon-start">{icon}</span>}
+      {loading && <span className="spinner spinner-sm" aria-hidden />}
+      {!loading && icon && <span className="btn-icon-start" aria-hidden>{icon}</span>}
       {children}
     </button>
   );
@@ -223,6 +220,7 @@ function Input({ className = "", error, ...props }) {
   return (
     <input
       className={`input ${error ? "input-error" : ""} ${className}`}
+      aria-invalid={error ? true : undefined}
       {...props}
     />
   );
@@ -243,44 +241,76 @@ function Card({ children, className = "", padded = true, interactive, ...props }
 function Dropdown({ trigger, items, align = "right", label = "Menu" }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const triggerRef = useRef(null);
+  const itemRefs = useRef([]);
+
+  const actionable = (items || []).filter(item => item && item !== "divider" && !item.section);
 
   useEffect(() => {
     function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
-    function handleKey(e) { if (e.key === "Escape") setOpen(false); }
     document.addEventListener("mousedown", handleClick);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleKey);
-    };
+    return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
+  // Focus the first item on open; return focus to the trigger on close.
+  useEffect(() => {
+    if (open) {
+      itemRefs.current = [];
+      requestAnimationFrame(() => itemRefs.current[0]?.focus());
+    }
+  }, [open ]);
+
+  function close(returnFocus = false) {
+    setOpen(false);
+    if (returnFocus) triggerRef.current?.focus();
+  }
+
+  function onTriggerKey(e) {
+    if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+      e.preventDefault();
+      setOpen(o => !o);
+    }
+  }
+
+  function onMenuKey(e) {
+    const idx = itemRefs.current.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); close(true); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); itemRefs.current[(idx + 1) % itemRefs.current.length]?.focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); itemRefs.current[(idx - 1 + itemRefs.current.length) % itemRefs.current.length]?.focus(); }
+    else if (e.key === "Home") { e.preventDefault(); itemRefs.current[0]?.focus(); }
+    else if (e.key === "End") { e.preventDefault(); itemRefs.current[itemRefs.current.length - 1]?.focus(); }
+    else if (e.key === "Tab") { setOpen(false); }
+  }
+
+  let actionIdx = -1;
   return (
     <div className="dropdown" ref={ref}>
       <span
+        ref={triggerRef}
         role="button"
         tabIndex={0}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}
         onClick={() => setOpen(o => !o)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(o => !o); }
-        }}
+        onKeyDown={onTriggerKey}
       >{trigger}</span>
       {open && (
-        <div className="dropdown-menu" role="menu" style={{ [align]: 0 }}>
-          {items.filter(item => item !== "divider").map((item, i) => {
-            if (item === "divider") return <div key={`div-${i}`} className="dropdown-divider" />;
+        <div className="dropdown-menu" role="menu" aria-label={label} style={{ [align]: 0 }} onKeyDown={onMenuKey}>
+          {(items || []).map((item, i) => {
+            if (item === "divider") return <div key={`div-${i}`} className="dropdown-divider" role="separator" />;
             if (item.section) return <div key={`sec-${i}`} className="dropdown-section">{item.section}</div>;
+            actionIdx++;
+            const refIdx = actionIdx;
             return (
               <button
                 key={item.id || i}
+                ref={el => { itemRefs.current[refIdx] = el; }}
                 role="menuitem"
                 className={`dropdown-item ${item.danger ? "danger" : ""}`}
-                onClick={() => { item.onClick?.(); setOpen(false); }}
+                onClick={() => { item.onClick?.(); close(); }}
               >
-                {item.icon && <span>{item.icon}</span>}
+                {item.icon && <span aria-hidden>{item.icon}</span>}
                 {item.label}
                 {item.shortcut && <span className="text-mono-xs text-subtle ml-auto">{item.shortcut}</span>}
               </button>
@@ -306,16 +336,16 @@ function ToastContainer() {
   }, []);
   
   if (toasts.length === 0) return null;
-  
+
   return (
-    <div className="toast-container">
+    <div className="toast-container" role="status" aria-live="polite">
       {toasts.map(t => (
         <div key={t.id} className={`toast ${t.type}`}>
           <div className="toast-content">
             {t.title && <div className="toast-title">{t.title}</div>}
             <div className="toast-message">{t.message}</div>
           </div>
-          <button className="toast-close" onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}>×</button>
+          <button className="toast-close" aria-label="Dismiss notification" onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}>×</button>
         </div>
       ))}
     </div>
@@ -323,12 +353,44 @@ function ToastContainer() {
 }
 
 function Modal({ open, onClose, title, children, footer, size = "md" }) {
+  const panelRef = useRef(null);
+  const previouslyFocused = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    previouslyFocused.current = document.activeElement;
+    // Move focus into the dialog; restore it on unmount.
+    requestAnimationFrame(() => {
+      const first = panelRef.current?.querySelector(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      (first || panelRef.current)?.focus?.();
+    });
+    function onKey(e) {
+      if (e.key === "Escape") { e.preventDefault(); onClose?.(); return; }
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const focusables = [...panelRef.current.querySelectorAll(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      )];
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      previouslyFocused.current?.focus?.();
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
   const sizes = { sm: "max-w-[360px]", md: "max-w-[480px]", lg: "max-w-[640px]" };
   
   return (
     <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="modal-title">
-      <div className={`modal ${sizes[size]}`} onClick={e => e.stopPropagation()}>
+      <div ref={panelRef} tabIndex={-1} className={`modal ${sizes[size]}`} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h2 id="modal-title" className="modal-title">{title}</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
@@ -345,7 +407,7 @@ function Skeleton({ className = "", ...props }) {
 }
 
 function Spinner({ size = "md", className = "" }) {
-  return <span className={`spinner spinner-${size} ${className}`} />;
+  return <span className={`spinner spinner-${size} ${className}`} aria-hidden />;
 }
 
 const EMPTY_GRAPHICS = {
@@ -393,8 +455,8 @@ function EmptyState({ kind = "default", icon, title, message, action }) {
       <div className="empty-state-icon" aria-hidden>
         {typeof icon === "object" ? icon : graphic}
       </div>
-      <div className="empty-state-title">{title}</div>
-      <div className="empty-state-message">{message}</div>
+      <p className="empty-state-title">{title}</p>
+      <p className="empty-state-message">{message}</p>
       {action}
     </div>
   );

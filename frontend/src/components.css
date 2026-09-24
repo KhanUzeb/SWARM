@@ -23,14 +23,18 @@
 
 .sidebar-search { padding: 0 var(--space-3) var(--space-3); }
 .sidebar-empty { padding: var(--space-3) var(--space-4); font-size: 12px; color: var(--color-text-muted); }
-.sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: var(--space-4); }
+.sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: var(--space-4); overscroll-behavior: contain; }
 .sidebar-nav { display: flex; flex-direction: column; }
 
 .sidebar-section { margin-bottom: var(--space-2); }
 .section-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-4) var(--space-1); }
 .section-label { font-size: 12px; font-weight: 510; letter-spacing: -0.01em; color: var(--color-text-subtle); }
 .section-action { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; color: var(--color-text-subtle); background: transparent; border: none; border-radius: var(--radius-md); cursor: pointer; transition: all var(--transition-fast); opacity: 0; }
-.sidebar-section:hover .section-action { opacity: 1; }
+/* Reveal on keyboard focus too — opacity keeps the button tabbable,
+   unlike display:none which removes it from the tab order entirely. */
+.sidebar-section:hover .section-action,
+.sidebar-section:focus-within .section-action { opacity: 1; }
+.section-action:focus-visible { opacity: 1; }
 .section-action:hover { color: var(--color-text-primary); background: rgba(255, 255, 255, 0.06); }
 
 .channel-list { list-style: none; margin: 0; padding: 0 var(--space-2); }
@@ -155,7 +159,12 @@
   flex: 1; min-height: 0; overflow-y: auto;
   padding: var(--space-6) 0 var(--space-4);
   scroll-behavior: smooth;
+  /* Keep scroll chaining inside the transcript; reserve gutter so the
+     layout doesn't shift when scrollbars appear. */
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
+#log:focus-visible { box-shadow: inset var(--focus-ring); }
 .log-inner { max-width: 720px; margin: 0 auto; padding: 0 var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); }
 .log-empty { display: flex; align-items: center; justify-content: center; height: 100%; padding: var(--space-8); }
 .talk-empty { max-width: 420px; text-align: center; }
@@ -218,6 +227,10 @@
   flex-direction: column;
   align-items: flex-start;
   max-width: 100%;
+  /* Long transcripts stay fast: skip offscreen rows (shadcn
+     MessageScroller guidance) without changing layout. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
 }
 .msg-row.human.me {
   align-items: flex-end;
@@ -300,7 +313,10 @@
   }
 }
 .msg-actions button {
-  width: 28px; height: 28px;
+  /* 32px keeps rows compact while staying near the 44px WCAG target;
+     coarse pointers get a full-size static row below. */
+  min-width: 32px; min-height: 32px;
+  width: 32px; height: 32px;
   display: flex; align-items: center; justify-content: center;
   color: var(--color-text-muted);
   background: transparent;
@@ -471,7 +487,9 @@
   margin: 0 auto;
   padding: 8px 8px 8px 12px;
   background: rgba(255, 255, 255, 0.05);
-  border-radius: var(--radius-full);
+  /* Rounded rect, not a pill: multiline drafts keep readable corners
+     (Linear / shadcn Prompt-Bar pattern). */
+  border-radius: 20px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   transition: box-shadow var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
 }
@@ -589,7 +607,7 @@
 .panel-tab:hover { color: var(--color-text-primary); background: rgba(255,255,255,0.05); }
 .panel-tab.active { color: var(--color-text-primary); background: rgba(255,255,255,0.08); }
 
-.panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4); }
+.panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4); overscroll-behavior: contain; }
 .file-list { display: flex; flex-direction: column; gap: 1px; }
 .file-row { display: flex; align-items: center; gap: var(--space-3); padding: 9px 10px; color: var(--color-text-primary); background: transparent; border: none; border-radius: var(--radius-sm); text-align: left; cursor: pointer; transition: all var(--transition-fast); }
 .file-row:hover { background: var(--color-bg-surface); }
@@ -748,6 +766,10 @@
 .login-security-details p { margin: 0; }
 .login-form { display: flex; flex-direction: column; }
 .login-form label { margin: var(--space-4) 0 var(--space-2); }
+/* Password toggle sits inside the field edge — adjacent, not new chrome. */
+.login-pass-row { position: relative; display: flex; align-items: center; }
+.login-pass-row .input { padding-right: 72px; }
+.login-pass-toggle { position: absolute; right: 6px; flex-shrink: 0; }
 .login-error { margin-top: var(--space-3); }
 .login-submit { margin-top: var(--space-5); justify-content: center; width: 100%; padding: 12px 18px !important; border-radius: var(--radius-full) !important; }
 .login-switch { margin-top: var(--space-4); text-align: center; font-size: 13px; color: var(--color-text-muted); }
@@ -1395,12 +1417,16 @@
 .agent-bubble .msg-mini-action { background: rgba(255,255,255,0.05); color: var(--color-text-muted); }
 .agent-bubble .msg-mini-action:hover { color: var(--color-text-primary); }
 .channel-item { position: relative; display: flex; align-items: center; }
+.channel-item:focus-within .channel-delete { opacity: 1; }
 .channel-item .channel-link { flex: 1; min-width: 0; }
 .channel-delete {
-  display: none; margin-left: auto; padding: 2px 8px; font-size: 14px; line-height: 1;
+  opacity: 0;
+  margin-left: auto; padding: 2px 8px; font-size: 14px; line-height: 1;
+  min-width: var(--touch-min); min-height: var(--touch-min);
   color: var(--color-text-subtle); background: none; border: none; border-radius: var(--radius-sm); cursor: pointer;
 }
-.channel-item:hover .channel-delete, .channel-item:focus-within .channel-delete { display: inline-block; }
+.channel-item:hover .channel-delete, .channel-item:focus-within .channel-delete { opacity: 1; }
+.channel-delete:focus-visible { opacity: 1; }
 .channel-delete:hover { color: var(--color-error); background: var(--color-error-bg); }
 
 /* ── Knowledge view ── */
@@ -1515,6 +1541,8 @@
 @media (prefers-reduced-motion: reduce) {
   .pulse-dot.violet, .attention-dot, .conn-connecting .conn-dot { animation: none; }
   .app.workspace.work-rail-open #work-rail:not(.collapsed) { animation: none; }
+  .stream-caret, .streaming-cursor, .typing-dots span,
+  .pixel, .bui-pixel, .bui-shimmer, .spinner { animation: none !important; }
   * { scroll-behavior: auto !important; }
 }
 /* ── Plan upgrade: 5-concept IA + Work hero + trust UX ── */
@@ -1632,8 +1660,35 @@
 /* ── Composer stop / mic / model-auto ── */
 .composer-stop-btn { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--state-danger); background: rgba(229, 96, 92, 0.12); color: var(--state-danger); cursor: pointer; flex-shrink: 0; }
 .composer-stop-btn:hover { background: rgba(229, 96, 92, 0.22); }
+.composer-mic-btn { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid transparent; background: transparent; color: var(--color-text-muted); cursor: pointer; flex-shrink: 0; transition: all var(--transition-fast); }
+.composer-mic-btn:hover { color: var(--color-text-primary); background: rgba(255, 255, 255, 0.06); }
+/* Listening state pairs color with a pulsing ring + label — never
+   color alone (beautifului Prompt Bar dictation pattern). */
+.composer-mic-btn.listening { color: var(--accent-magenta); border-color: rgba(229, 73, 155, 0.5); background: var(--accent-magenta-soft); animation: mic-pulse 1.6s ease-in-out infinite; }
+@keyframes mic-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(229, 73, 155, 0.35); } 50% { box-shadow: 0 0 0 6px rgba(229, 73, 155, 0); } }
 .model-auto-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border-radius: var(--radius-sm); background: transparent; border: 0; color: var(--color-text-secondary); font-size: 13px; cursor: pointer; text-align: left; }
 .model-auto-row:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .model-auto-row.selected { color: var(--color-text-primary); }
 .stopped-bubble { border-style: dashed; }
+
+/* ── Code Block: line numbers + diff tint (beautifului Code Block) ── */
+.code-block pre.code-lines { padding: 0; }
+.code-line { display: flex; min-width: max-content; }
+.code-line:hover { background: rgba(255, 255, 255, 0.03); }
+.code-lineno {
+  flex-shrink: 0;
+  width: 3ch;
+  margin-right: 12px;
+  padding: 0;
+  text-align: right;
+  color: var(--color-text-subtle);
+  user-select: none;
+}
+.code-linetext { white-space: pre; }
+/* Diff rows tint the whole line and keep the +/- glyph in text so the
+   meaning survives without color. */
+.code-line.diff-add { background: rgba(93, 163, 122, 0.10); }
+.code-line.diff-add .code-linetext { color: var(--color-success); }
+.code-line.diff-del { background: rgba(229, 96, 92, 0.10); }
+.code-line.diff-del .code-linetext { color: var(--color-error); }
 

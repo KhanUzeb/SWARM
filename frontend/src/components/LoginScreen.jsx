@@ -4,6 +4,7 @@ import { Button, Input } from "../ui.jsx";
 export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [mode, setMode] = useState("login");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -36,7 +37,7 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
       <div className="login-card">
         <h1 className="login-title">{mode === "login" ? "Sign in" : "Create workspace"}</h1>
 
-        <form onSubmit={submit} className="login-form">
+        <form onSubmit={submit} className="login-form" noValidate={false}>
           <label className="text-label" htmlFor="login-handle">Handle</label>
           <Input
             id="login-handle"
@@ -45,21 +46,36 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }) {
             placeholder="your-name"
             autoFocus
             autoComplete="username"
+            aria-invalid={!!error}
+            aria-describedby={error ? "login-error" : undefined}
           />
 
           <label className="text-label" htmlFor="login-pass">
             Password {mode === "setup" && <span className="text-subtle">(new)</span>}
           </label>
-          <Input
-            id="login-pass"
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            placeholder={mode === "setup" ? "Create a password" : "Your password"}
-            autoComplete={mode === "setup" ? "new-password" : "current-password"}
-          />
+          <div className="login-pass-row">
+            <Input
+              id="login-pass"
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder={mode === "setup" ? "Create a password" : "Your password"}
+              autoComplete={mode === "setup" ? "new-password" : "current-password"}
+              aria-invalid={!!error}
+              aria-describedby={error ? "login-error" : undefined}
+            />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm login-pass-toggle"
+              onClick={() => setShowPassword(s => !s)}
+              aria-pressed={showPassword}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? "Hide" : "Show"}
+            </button>
+          </div>
 
-          {error && <p className="login-error text-error text-sm">{error}</p>}
+          {error && <p id="login-error" className="login-error text-error text-sm" role="alert">{error}</p>}
 
           <Button type="submit" variant="primary" size="lg" loading={busy} className="login-submit">
             {mode === "login" ? "Sign in" : "Create workspace"}

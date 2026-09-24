@@ -149,7 +149,7 @@ function toolIcon(kind) {
  */
 export function ApprovalCard({ approval, onResolve }) {
   return (
-    <div className="approval-card">
+    <div className="approval-card" role="group" aria-label={`Approval requested by ${approval.agent_name}`}>
       <div className="approval-head">
         <Avatar name={approval.agent_name} kind="agent" size="sm" />
         <div>
@@ -172,19 +172,21 @@ export function ApprovalCard({ approval, onResolve }) {
  */
 export function TaskRow({ task }) {
   const statusColor = { running: "brand", completed: "success", failed: "error", pending: "subtle" }[task.status] || "subtle";
+  const pct = task.progress != null ? Math.round(task.progress * 100) : null;
   return (
     <div className={`task-row status-${statusColor}`}>
-      <span className="task-status-icon">
+      <span className="task-status-icon" aria-hidden>
         {task.status === "running" && <span className="spinner spinner-sm" />}
         {task.status === "completed" && "✅"}
         {task.status === "failed" && "❌"}
         {task.status === "pending" && "○"}
       </span>
       <span className="task-name">{task.name}</span>
-      {task.progress != null && (
-        <div className="task-progress"><div className="task-progress-bar" style={{ width: `${task.progress * 100}%` }} /></div>
+      {pct != null && (
+        <div className="task-progress" role="progressbar" aria-label={task.name} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}><div className="task-progress-bar" style={{ width: `${pct}%` }} /></div>
       )}
       {task.meta && <span className="task-meta text-mono-xs text-subtle">{task.meta}</span>}
+      <span className="sr-only">{task.status}{pct != null ? `, ${pct} percent` : ""}</span>
     </div>
   );
 }

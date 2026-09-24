@@ -480,6 +480,16 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [user]);
 
+  // Keep the tab title in sync (visibility of system status, Nielsen #1).
+  useEffect(() => {
+    if (!user) { document.title = "Swarm — self-hosted AI teammates in team chat"; return; }
+    const viewLabel = { dashboard: "Home", home: "Home", work: "Work", workflows: "Work", runs: "Work", talk: null, paper: "Paper", files: "Files", agents: "Agents", knowledge: "Knowledge" }[mainView];
+    const attention = workAttention.length > 0 ? `(${workAttention.length}) ` : "";
+    document.title = viewLabel
+      ? `${attention}${viewLabel} · Swarm`
+      : `${attention}#${current?.name || channel} · Swarm`;
+  }, [user, mainView, current?.name, channel, workAttention.length]);
+
   function persistOutbox(next) {
     setOutbox(next);
     try { localStorage.setItem("swarm.outbox", JSON.stringify(next)); } catch { /* private mode */ }
@@ -684,6 +694,7 @@ export default function App() {
 
   return (
     <div className={`app workspace ${threadId ? "thread-open" : ""} ${computerOpen ? "computer-open" : ""} ${workRailOpen ? "work-rail-open" : ""}`}>
+      <a className="skip-link" href="#main">Skip to messages</a>
       <Sidebar
         user={user}
         channels={channels}
@@ -737,7 +748,7 @@ export default function App() {
           participants={[...new Set(order.map(id => messages[id]?.author).filter(Boolean))]}
         />
 
-        <main id="main">
+        <main id="main" tabIndex={-1} aria-label={mainView === "talk" ? `Messages in ${current.name}` : `${mainView} view`}>
           {["dashboard", "home"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
           {["work", "workflows", "runs"].includes(mainView) && <WorkHome token={token} onOpenRun={setSelectedRun} />}
           {mainView === "talk" && (
@@ -1038,7 +1049,18 @@ function AgentsView({ agents, onOpenChannel }) {
           <p className="agents-view-empty text-subtle">No agents match “{query.trim()}”.</p>
         )}
         {filtered.map(a => (
-          <Card key={a.name} interactive padded onClick={() => onOpenChannel(a.dm_channel_id)}>
+          <Card
+            key={a.name}
+            interactive
+            padded
+            onClick={() => onOpenChannel(a.dm_channel_id)}
+            role="button"
+            tabIndex={0}
+            aria-label={`Open 1:1 with ${a.display_name || a.name}, ${statusLabel(a.status)}`}
+            onKeyDown={e => {
+              if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenChannel(a.dm_channel_id); }
+            }}
+          >
             <div className="agent-card-head">
               <Avatar name={a.display_name || a.name} kind="agent" size="lg" avatar={a.avatar} />
               <div className="agent-card-meta">
@@ -1063,7 +1085,7 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
   const replies = threadReplies.length > 0 ? threadReplies : Object.values(messages).filter(m => m.parent_id === parentId);
   const replyOrder = replies.map(r => r.id);
   return (
-    <aside id="thread-panel">
+    <aside id="thread-panel" aria-label="Thread replies">
       <div className="panel-header">
         <div className="panel-header-main">
           <span className="panel-icon" aria-hidden>

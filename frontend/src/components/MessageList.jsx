@@ -38,7 +38,7 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
 
   if (roots.length === 0 && !loadingMore) {
     return (
-      <div id="log" className="log-empty">
+      <div id="log" className="log-empty" role="log" aria-label={channelName ? `Messages in ${channelName}` : "Messages"}>
         <div className="empty-state talk-empty">
           <div className="empty-state-icon" aria-hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -69,9 +69,16 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
   }
 
   return (
-    <div id="log" ref={logRef} onScroll={handleScroll}>
+    <div
+      id="log"
+      ref={logRef}
+      onScroll={handleScroll}
+      role="log"
+      aria-label={channelName ? `Messages in ${channelName}` : "Messages"}
+      tabIndex={0}
+    >
       {!pinned && roots.length > 0 && (
-        <button type="button" className="jump-latest" onClick={jumpToLatest}>
+        <button type="button" className="jump-latest" onClick={jumpToLatest} aria-label="Jump to latest messages">
           ↓ Latest
         </button>
       )}
@@ -155,11 +162,13 @@ export function MessageList({ messages, order, agents, allAgents, user, onReply,
 }
 
 function ReactPicker({ onPick, onClose }) {
+  const firstRef = useRef(null);
+  useEffect(() => { firstRef.current?.focus(); }, []);
   return (
     <div className="react-picker" role="menu" aria-label="Pick a reaction"
       onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
-      {EMOJI.map(emoji => (
-        <button key={emoji} type="button" role="menuitem" className="react-pick"
+      {EMOJI.map((emoji, i) => (
+        <button key={emoji} ref={i === 0 ? firstRef : undefined} type="button" role="menuitem" className="react-pick"
           aria-label={`React with ${emoji}`}
           onClick={() => { onPick(emoji); onClose(); }}>
           {emoji}
@@ -176,12 +185,14 @@ function ReactionChips({ counts, byEmoji, myHandle, onToggle }) {
     <div className="msg-reactions inline">
       {emojis.map((emoji) => {
         const mine = (byEmoji[emoji] || []).includes(myHandle);
+        const who = (byEmoji[emoji] || []).join(", ");
         return (
           <button key={emoji} className={`reaction-chip${mine ? " mine" : ""}`}
             onClick={() => onToggle(emoji)}
-            title={(byEmoji[emoji] || []).join(", ")}
+            title={who}
+            aria-label={`${mine ? "Remove" : "Add"} ${emoji} reaction${who ? ` (${who})` : ""}`}
             aria-pressed={mine}>
-            {emoji} {counts[emoji] > 1 && <span className="reaction-count">{counts[emoji]}</span>}
+            <span aria-hidden>{emoji}</span> {counts[emoji] > 1 && <span className="reaction-count">{counts[emoji]}</span>}
           </button>
         );
       })}
@@ -191,6 +202,17 @@ function ReactionChips({ counts, byEmoji, myHandle, onToggle }) {
 
 function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, onReact, onUnreact, onDelete, onOpenThread, onRetry, retrying, myHandle, streaming, work, workEvents, canDelete }) {
   const [pickOpen, setPickOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef(null);
+  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
+  async function copyBody() {
+    try {
+      await navigator.clipboard.writeText(m.body || "");
+      setCopied(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 1400);
+    } catch { /* clipboard unavailable */ }
+  }
   const counts = {};
   const byEmoji = {};
   for (const r of reactions || []) {
@@ -240,6 +262,9 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
                 </button>
                 {pickOpen && <ReactPicker onPick={(emoji) => onReact(m.id, emoji)} onClose={() => setPickOpen(false)} />}
               </div>
+              <button className="msg-mini-action" onClick={copyBody} aria-label={copied ? "Copied to clipboard" : "Copy message"}>
+                {copied ? "Copied" : "Copy"}
+              </button>
               {!m.parent_id && (
                 <button className="msg-mini-action" onClick={() => onOpenThread(m.id)} aria-label="Open thread">
                   Thread{replyCount > 0 ? ` (${replyCount})` : ""}
@@ -291,7 +316,7 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
                 {work.status === "waiting_for_approval" ? "· needs approval" : `· ${work.status}`}
               </span>
             )}
-            <span className="msg-time">{fmtTime(m.created_at)}</span>
+            <span className="msg-time"><time dateTime={dateTimeOf(m.created_at)}>{fmtTime(m.created_at)}</time></span>
           </div>
         )}
         {(m.streaming || streaming) && !m.body && (
@@ -320,13 +345,20 @@ function MessageRow({ m, grouped, label, agent, reactions, replyCount, onReply, 
           <div className="msg-actions">
             <Tooltip content="Reply">
               <button onClick={() => onReply(m.parent_id || m.id)} aria-label="Reply">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 14L4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><path d="M9 14L4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+              </button>
+            </Tooltip>
+            <Tooltip content={copied ? "Copied" : "Copy"}>
+              <button onClick={copyBody} aria-label={copied ? "Copied to clipboard" : "Copy message"}>
+                {copied
+                  ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><path d="M20 6L9 17l-5-5"/></svg>
+                  : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>}
               </button>
             </Tooltip>
             <div className="react-wrap">
               <Tooltip content="React">
                 <button onClick={() => setPickOpen(o => !o)} aria-label="React" aria-expanded={pickOpen} aria-haspopup="menu">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
                 </button>
               </Tooltip>
               {pickOpen && <ReactPicker onPick={(emoji) => onReact(m.id, emoji)} onClose={() => setPickOpen(false)} />}
@@ -384,6 +416,15 @@ function AgentTrace({ events }) {
       </ol>
     </details>
   );
+}
+
+function dateTimeOf(ts) {
+  if (typeof ts === "number") {
+    const d = new Date(ts * 1000);
+    return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+  }
+  const ms = Date.parse(ts);
+  return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
 }
 
 function toDayKey(m) {

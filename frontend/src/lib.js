@@ -221,6 +221,8 @@ export function formatInline(text) {
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\\subsection\*\{([^}]+)\}/g, '<span class="tex-sub">$1</span>')
+    .replace(/@(\w+)/g, '<span class="mention">@$1</span>')
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
     .replace(/\n/g, "<br />");
 }
 
