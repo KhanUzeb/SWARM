@@ -124,7 +124,19 @@
 }
 .primary-link.active .primary-link-icon { opacity: 1; color: var(--color-brand); }
 .topbar-center { display: flex; align-items: center; }
-.topbar-right { display: flex; align-items: center; gap: var(--space-2); }
+.topbar-right { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+
+/* Mid-width browsers: compress tabs before hiding them, so the
+   conversation keeps its context switcher down to tablet widths. */
+@media (max-width: 1150px) {
+  .view-tab { padding: 6px 10px; font-size: 12px; }
+  #sidebar .sidebar-collapse-btn { display: none; }
+}
+/* Phones: presence avatars yield to status + actions. */
+@media (max-width: 560px) {
+  .presence-avatars { display: none; }
+  .channel-title-row { gap: var(--space-2); }
+}
 
 .view-tabs {
   display: flex; gap: 2px; padding: 3px;
@@ -681,7 +693,7 @@
   background: var(--color-bg);
   overflow: hidden;
 }
-@media (max-width: 860px) {
+@media (max-width: 960px) {
   #login {
     grid-template-columns: 1fr;
     justify-items: center;
@@ -965,11 +977,11 @@
 
 /* ── Responsive ── */
 @media (max-width: 1100px) {
-  .app.computer-open { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+  .app.computer-open { grid-template-columns: auto minmax(0, 1fr); }
   #computer-panel { position: fixed; inset: 0 0 0 auto; z-index: 50; width: min(440px, 100vw); box-shadow: var(--shadow-xl); }
 }
 @media (max-width: 900px) {
-  .app.thread-open { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+  .app.thread-open { grid-template-columns: auto minmax(0, 1fr); }
   #thread-panel { position: fixed; inset: 0 0 0 auto; z-index: 50; width: min(420px, 100vw); box-shadow: var(--shadow-xl); }
   .topbar-center { display: none; }
   .mobile-view-label { display: inline-flex; }
@@ -1302,7 +1314,7 @@
   .app.workspace.work-rail-open.thread-open,
   .app.workspace.work-rail-open.computer-open,
   .app.workspace.work-rail-open.thread-open.computer-open {
-    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas: "sidebar workspace";
   }
   .app.workspace.work-rail-open #work-rail:not(.collapsed) {
@@ -1314,7 +1326,7 @@
 }
 @media (max-width: 640px) {
   .app.workspace.work-rail-open #work-rail:not(.collapsed) {
-    inset: auto 0 0 0; width: 100vw; max-height: 72dvh;
+    inset: auto 0 0 0; width: 100vw; max-height: 72vh; max-height: 72dvh;
     border-left: none; border-top: 1px solid var(--color-border-strong);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     animation: slide-up 0.22s ease;
@@ -1337,14 +1349,14 @@
 @media (max-width: 1100px) {
   /* Cap fixed side panels so the conversation keeps usable width. */
   .app.thread-open {
-    grid-template-columns: var(--sidebar-width) minmax(0, 1fr) minmax(0, min(380px, 38vw));
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, min(380px, 38vw));
   }
   .app.computer-open {
-    grid-template-columns: var(--sidebar-width) minmax(0, 1fr) minmax(0, min(360px, 38vw));
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, min(360px, 38vw));
   }
   .app.workspace.work-rail-open.thread-open,
   .app.workspace.work-rail-open.computer-open {
-    grid-template-columns: var(--sidebar-width) minmax(0, 1fr) minmax(0, min(300px, 30vw)) minmax(0, min(360px, 34vw));
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, min(300px, 30vw)) minmax(0, min(360px, 34vw));
   }
 }
 
@@ -1386,13 +1398,13 @@
 @media (max-width: 640px) {
   /* Panels become bottom sheets on phones. */
   #thread-panel {
-    inset: auto 0 0 0; width: 100vw; max-height: 78dvh;
+    inset: auto 0 0 0; width: 100vw; max-height: 78vh; max-height: 78dvh;
     border-left: none; border-top: 1px solid var(--color-border-strong);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     animation: slide-up 0.22s ease;
   }
   #computer-panel {
-    inset: auto 0 0 0; width: 100vw; max-height: 78dvh;
+    inset: auto 0 0 0; width: 100vw; max-height: 78vh; max-height: 78dvh;
     border-left: none; border-top: 1px solid var(--color-border-strong);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     animation: slide-up 0.22s ease;
@@ -1479,7 +1491,7 @@
   display: flex; justify-content: flex-end; animation: fade-in 0.18s ease;
 }
 .work-sheet {
-  width: min(440px, 94vw); max-height: 100dvh; overflow-y: auto;
+  width: min(440px, 94vw); max-height: 100vh; max-height: 100dvh; overflow-y: auto;
   background: var(--color-charcoal-1); border-left: 1px solid var(--color-border-strong);
   padding: var(--space-5); animation: slide-in-right 0.22s ease;
 }
@@ -1551,8 +1563,18 @@
 .primary-link:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .primary-link.active { background: var(--accent-soft); color: var(--color-text-primary); }
 .nav-count { margin-left: auto; font-size: 11px; color: var(--state-warning); }
-#sidebar.collapsed { width: var(--sidebar-width-collapsed); }
-#sidebar.collapsed .primary-link { justify-content: center; }
+/* Collapsed sidebar is a true icon rail: labels, search, channel lists
+   and identity text hide so 64px never shows squeezed slivers. The
+   account menu stays reachable via its trigger. */
+#sidebar.collapsed .brand,
+#sidebar.collapsed .sidebar-search,
+#sidebar.collapsed .sidebar-scroll,
+#sidebar.collapsed #me .me-meta,
+#sidebar.collapsed #me .role-pill { display: none; }
+#sidebar.collapsed .sidebar-header { justify-content: center; padding: var(--space-4) var(--space-2) var(--space-3); }
+#sidebar.collapsed .primary-nav { align-items: center; }
+#sidebar.collapsed .primary-link { justify-content: center; padding: 10px; }
+#sidebar.collapsed #me { justify-content: center; padding: var(--space-2); }
 .page-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 16px; }
 .page-header h2 { margin: 0; font-size: 22px; }
 .segmented { display: flex; gap: 4px; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 3px; }

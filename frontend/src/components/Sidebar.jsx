@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Avatar, Badge, Tooltip, ScrollArea, Dropdown } from "../ui.jsx";
 import { initials, statusLabel } from "../lib.js";
 
@@ -30,12 +30,26 @@ function NavIcon({ name }) {
 
 export function Sidebar({ user, channels, agents, teams, onSelectChannel, activeChannel, wsStatus, meRole, onNewChannel, onNewDM, onNewGroup, onNewTeam, onNewAgent, onLogout, onOpenSettings, onDeleteChannel, currentView, onViewChange, workAttentionCount, pinned = [], open = false, onClose }) {
   const [search, setSearch] = useState("");
-  const [collapsed, setCollapsed] = useState(() => {
+  const [manualCollapsed, setManualCollapsed] = useState(() => {
     try { return localStorage.getItem("swarm.sidebar_collapsed") === "1"; } catch { return false; }
   });
+  // Mid-width browsers automatically rail the sidebar to icons so the
+  // conversation keeps its measure; the manual toggle owns wide screens.
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 1150px)").matches
+      : false);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(max-width: 1150px)");
+    const onChange = (e) => setNarrow(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  const collapsed = manualCollapsed || narrow;
 
   function toggleCollapsed() {
-    setCollapsed(c => {
+    setManualCollapsed(c => {
       try { localStorage.setItem("swarm.sidebar_collapsed", c ? "0" : "1"); } catch { /* private mode */ }
       return !c;
     });
@@ -59,7 +73,7 @@ export function Sidebar({ user, channels, agents, teams, onSelectChannel, active
         <div className="brand">
           <span className="brand-mark">swarm</span>
         </div>
-        <button className="btn btn-ghost btn-icon" onClick={toggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed}>⇥</button>
+        <button className="btn btn-ghost btn-icon sidebar-collapse-btn" onClick={toggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>⇥</button>
         <button className="btn btn-ghost btn-icon tooltip-trigger" data-tooltip="New message" onClick={onNewDM} aria-label="New message">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>

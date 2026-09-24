@@ -133,14 +133,17 @@
   --z-tooltip: 300;
   --z-toast: 400;
   
-  /* ── Layout ── */
-  --sidebar-width: 240px;
+  /* ── Layout: fluid tracks scale with the browser viewport.
+     Panels never exceed a share of the window, so the conversation
+     keeps a readable measure from phones to ultrawide. ── */
+  --sidebar-width: clamp(208px, 18vw, 248px);
   --sidebar-width-collapsed: 64px;
   --topbar-height: 52px;
   --workspace-inset: 10px;
   --composer-height: auto;
-  --panel-width: 380px;
-  --thread-width: 420px;
+  --panel-width: clamp(320px, 26vw, 400px);
+  --thread-width: clamp(320px, 26vw, 420px);
+  --work-rail-width: clamp(300px, 24vw, 360px);
   --content-max: 780px;
 }
 
@@ -265,8 +268,11 @@ body::after {
 /* ── Layout ── */
 .app {
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  /* Sidebar track is `auto` so collapsing the sidebar to its icon rail
+     (or stretching it) reclaims real space instead of leaving a gap. */
+  grid-template-columns: auto minmax(0, 1fr);
   grid-template-areas: "sidebar workspace";
+  height: 100vh;
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
@@ -274,35 +280,35 @@ body::after {
 }
 
 .app.thread-open {
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--thread-width);
+  grid-template-columns: auto minmax(0, 1fr) var(--thread-width);
   grid-template-areas: "sidebar workspace thread";
 }
 
 .app.computer-open {
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--panel-width);
+  grid-template-columns: auto minmax(0, 1fr) var(--panel-width);
   grid-template-areas: "sidebar workspace panel";
 }
 
 .app.computer-open.thread-open {
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--panel-width);
+  grid-template-columns: auto minmax(0, 1fr) var(--panel-width);
   grid-template-areas: "sidebar workspace panel";
 }
 
 /* Hybrid workspace: persistent optional work rail beside the conversation. */
 .app.workspace.work-rail-open {
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 340px;
+  grid-template-columns: auto minmax(0, 1fr) var(--work-rail-width);
   grid-template-areas: "sidebar workspace work";
 }
 .app.workspace.work-rail-open.thread-open {
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 320px 400px;
+  grid-template-columns: auto minmax(0, 1fr) 320px 400px;
   grid-template-areas: "sidebar workspace work thread";
 }
 .app.workspace.work-rail-open.computer-open {
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 320px 400px;
+  grid-template-columns: auto minmax(0, 1fr) 320px 400px;
   grid-template-areas: "sidebar workspace work panel";
 }
 .app.workspace.work-rail-open.thread-open.computer-open {
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 320px 400px;
+  grid-template-columns: auto minmax(0, 1fr) 320px 400px;
   grid-template-areas: "sidebar workspace work panel";
 }
 .app.workspace.work-rail-open.thread-open.computer-open #thread-panel {
@@ -332,11 +338,13 @@ body::after {
   grid-area: sidebar;
   display: flex;
   flex-direction: column;
+  width: var(--sidebar-width);
   min-height: 0;
   overflow: hidden;
   background: transparent;
   transition: width var(--transition-base);
 }
+#sidebar.collapsed { width: var(--sidebar-width-collapsed); }
 
 #main {
   flex: 1;
@@ -476,7 +484,7 @@ body::after {
 .run-objective { flex: 1; min-width: 0; overflow: hidden; color: var(--color-text-secondary); text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 760px) { .command-center { padding: 28px 16px 48px; } .cc-grid { grid-template-columns: 1fr; } .cc-hero-mark { display: none; } .cc-run-row .text-mono-xs { display: none; } }
 .run-monitor-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.72); backdrop-filter: blur(12px); }
-.run-monitor { width: min(680px, 100%); max-height: min(760px, 90dvh); overflow: hidden; background: var(--color-bg-elevated); border: none; border-radius: var(--radius-window); box-shadow: 0 0 0 1px rgba(255,255,255,0.06), var(--shadow-xl); }
+.run-monitor { width: min(680px, 100%); max-height: min(760px, 90vh); max-height: min(760px, 90dvh); overflow: hidden; background: var(--color-bg-elevated); border: none; border-radius: var(--radius-window); box-shadow: 0 0 0 1px rgba(255,255,255,0.06), var(--shadow-xl); }
 .run-monitor-head { display: flex; justify-content: space-between; gap: 20px; padding: 24px 28px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); }
 .run-monitor-head h2 { max-width: 540px; margin: 6px 0 4px; font-size: 22px; line-height: 1.25; letter-spacing: -.03em; }
 .run-monitor-status { display: flex; align-items: center; gap: 9px; padding: 14px 28px; color: var(--color-text-secondary); background: rgba(255,255,255,0.03); }
