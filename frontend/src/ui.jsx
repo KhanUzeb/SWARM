@@ -94,24 +94,24 @@ function renderMath(tex, display) {
 function tokenizeBody(body) {
   if (!body) return [{ type: "text", text: "" }];
   const parts = [];
-  let last = 0;
-  const codeRegex = /```(\w*)\n([\s\S]*?)```/g;
-  const mathDisplayRegex = /\$\$([\s\S]*?)\$\$/g;
-  const mathInlineRegex = /\$([^\$\n]+?)\$/g;
-  
-  // Simple approach: split by code blocks first
-  const codeMatches = [...body.matchAll(codeRegex)];
-  if (codeMatches.length === 0) {
-    // Check for math
-    const displayMatches = [...body.matchAll(mathDisplayRegex)];
-    const inlineMatches = [...body.matchAll(mathInlineRegex)];
-    if (displayMatches.length === 0 && inlineMatches.length === 0) {
-      return [{ type: "text", text: body }];
+  const codeRegex = /```(\w*)\r?\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = codeRegex.exec(body)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: "text", text: body.slice(lastIndex, match.index) });
     }
+    parts.push({
+      type: "code",
+      lang: match[1] || "",
+      text: match[2].trimEnd(),
+    });
+    lastIndex = match.index + match[0].length;
   }
-  
-  // For simplicity, return as text with basic formatting
-  return [{ type: "text", text: body }];
+  if (lastIndex < body.length) {
+    parts.push({ type: "text", text: body.slice(lastIndex) });
+  }
+  return parts.length > 0 ? parts : [{ type: "text", text: body }];
 }
 
 function formatInline(text) {
@@ -141,20 +141,28 @@ function RichBody({ body }) {
 function CodeBlock({ lang, text }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="code-block">
-      <div className="code-head">
-        <span className="text-mono-xs text-subtle">{lang || "text"}</span>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1400);
-          } catch { /* ignore */ }
-        }}>
+    <div className="my-2.5 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/90 shadow-sm text-xs font-mono">
+      <div className="flex items-center justify-between border-b border-zinc-850 px-3.5 py-1.5 bg-zinc-900/60 select-none">
+        <span className="text-[11px] font-medium text-zinc-400 font-mono lowercase">
+          {lang || "code"}
+        </span>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-100 transition-colors py-0.5 px-1.5 rounded hover:bg-zinc-800"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(text);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1400);
+            } catch { /* ignore */ }
+          }}
+        >
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre><code>{escapeHtml(text)}</code></pre>
+      <pre className="p-3.5 overflow-x-auto text-[12px] leading-relaxed text-zinc-200">
+        <code>{escapeHtml(text)}</code>
+      </pre>
     </div>
   );
 }

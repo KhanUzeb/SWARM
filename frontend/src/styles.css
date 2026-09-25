@@ -1,3 +1,4 @@
+@import "tailwindcss";
 /*
  * swarm — Design System
  * Visual identity: "08. Midnight Magic" foundation + "18. Galaxy Dust"
@@ -6,13 +7,29 @@
  * work, magenta reserved for attention, jade for success — saturated
  * color carries state, never decoration.
  */
-
 :root {
-  /* ── Color Primitives (Midnight Magic base; Galaxy Dust accents) ── */
-  --color-bg: #07070d;
-  --color-bg-elevated: #0d0d17;
-  --color-bg-surface: #141422;
-  --color-bg-hover: #1c1c2e;
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #111114;
+  --card-foreground: #fafafa;
+  --popover: #121216;
+  --popover-foreground: #fafafa;
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --secondary: #1f1f23;
+  --secondary-foreground: #fafafa;
+  --muted: #1c1c21;
+  --muted-foreground: #a1a1aa;
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+  --ring: #7c3aed;
+  --radius: 0.625rem;
+
+  /* ── Color Primitives (OpenCode Dark Neutral base) ── */
+  --color-bg: #09090b;
+  --color-bg-elevated: #111115;
+  --color-bg-surface: #18181f;
+  --color-bg-hover: #22222b;
   --color-bg-glass: rgba(13, 13, 23, 0.82);
   --color-border-subtle: rgba(235, 230, 255, 0.05);
   --color-border: rgba(235, 230, 255, 0.08);
@@ -290,12 +307,10 @@ body::after {
   min-height: 0;
   margin: var(--workspace-inset) var(--workspace-inset) var(--workspace-inset) 0;
   border-radius: var(--radius-window);
-  background: rgba(22, 16, 22, 0.9);
-  backdrop-filter: blur(10px);
-  box-shadow:
-    inset 0 1px 0 rgba(235, 230, 255, 0.08),
-    0 0 0 1px rgba(235, 230, 255, 0.07),
-    0 24px 80px rgba(0, 0, 0, 0.55);
+  background: #0d0d12;
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.6);
   overflow: hidden;
 }
 

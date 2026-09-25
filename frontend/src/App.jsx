@@ -7,13 +7,13 @@ import {
   RichBody, CodeBlock,
 } from "./ui.jsx";
 import { ApprovalCard, AgentMessage, TaskRow, PixelLoader } from "./beautifului.jsx";
-import { Sidebar } from "./components/Sidebar.jsx";
-import { TopBar } from "./components/TopBar.jsx";
-import { MessageList } from "./components/MessageList.jsx";
-import { Composer } from "./components/Composer.jsx";
+import { Sidebar } from "./components/Sidebar";
+import { TopBar } from "./components/TopBar";
+import { MessageList } from "./components/MessageList";
+import { Composer } from "./components/Composer";
 import { ComputerPanel } from "./components/ComputerPanel.jsx";
-import { CommandPalette } from "./components/CommandPalette.jsx";
-import { LoginScreen } from "./components/LoginScreen.jsx";
+import { CommandPalette } from "./components/CommandPalette";
+import { LoginScreen } from "./components/LoginScreen";
 import { CommandCenter } from "./components/CommandCenter.jsx";
 import { WorkHome, WorkDetail as WorkRunDetail } from "./components/WorkHome.jsx";
 import { ContextDrawer } from "./components/ContextDrawer.jsx";

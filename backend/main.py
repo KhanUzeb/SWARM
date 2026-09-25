@@ -145,17 +145,24 @@ class Hub:
 
 hub = Hub()
 _routine_task: asyncio.Task | None = None
+_gc_task: asyncio.Task | None = None
 ROUTINE_TICK_SECONDS = 20
+GC_SWEEP_INTERVAL_SECONDS = 300
 HANDOFF_DEPTH = 3
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _routine_task
+    global _gc_task
     await db.init_db()
     await v2.init_db()
     await work.init_db()
     await knowledge.init_db()
+    from . import gc as gc_mod
+    _gc_stats = gc_mod.gc_sweep()
+    if _gc_stats.get("deleted"):
+        _logger.info("sandbox GC at startup: %s", _gc_stats)
     for recoverable in await v2.recoverable_runs():
         v2.start_run(recoverable["id"], recoverable["owner"])
     recovered_work = await work.recover_interrupted()
@@ -165,12 +172,18 @@ async def lifespan(app: FastAPI):
     await system_mod.hydrate_root()
     await reload_registry()
     _routine_task = _track_task(_routine_loop(), "routine scheduler")
+    _gc_task = _track_task(_gc_loop(), "sandbox GC sweeper")
     yield
     if _routine_task is not None:
         _routine_task.cancel()
         with suppress(asyncio.CancelledError):
             await _routine_task
         _routine_task = None
+    if _gc_task is not None:
+        _gc_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await _gc_task
+        _gc_task = None
     pending = [task for task in _background_tasks if not task.done()]
     for task in pending:
         task.cancel()
@@ -2227,6 +2240,22 @@ async def _routine_loop() -> None:
         except Exception:  # noqa: BLE001 — scheduler must not die
             pass
         await asyncio.sleep(ROUTINE_TICK_SECONDS)
+
+
+async def _gc_loop() -> None:
+    from . import gc as gc_mod
+
+    await asyncio.sleep(GC_SWEEP_INTERVAL_SECONDS)
+    while True:
+        try:
+            stats = gc_mod.gc_sweep()
+            if stats.get("deleted"):
+                _logger.info("sandbox GC sweep: %s", stats)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — sweeper must not die
+            pass
+        await asyncio.sleep(GC_SWEEP_INTERVAL_SECONDS)
 
 
 # ------------------------------------------------------------ frontend ----
