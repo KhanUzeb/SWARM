@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fmtTime } from "./lib.js";
 
 // ── API & Utilities (ported from lib.js) ──
+// fmtTime lives in lib.js (single source of truth) and is re-exported
+// below so `import { fmtTime } from "../ui.jsx"` keeps working.
 
 const CACHE_TTL = { list: 60_000, status: 10_000, catalog: 300_000 };
 const HISTORY_LIMIT = 50;
@@ -42,17 +45,6 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function fmtTime(ts) {
-  if (!ts) return "";
-  const d = new Date(ts * 1000);
-  const now = new Date();
-  const diff = now - d;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function fmtBytes(bytes) {
@@ -156,12 +148,14 @@ function CodeBlock({ lang, text }) {
               setTimeout(() => setCopied(false), 1400);
             } catch { /* ignore */ }
           }}
+          aria-live="polite"
         >
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
       <pre className="p-3.5 overflow-x-auto text-[12px] leading-relaxed text-zinc-200">
-        <code>{escapeHtml(text)}</code>
+        {/* React escapes text nodes itself — never pre-escape here. */}
+        <code>{text}</code>
       </pre>
     </div>
   );
@@ -278,9 +272,9 @@ function Dropdown({ trigger, items, align = "right", label = "Menu" }) {
       >{trigger}</span>
       {open && (
         <div className="dropdown-menu" role="menu" style={{ [align]: 0 }}>
-          {items.filter(item => item !== "divider").map((item, i) => {
-            if (item === "divider") return <div key={`div-${i}`} className="dropdown-divider" />;
-            if (item.section) return <div key={`sec-${i}`} className="dropdown-section">{item.section}</div>;
+          {items.map((item, i) => {
+            if (item === "divider") return <div key={`div-${i}`} className="dropdown-divider" role="separator" />;
+            if (item?.section) return <div key={`sec-${i}`} className="dropdown-section">{item.section}</div>;
             return (
               <button
                 key={item.id || i}
@@ -331,6 +325,16 @@ function ToastContainer() {
 }
 
 function Modal({ open, onClose, title, children, footer, size = "md" }) {
+  const closeRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    closeRef.current?.focus();
+    function onKey(e) {
+      if (e.key === "Escape") onClose?.();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
   if (!open) return null;
   const sizes = { sm: "max-w-[360px]", md: "max-w-[480px]", lg: "max-w-[640px]" };
   
@@ -339,7 +343,7 @@ function Modal({ open, onClose, title, children, footer, size = "md" }) {
       <div className={`modal ${sizes[size]}`} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h2 id="modal-title" className="modal-title">{title}</h2>
-          <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+          <button ref={closeRef} className="modal-close" onClick={onClose} aria-label="Close dialog">×</button>
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}
@@ -397,13 +401,13 @@ const EMPTY_GRAPHICS = {
 function EmptyState({ kind = "default", icon, title, message, action }) {
   const graphic = EMPTY_GRAPHICS[kind] || EMPTY_GRAPHICS.default;
   return (
-    <div className="empty-state">
+    <div className="empty-state" role="status">
       <div className="empty-state-icon" aria-hidden>
         {typeof icon === "object" ? icon : graphic}
       </div>
       <div className="empty-state-title">{title}</div>
-      <div className="empty-state-message">{message}</div>
-      {action}
+      {message && <div className="empty-state-message">{message}</div>}
+      {action && <div className="empty-state-action">{action}</div>}
     </div>
   );
 }

@@ -59,9 +59,39 @@ export function botLabel(agent) {
   return String(agent.display_name || agent.name || "").trim() || agent.name;
 }
 
+/** Single timestamp formatter for the whole frontend.
+ * Accepts seconds, milliseconds, numeric strings, ISO strings, or Dates.
+ * Recent → relative ("just now", "5m ago", "3h ago"), then "Yesterday",
+ * then "Mon D" (with year when not this year). */
 export function fmtTime(ts) {
-  if (!ts) return "";
-  return new Date(ts * 1000).toTimeString().slice(0, 5);
+  const ms = toMs(ts);
+  if (!ms) return "";
+  const d = new Date(ms);
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  if (diff >= 0 && diff < 60_000) return "just now";
+  if (diff >= 0 && diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff >= 0 && diff < 86_400_000 && d.getDate() === now.getDate()) {
+    return `${Math.floor(diff / 3_600_000)}h ago`;
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString(undefined, opts);
+}
+
+function toMs(ts) {
+  if (ts == null || ts === "") return 0;
+  if (ts instanceof Date) return ts.getTime() || 0;
+  if (typeof ts === "number") return ts < 1e12 ? ts * 1000 : ts;
+  const text = String(ts).trim();
+  if (!text) return 0;
+  const n = Number(text);
+  if (Number.isFinite(n)) return n < 1e12 ? n * 1000 : n;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export function fmtBytes(n) {

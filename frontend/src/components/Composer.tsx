@@ -379,7 +379,7 @@ export function Composer({
 
       {/* Offline Alert */}
       {offline && (
-        <div className="mb-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-2">
+        <div id="composer-offline-note" role="status" className="mb-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-2">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
           <span>Offline — messages will queue and send once reconnected.</span>
         </div>
@@ -387,7 +387,7 @@ export function Composer({
 
       {/* Send Failed Alert */}
       {sendFailed && (
-        <div className="mb-2 p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
+        <div role="alert" className="mb-2 p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
           <span>Send failed — draft kept. Check connection and send again.</span>
         </div>
@@ -400,6 +400,7 @@ export function Composer({
           <ul
             ref={mentionRef}
             role="listbox"
+            aria-label="Mention teammates"
             className="absolute bottom-full left-0 mb-2 w-72 max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900/95 p-1 text-zinc-200 shadow-2xl backdrop-blur-md z-50 animate-in fade-in-0 zoom-in-95"
           >
             {mention.items.map((item, i) => (
@@ -436,6 +437,7 @@ export function Composer({
         {slash.open && slashItems().length > 0 && (
           <ul
             role="listbox"
+            aria-label="Slash commands"
             className="absolute bottom-full left-0 mb-2 w-80 max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900/95 p-1 text-zinc-200 shadow-2xl backdrop-blur-md z-50 animate-in fade-in-0 zoom-in-95"
           >
             {slashItems().map((item, i) => (
@@ -475,6 +477,9 @@ export function Composer({
               placeholder || `Message #${channelName || "general"}, @mention teammates, or / for commands…`
             }
             rows={1}
+            aria-label={placeholder || `Message ${channelName || "general"}`}
+            aria-expanded={mention.open || slash.open}
+            aria-describedby={offline ? "composer-offline-note" : undefined}
             className="w-full bg-transparent text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none resize-none leading-relaxed min-h-[38px] max-h-[180px]"
           />
         </div>

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Avatar, Badge, Button, Card, Tooltip } from "./ui.jsx";
-import { fmtTime, statusLabel } from "./lib.js";
 
 /** Wall-clock elapsed label for in-flight agent work (Rakazo-style). */
 export function formatElapsed(startedAtMs, nowMs) {

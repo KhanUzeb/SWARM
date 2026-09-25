@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./components.css";
 import {
   api, apiJson, authHeaders, CACHE_TTL, HISTORY_LIMIT, DEFAULT_MODEL, ALL_TOOLS,
-  escapeHtml, fmtTime, fmtBytes, initials, botLabel, slugFromName, statusLabel, renderMath,
+  escapeHtml, fmtBytes, initials, botLabel, slugFromName, statusLabel, renderMath,
   Avatar, Badge, Button, Input, Textarea, Card, Dropdown, Tooltip, ToastContainer, Modal, Skeleton, Spinner, EmptyState, ScrollArea, Divider,
   RichBody, CodeBlock,
 } from "./ui.jsx";
@@ -984,19 +984,57 @@ export default function App() {
 // ── Views ──
 
 function PaperView({ messages, title }) {
+  const { code, math } = useMemo(() => {
+    const codeParts = [];
+    const mathParts = [];
+    for (const m of messages || []) {
+      if (!m?.body || m.author_kind === "system") continue;
+      const text = String(m.body);
+      const codeRe = /```(\w*)\r?\n([\s\S]*?)```/g;
+      let match;
+      while ((match = codeRe.exec(text))) {
+        codeParts.push({ id: `${m.id}-${match.index}`, lang: match[1] || "code", text: match[2].trimEnd(), author: m.author });
+      }
+      if (text.includes("$")) {
+        const inline = text.match(/\$(?!\$)([^$\n]+?)\$/g) || [];
+        for (const tex of inline.slice(0, 8)) mathParts.push({ id: `${m.id}-${tex}`, tex, author: m.author });
+      }
+    }
+    return { code: codeParts.slice(0, 12), math: mathParts.slice(0, 12) };
+  }, [messages]);
   return (
     <div id="log" className="paper-log">
       <article className="paper-doc">
         <p className="paper-kicker">swarm preprint</p>
         <h1>{title}</h1>
-        <p className="paper-meta">A compiled view of this channel · talk stays in Talk</p>
-        <section>
+        <p className="paper-meta">
+          {code.length + math.length === 0
+            ? "A compiled view of this channel · talk stays in Talk"
+            : `${code.length} code listing${code.length === 1 ? "" : "s"} · ${math.length} math note${math.length === 1 ? "" : "s"} · talk stays in Talk`}
+        </p>
+        <section aria-label="Code listings">
           <h2>Code</h2>
-          {messages.filter(m => m.body?.includes("```")).length === 0 && <p className="paper-empty">No code listings yet.</p>}
+          {code.length === 0 && <p className="paper-empty">No code listings yet — share a fenced code block in Talk and it will compile here.</p>}
+          {code.map(c => (
+            <div key={c.id} className="paper-item">
+              <CodeBlock lang={c.lang} text={c.text} />
+              <p className="paper-item-meta text-mono-xs text-subtle">from {c.author}</p>
+            </div>
+          ))}
         </section>
-        <section>
+        <section aria-label="Math notes">
           <h2>Mathematics</h2>
-          {messages.filter(m => m.body?.includes("$")).length === 0 && <p className="paper-empty">No TeX yet.</p>}
+          {math.length === 0 && <p className="paper-empty">No TeX yet — inline $math$ in Talk appears here.</p>}
+          {math.length > 0 && (
+            <ul className="paper-math-list">
+              {math.map(m => (
+                <li key={m.id} className="paper-math-row">
+                  <code className="math-fallback">{m.tex}</code>
+                  <span className="paper-item-meta text-mono-xs text-subtle">from {m.author}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </article>
     </div>
@@ -1004,18 +1042,54 @@ function PaperView({ messages, title }) {
 }
 
 function FilesView({ computer }) {
-  if (!computer) return <EmptyState kind="folder" title="No sandbox" message="Computer panel is off. Toggle it from the top bar." />;
+  const [query, setQuery] = useState("");
+  if (!computer) {
+    return (
+      <div id="log" className="files-view">
+        <EmptyState
+          kind="folder"
+          title="No sandbox connected"
+          message="The shared workspace is offline. Open the computer panel from the top bar to browse files and run commands."
+        />
+      </div>
+    );
+  }
   const files = computer.files || [];
+  const q = query.trim().toLowerCase();
+  const visible = q ? files.filter(f => String(f.name || f.path || "").toLowerCase().includes(q)) : files;
   return (
     <div id="log" className="files-view">
       <div className="files-header">
-        <span className="text-mono-xs text-subtle">{computer.cwd}</span>
+        <div className="files-header-main">
+          <span className="text-mono-xs text-subtle" title={computer.cwd}>{computer.cwd}</span>
+          <span className="text-mono-xs text-subtle">· {files.length} item{files.length === 1 ? "" : "s"}</span>
+        </div>
+        {files.length > 4 && (
+          <input
+            type="search"
+            className="input agents-view-search"
+            placeholder="Filter files…"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            aria-label="Filter files"
+          />
+        )}
       </div>
       <ScrollArea className="files-list">
-        {files.map(f => (
-          <div key={f.name} className="file-row">
-            <span className="file-icon">{f.is_dir ? "📁" : "📄"}</span>
-            <span className="file-name">{f.name}</span>
+        {visible.length === 0 && (
+          <EmptyState
+            kind="folder"
+            title={q ? "No matches" : "Empty sandbox"}
+            message={q ? `Nothing matches “${query.trim()}”.` : "Agents can write files here with write_workspace."}
+          />
+        )}
+        {visible.map(f => (
+          <div key={f.path || f.name} className="file-row" role="listitem" tabIndex={0}>
+            <span className="file-icon" aria-hidden>{f.is_dir ? "📁" : "📄"}</span>
+            <span className="file-info">
+              <span className="file-name">{f.path || f.name}</span>
+              {f.size != null && <span className="file-size text-mono-xs text-subtle">{fmtBytes(f.size)}</span>}
+            </span>
           </div>
         ))}
       </ScrollArea>
@@ -1048,10 +1122,25 @@ function AgentsView({ agents, onOpenChannel }) {
       </header>
       <ScrollArea className="agents-grid">
         {filtered.length === 0 && (
-          <p className="agents-view-empty text-subtle">No agents match “{query.trim()}”.</p>
+          <div className="agents-view-empty">
+            <EmptyState
+              kind="search"
+              title={agents.length === 0 ? "No teammates yet" : "No matches"}
+              message={agents.length === 0 ? "Create your first agent to start collaborating." : `No agents match “${query.trim()}”.`}
+            />
+          </div>
         )}
         {filtered.map(a => (
-          <Card key={a.name} interactive padded onClick={() => onOpenChannel(a.dm_channel_id)}>
+          <Card
+            key={a.name}
+            interactive
+            padded
+            onClick={() => onOpenChannel(a.dm_channel_id)}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenChannel(a.dm_channel_id); } }}
+            tabIndex={0}
+            role="button"
+            aria-label={`Open 1:1 with ${a.display_name || a.name}`}
+          >
             <div className="agent-card-head">
               <Avatar name={a.display_name || a.name} kind="agent" size="lg" avatar={a.avatar} />
               <div className="agent-card-meta">
@@ -1087,7 +1176,7 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
             <span className="panel-subtitle">{replies.length} repl{replies.length === 1 ? "y" : "ies"}</span>
           </div>
         </div>
-        <button className="panel-close" onClick={onClose} aria-label="Close">×</button>
+        <button className="panel-close" onClick={onClose} aria-label="Close thread">×</button>
       </div>
       <ScrollArea className="thread-body">
         {parent && (
@@ -1167,15 +1256,29 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
     if (response.ok) onCreated(response.data?.id || response.data?.dm_channel_id);
   }
 
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") onClose?.();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
-    <div className="quick-create-backdrop">
+    <div
+      className="quick-create-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label={labels[action]}
+      onClick={e => { if (e.target === e.currentTarget) onClose?.(); }}
+    >
       <section className="quick-create">
         <header className="run-monitor-head">
           <div>
             <span className="eyebrow">Create</span>
             <h2>{labels[action]}</h2>
           </div>
-          <button className="panel-close" onClick={onClose}>×</button>
+          <button className="panel-close" onClick={onClose} aria-label="Close dialog">×</button>
         </header>
         <form className="quick-create-form" onSubmit={submit}>
           {isAgent && templates.length > 0 && (

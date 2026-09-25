@@ -91,6 +91,20 @@ interface MessageListProps {
   channelName?: string;
 }
 
+// Shared stable refs: `map[id] || []` would allocate a new array every
+// render and defeat MessageRow memoization for every row.
+const EMPTY_REACTIONS: Reaction[] = [];
+const EMPTY_WORK_EVENTS: WorkEvent[] = [];
+
+// Latest-ref wrapper: parents (App) pass fresh closures every render.
+// Stable wrappers forwarding through a ref keep memoized rows from
+// re-rendering while never calling a stale closure.
+function useLatest<T>(value: T) {
+  const ref = React.useRef(value);
+  ref.current = value;
+  return ref;
+}
+
 export function MessageList({
   messages,
   order,
@@ -156,6 +170,33 @@ export function MessageList({
   );
   const quickStarts = buildQuickStarts(agents, allAgents, channelName);
 
+  // Stable per-row callbacks (see useLatest): memoized rows skip
+  // re-renders from streaming keystrokes elsewhere in the list.
+  const onReplyRef = useLatest(onReply);
+  const onReactRef = useLatest(onReact);
+  const onUnreactRef = useLatest(onUnreact);
+  const onDeleteRef = useLatest(onDelete);
+  const onOpenThreadRef = useLatest(onOpenThread);
+  const onRetryRef = useLatest(onRetry);
+  const stableOnReply = React.useCallback(
+    (id: number | string) => onReplyRef.current?.(id), []
+  );
+  const stableOnReact = React.useCallback(
+    (id: number | string, emoji: string) => onReactRef.current(id, emoji), []
+  );
+  const stableOnUnreact = React.useCallback(
+    (id: number | string, emoji: string) => onUnreactRef.current?.(id, emoji), []
+  );
+  const stableOnDelete = React.useCallback(
+    (m: Message) => onDeleteRef.current?.(m), []
+  );
+  const stableOnOpenThread = React.useCallback(
+    (id: number | string) => onOpenThreadRef.current?.(id), []
+  );
+  const stableOnRetry = React.useCallback(
+    (m: Message) => onRetryRef.current?.(m), []
+  );
+
   if (roots.length === 0 && !loadingMore && liveStreams.length === 0 && !typing) {
     return (
       <div
@@ -210,6 +251,7 @@ export function MessageList({
         <button
           type="button"
           onClick={jumpToLatest}
+          aria-label="Jump to latest messages"
           className="fixed bottom-24 right-8 z-30 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 text-zinc-200 border border-zinc-750 shadow-xl text-xs font-medium hover:bg-zinc-850 hover:text-white transition-all animate-in fade-in-0 duration-150"
         >
           <ArrowDown className="w-3.5 h-3.5" />
@@ -223,10 +265,25 @@ export function MessageList({
             <button
               onClick={onLoadMore}
               disabled={loadingMore}
-              className="text-xs text-zinc-500 hover:text-zinc-300 py-1 px-3 rounded-md hover:bg-zinc-900 transition-colors"
+              className="text-xs text-zinc-500 hover:text-zinc-300 py-1 px-3 rounded-md hover:bg-zinc-900 transition-colors disabled:opacity-60"
+              aria-live="polite"
             >
               {loadingMore ? "Loading earlier messages…" : "Load earlier messages"}
             </button>
+          </div>
+        )}
+        {loadingMore && roots.length === 0 && (
+          <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 py-6 space-y-4" aria-label="Loading messages" role="status">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="flex gap-3">
+                <div className="skeleton skeleton-avatar" aria-hidden />
+                <div className="flex-1 space-y-2">
+                  <div className="skeleton skeleton-text" style={{ width: "32%" }} aria-hidden />
+                  <div className="skeleton skeleton-text" aria-hidden />
+                  <div className="skeleton skeleton-text" aria-hidden />
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -260,20 +317,25 @@ export function MessageList({
                 grouped={grouped}
                 label={label}
                 agent={agent}
-                reactions={reactions[m.id] || []}
+                reactions={reactions[m.id] ?? EMPTY_REACTIONS}
                 replyCount={replyCounts[m.id] || 0}
-                onReply={onReply}
-                onReact={onReact}
-                onUnreact={onUnreact}
-                onDelete={onDelete}
-                onOpenThread={onOpenThread}
-                onRetry={onRetry}
+                // Preserve optional-handler semantics: memoized rows must
+                // still hide actions (reply/delete/…) when the parent
+                // passes no handler. Defined-ness never flips mid-session,
+                // so memoization stays effective.
+                onReply={onReply ? stableOnReply : undefined}
+                onReact={stableOnReact}
+                onUnreact={onUnreact ? stableOnUnreact : undefined}
+                onDelete={onDelete ? stableOnDelete : undefined}
+                onOpenThread={onOpenThread ? stableOnOpenThread : undefined}
+                onRetry={onRetry ? stableOnRetry : undefined}
                 retrying={retryingId === m.id}
                 myHandle={user?.handle}
                 streaming={!!(streamingAgents && streamingAgents[m.author])}
                 work={workByMessage?.[m.id]}
                 workEvents={
-                  (workByMessage?.[m.id] && eventsByWork?.[workByMessage[m.id].id]) || []
+                  (workByMessage?.[m.id] && eventsByWork?.[workByMessage[m.id].id]) ||
+                  EMPTY_WORK_EVENTS
                 }
                 canDelete={m.author === user?.handle || !!canModerate}
               />
@@ -324,7 +386,11 @@ export function MessageList({
   );
 }
 
-function MessageRow({
+// Memoized: rows re-render only when their own message data changes.
+// Parent callbacks arrive as stable latest-ref wrappers (above), and list
+// fallbacks use shared EMPTY_* constants, so streaming keystrokes and typing
+// indicators elsewhere don't reconcile all 50 rows.
+const MessageRow = React.memo(function MessageRow({
   m,
   grouped,
   label,
@@ -364,6 +430,23 @@ function MessageRow({
   canDelete?: boolean;
 }) {
   const [pickOpen, setPickOpen] = React.useState(false);
+  const pickRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!pickOpen) return undefined;
+    function onPointerDown(e: MouseEvent) {
+      if (pickRef.current && !pickRef.current.contains(e.target as Node)) setPickOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setPickOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [pickOpen]);
 
   const counts: Record<string, number> = {};
   const byEmoji: Record<string, string[]> = {};
@@ -413,6 +496,8 @@ function MessageRow({
               onClick={() => setPickOpen((o) => !o)}
               className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
               title="React"
+              aria-label={`React to message from ${label}`}
+              aria-expanded={pickOpen}
             >
               <Smile className="w-3 h-3" />
             </button>
@@ -421,6 +506,7 @@ function MessageRow({
                 onClick={() => onOpenThread(m.id)}
                 className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
                 title="Thread reply"
+                aria-label={`Reply in thread to message from ${label}`}
               >
                 <MessageSquare className="w-3 h-3" />
               </button>
@@ -432,6 +518,7 @@ function MessageRow({
                 }}
                 className="p-1 hover:text-rose-400 text-zinc-400 rounded hover:bg-zinc-800"
                 title="Delete"
+                aria-label="Delete message"
               >
                 <Trash2 className="w-3 h-3" />
               </button>
@@ -554,15 +641,18 @@ function MessageRow({
                 onClick={() => onReply(m.parent_id || m.id)}
                 className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
                 title="Reply"
+                aria-label={`Reply to ${label}`}
               >
                 <MessageSquare className="w-3 h-3" />
               </button>
             )}
-            <div className="relative">
+            <div className="relative" ref={pickRef}>
               <button
                 onClick={() => setPickOpen((o) => !o)}
                 className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
                 title="React"
+                aria-label={`React to message from ${label}`}
+                aria-expanded={pickOpen}
               >
                 <Smile className="w-3 h-3" />
               </button>
@@ -580,6 +670,7 @@ function MessageRow({
                 }}
                 className="p-1 hover:text-rose-400 text-zinc-400 rounded hover:bg-zinc-800"
                 title="Delete"
+                aria-label="Delete message"
               >
                 <Trash2 className="w-3 h-3" />
               </button>
@@ -610,9 +701,9 @@ function MessageRow({
       </div>
     </div>
   );
-}
+});
 
-function AgentTrace({ events }: { events: WorkEvent[] }) {
+const AgentTrace = React.memo(function AgentTrace({ events }: { events: WorkEvent[] }) {
   const [open, setOpen] = React.useState(false);
   const tools: string[] = [];
   const seen = new Set<string>();
@@ -633,7 +724,8 @@ function AgentTrace({ events }: { events: WorkEvent[] }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60 transition-colors"
+        aria-expanded={open}
+        className="w-full flex items-center justify-between px-3 py-2 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60 transition-colors min-h-[36px]"
       >
         <div className="flex items-center gap-2">
           <Terminal className="w-3.5 h-3.5 text-violet-400 shrink-0" />
@@ -666,7 +758,7 @@ function AgentTrace({ events }: { events: WorkEvent[] }) {
       )}
     </div>
   );
-}
+});
 
 function ReactPicker({
   onPick,

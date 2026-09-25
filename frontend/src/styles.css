@@ -221,6 +221,20 @@ body::after {
   border-radius: var(--radius-sm);
 }
 
+/* Keyboard-only focus ring: every interactive element gets a visible,
+   consistent ring without restyling mouse hover. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-brand-hover);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
 ::selection {
   background: var(--color-brand-subtle);
   color: var(--color-text-primary);
@@ -560,18 +574,19 @@ body::after {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+  min-height: 34px;
   padding: 8px 14px;
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-size: 13px;
-  font-weight: 510;
-  line-height: 1;
-  letter-spacing: 0.01em;
+  font-weight: 550;
+  line-height: 1.2;
+  letter-spacing: -0.005em;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: var(--color-text-primary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
   white-space: nowrap;
   text-decoration: none;
 }
@@ -647,8 +662,11 @@ body::after {
   color: var(--color-error);
 }
 
-.btn-sm { padding: 6px 10px; font-size: 12px; }
-.btn-lg { padding: 10px 18px; font-size: 14px; }
+.btn-sm { min-height: 30px; padding: 6px 10px; font-size: 12px; }
+.btn-lg { min-height: 40px; padding: 10px 18px; font-size: 14px; }
+
+/* Icon-only buttons keep a 32px+ touch target. */
+.btn-icon { min-width: 34px; min-height: 34px; }
 
 /* ── Input System ── */
 .input {
@@ -1016,7 +1034,13 @@ body::after {
 .empty-state:hover .empty-state-icon { transform: translateY(-2px); }
 .empty-state-icon svg { width: 24px; height: 24px; opacity: 0.75; }
 .empty-state-title { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; color: var(--color-text-primary); margin-bottom: var(--space-2); }
-.empty-state-message { font-size: 14px; line-height: 1.6; max-width: 320px; color: var(--color-text-muted); }
+.empty-state-message { font-size: 14px; line-height: 1.6; max-width: 340px; color: var(--color-text-muted); text-wrap: balance; }
+.empty-state-action { margin-top: var(--space-4); display: flex; gap: var(--space-2); justify-content: center; flex-wrap: wrap; }
+
+/* Message-history skeleton rows: shimmer blocks, no spinner. */
+.history-skeleton { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4) 0; }
+.history-skeleton-row { display: flex; gap: var(--space-3); align-items: flex-start; }
+.history-skeleton-body { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
 /* ── Scrollbar for panels ── */
 .scrollable { overflow-y: auto; }
@@ -1048,11 +1072,7 @@ body::after {
   .login-orb { animation: none !important; }
 }
 
-/* ── Focus Ring for Keyboard Navigation ── */
-:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-brand);
-}
+/* Focus ring is defined once near the top of this file (single source). */
 
 /* ── Selection ── */
 ::selection { background: var(--color-brand-subtle); color: var(--color-text-primary); }

@@ -33,3 +33,4 @@ frontend/dist/
 # local agent handoff context
 context.md
 .scratch/
+frontend/dist.zip
