@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, apiJson, bustCache, CACHE_TTL } from "../lib.js";
-import ModelPicker from "./ModelPicker.jsx";
+import ModelPicker from "./ModelPicker";
 
 export default function ProviderPanel({ token, onStatusChange, flash }) {
   const [providers, setProviders] = useState([]);

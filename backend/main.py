@@ -300,39 +300,31 @@ async def api_v2_provider_models(provider_id: str, handle: str = Depends(require
 
 @app.get("/api/v2/models/connected")
 async def api_v2_connected_models(handle: str = Depends(require_auth)):
-    """Return live models from the first connected provider, for dynamic UI defaults."""
-    from .ai_support.providers import providers_by_priority
-    from .ai_support.resolver import resolve_runtime_auth
+    """Return a single, selectable catalog across connected providers.
 
-    for spec in providers_by_priority():
-        auth = await resolve_runtime_auth(spec["id"])
-        if auth is None:
-            continue
-        body = await list_provider_models(spec["id"])
-        models = body.get("models") or []
-        if not models:
-            continue
-        preferred = auth.default_model or body.get("default_model")
-        if preferred and not any(m.get("id") == preferred for m in models):
-            preferred = models[0]["id"]
-        preferred = preferred or (models[0]["id"] if models else None)
-        return {
-            "provider_id": spec["id"],
-            "provider_name": spec.get("name") or spec["id"],
-            "live": bool(body.get("live")),
-            "models": models,
-            "default_model": preferred,
-            "note": body.get("note"),
-        }
+    The chat composer is provider-neutral: returning only the first connected
+    provider made the selector look empty or stale when another provider was
+    configured. ``list_all_models`` annotates each row with provider metadata
+    and falls back to the static catalog when no provider is connected.
+    """
     merged = await list_all_models()
+    groups = [group for group in (merged.get("providers") or []) if group.get("connected")]
     models = merged.get("models") or []
+    first = groups[0] if groups else None
     return {
-        "provider_id": None,
-        "provider_name": None,
-        "live": False,
+        "provider_id": first.get("provider_id") if first else None,
+        "provider_name": first.get("name") if first else None,
+        "live": any(bool(group.get("live")) for group in groups),
         "models": models,
-        "default_model": models[0]["id"] if models else None,
-        "note": "Connect a provider to fetch live models from its API.",
+        "default_model": (
+            first.get("default_model")
+            or (models[0].get("id") if models else None)
+        ),
+        "note": (
+            "Connected providers — choose any model below."
+            if groups
+            else "Connect a provider to fetch live models from its API."
+        ),
     }
 
 
@@ -926,13 +918,13 @@ async def api_post_message(
 ):
     if payload.author != handle:
         raise HTTPException(403, "author must match the authenticated handle")
-    if _rate_limited(handle):
-        raise HTTPException(429, "slow down")
     await _require_channel(channel_id, handle)
     if payload.parent_id is not None and not await db.message_in_channel(
         payload.parent_id, channel_id
     ):
         raise HTTPException(404, "parent message does not exist")
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
 
     msg = await db.add_message(
         channel_id, payload.author, payload.body, payload.author_kind, payload.parent_id
@@ -1886,19 +1878,38 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
         except (TypeError, ValueError):
             after = None
         if after is not None:
-            missed = await db.get_history_after(channel_id, after)
-            missed = await _with_reactions(missed)
-            for msg in missed:
-                await websocket.send_json({"type": "message", "message": msg})
+            # Page through the entire gap. A single 200-row page silently
+            # loses newer replies after a long disconnect.
+            cursor = after
+            for _ in range(20):
+                page = await db.get_history_after(channel_id, cursor)
+                if not page:
+                    break
+                page = await _with_reactions(page)
+                for msg in page:
+                    await websocket.send_json({"type": "message", "message": msg})
+                if len(page) < 200:
+                    break
+                cursor = int(page[-1]["id"])
 
     try:
         while True:
-            data = await websocket.receive_json()
-            body = (data.get("body") or "").strip()
-            if not body:
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise
+            except Exception:  # noqa: BLE001 - one bad frame must not kill chat
+                await websocket.send_json({"type": "error", "detail": "invalid JSON frame"})
                 continue
-            if _rate_limited(handle):
-                await websocket.send_json({"type": "error", "detail": "slow down"})
+            if not isinstance(data, dict):
+                await websocket.send_json({"type": "error", "detail": "invalid message frame"})
+                continue
+            raw_body = data.get("body")
+            if not isinstance(raw_body, str):
+                await websocket.send_json({"type": "error", "detail": "body must be text"})
+                continue
+            body = raw_body.strip()
+            if not body:
                 continue
             parent_id = data.get("parent_id")
             if parent_id is not None:
@@ -1910,6 +1921,9 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
                 if not await db.message_in_channel(parent_id, channel_id):
                     await websocket.send_json({"type": "error", "detail": "parent message does not exist"})
                     continue
+            if _rate_limited(handle):
+                await websocket.send_json({"type": "error", "detail": "slow down"})
+                continue
             msg = await db.add_message(channel_id, handle, body, "human", parent_id)
             await hub.broadcast(channel_id, {"type": "message", "message": msg})
             await _maybe_trigger_agents(channel_id, msg)

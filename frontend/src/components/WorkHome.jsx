@@ -37,9 +37,10 @@ export function WorkHome({ token, onOpenRun, flash }) {
       flash?.("Work queued", "success");
       load();
       onOpenRun?.(res.data);
-    } else {
-      flash?.(res.data?.detail || "Could not start work", "error");
+      return true;
     }
+    flash?.(res.data?.detail || "Could not start work", "error");
+    return false;
   }
 
   const needsYou = runs.filter((r) => r.status === "waiting_for_approval");
@@ -75,7 +76,7 @@ export function WorkHome({ token, onOpenRun, flash }) {
       <SmartComposer onSend={startWork} />
 
       <div className="work-grid">
-        {visible.length === 0 && <EmptyState title="No work here" hint="Describe an outcome above — agents plan, execute and verify." />}
+        {visible.length === 0 && <EmptyState title="No work here" message="Describe an outcome above — agents plan, execute and verify." />}
         {visible.map((r) => <WorkCard key={r.id} run={r} onOpen={() => onOpenRun?.(r)} token={token} />)}
       </div>
     </section>
@@ -155,8 +156,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
       if (["queued", "running", "waiting_for_approval"].includes(current?.status)) refresh();
     }, 2500);
     return () => { alive = false; clearInterval(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, run?.id]);
+  }, [token, run?.id, current?.status]);
 
   const agents = useMemo(() => {
     const names = new Set();
@@ -297,13 +297,13 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
               <span className="muted small">{e.step_id || ""} · {e.payload?.agent || ""}</span>
             </li>
           ))}
-          {events.length === 0 && <EmptyState title="No activity yet" hint="Events will stream here as agents work." />}
+          {events.length === 0 && <EmptyState title="No activity yet" message="Events will stream here as agents work." />}
         </ol>
       )}
 
       {tab === "Agents" && (
         <div className="agent-grid">
-          {agents.length === 0 && <EmptyState title="No agents yet" hint="Agents appear once they act on this work." />}
+          {agents.length === 0 && <EmptyState title="No agents yet" message="Agents appear once they act on this work." />}
           {agents.map((a) => (
             <div key={a} className="agent-chip-card"><strong>@{a}</strong><span className="muted small"> participant</span></div>
           ))}
@@ -312,7 +312,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
 
       {tab === "Artifacts" && (
         <div className="artifact-grid">
-          {artifacts.length === 0 && <EmptyState title="No artifacts" hint="Reports, diffs and files land here." />}
+          {artifacts.length === 0 && <EmptyState title="No artifacts" message="Reports, diffs and files land here." />}
           {artifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)}
         </div>
       )}

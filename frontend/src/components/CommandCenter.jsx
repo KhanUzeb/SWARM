@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiJson, Card, Button, Input, Textarea, Badge, EmptyState } from "../ui.jsx";
 import ProviderPanel from "../ai-support/ProviderPanel.jsx";
-import ModelPicker from "../ai-support/ModelPicker.jsx";
+import ModelPicker from "../ai-support/ModelPicker";
 
 const starterGraph = {
   nodes: [

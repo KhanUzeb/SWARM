@@ -30,7 +30,9 @@ export function Dropdown({
   className,
 }: DropdownProps) {
   const [open, setOpen] = React.useState(false);
+  const [placement, setPlacement] = React.useState<"top" | "bottom">("bottom");
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const menuRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -42,6 +44,11 @@ export function Dropdown({
       if (e.key === "Escape") setOpen(false);
     }
     if (open) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const spaceBelow = window.innerHeight - rect.bottom;
+        setPlacement(spaceBelow < 190 && rect.top > 190 ? "top" : "bottom");
+      }
       document.addEventListener("mousedown", handleClickOutside);
       document.addEventListener("keydown", handleKeyDown);
     }
@@ -54,18 +61,7 @@ export function Dropdown({
   return (
     <div className={cn("relative inline-block text-left", className)} ref={containerRef}>
       <span
-        role="button"
-        tabIndex={0}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={label}
         onClick={() => setOpen((prev) => !prev)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setOpen((prev) => !prev);
-          }
-        }}
         className="inline-flex cursor-pointer"
       >
         {trigger}
@@ -73,10 +69,12 @@ export function Dropdown({
 
       {open && (
         <div
+          ref={menuRef}
           role="menu"
           aria-label={label}
+          style={placement === "top" ? { bottom: "calc(100% + 6px)" } : { top: "calc(100% + 6px)" }}
           className={cn(
-            "absolute z-50 mt-1.5 min-w-[160px] overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/95 p-1 text-zinc-200 shadow-xl backdrop-blur-md animate-in fade-in-0 zoom-in-95 duration-100",
+            "absolute z-[var(--z-dropdown)] max-h-[min(320px,calc(100vh-24px))] min-w-[180px] overflow-y-auto overflow-x-hidden rounded-xl border border-zinc-800 bg-zinc-900/98 p-1 text-zinc-200 shadow-2xl backdrop-blur-xl animate-in fade-in-0 zoom-in-95 duration-100",
             align === "right" ? "right-0" : "left-0"
           )}
         >

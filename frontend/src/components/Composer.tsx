@@ -2,7 +2,7 @@ import * as React from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { shortModel } from "@/lib";
-import ModelPicker from "../ai-support/ModelPicker.jsx";
+import ModelPicker from "../ai-support/ModelPicker";
 import {
   Send,
   Square,
@@ -105,9 +105,11 @@ export function Composer({
 
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
   const mentionRef = React.useRef<HTMLUListElement>(null);
+  const modelMenuRef = React.useRef<HTMLDivElement>(null);
+  const modelButtonRef = React.useRef<HTMLButtonElement>(null);
+  const [modelPopoverStyle, setModelPopoverStyle] = React.useState<React.CSSProperties>({});
 
-  const providerOf = React.useCallback(
-    (modelId: string) => {
+  const providerOf = React.useCallback(    (modelId: string) => {
       const hit = (modelCatalog || []).find((m) => m.id === modelId);
       return hit?.provider_name || hit?.provider_id || "";
     },
@@ -126,6 +128,38 @@ export function Composer({
       ...agentNames,
     ];
   }, [agents]);
+
+  React.useEffect(() => {
+    if (!modelOpen) return undefined;
+    const onPointerDown = (event: MouseEvent) => {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(event.target as Node)) {
+        setModelOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setModelOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [modelOpen]);
+
+  React.useLayoutEffect(() => {
+    if (!modelOpen || !modelButtonRef.current) return;
+    const rect = modelButtonRef.current.getBoundingClientRect();
+    const width = Math.min(320, Math.max(240, window.innerWidth - 16));
+    const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+    setModelPopoverStyle({
+      position: "fixed",
+      left,
+      bottom: Math.max(8, window.innerHeight - rect.top + 8),
+      width,
+      maxHeight: Math.min(430, window.innerHeight - 16),
+    });
+  }, [modelOpen]);
 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const value = e.target.value;
@@ -231,9 +265,10 @@ export function Composer({
     try {
       const ok = await onSend(text, { model: model || null });
       if (ok === false) return;
-      setDraft("");
-      setMention({ open: false, index: 0, items: [], query: "" });
-      setSlash({ open: false, index: 0 });
+      // Do not erase text typed while an earlier send was in flight.
+      setDraft((current) => current.trim() === text ? "" : current);
+      setMention((current) => current.open ? { ...current, open: false } : current);
+      setSlash((current) => current.open ? { ...current, open: false } : current);
     } finally {
       setSending(false);
     }
@@ -447,12 +482,17 @@ export function Composer({
         {/* Bottom Toolbar Inside Composer Dock */}
         <div className="flex items-center justify-between px-3 py-2 border-t border-zinc-800/60 bg-zinc-950/40 rounded-b-2xl">
           {/* Left Actions: Model Selector & Agent Mention Chips */}
-          <div className="flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none]">
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
             {/* Quick Mention Button */}
             <button
               type="button"
               onClick={() => {
-                setDraft((d) => d + "@");
+                setDraft((d) => {
+                  const prefix = d && !/\s$/.test(d) ? `${d} ` : d;
+                  return `${prefix}@`;
+                });
+                const items = allMentions();
+                setMention({ open: items.length > 0, index: 0, items, query: "" });
                 inputRef.current?.focus();
               }}
               className="p-1 rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors shrink-0"
@@ -463,10 +503,13 @@ export function Composer({
             </button>
 
             {/* Model Selector Pill */}
-            <div className="relative shrink-0">
+            <div ref={modelMenuRef} className="relative shrink-0">
               <button
+                ref={modelButtonRef}
                 type="button"
                 onClick={() => setModelOpen((o) => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={modelOpen}
                 className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${
                   model
                     ? "bg-violet-500/10 text-violet-300 border-violet-500/30 hover:bg-violet-500/20"
@@ -484,7 +527,7 @@ export function Composer({
               </button>
 
               {modelOpen && (
-                <div className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-zinc-800 bg-zinc-900/95 p-2 shadow-2xl backdrop-blur-md z-50 animate-in fade-in-0 zoom-in-95">
+                <div style={modelPopoverStyle} className="z-[70] overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900/98 p-2 shadow-2xl backdrop-blur-xl animate-in fade-in-0 zoom-in-95">
                   <button
                     type="button"
                     onClick={() => {
@@ -512,6 +555,8 @@ export function Composer({
                     }}
                     onModelsLoaded={(list: Array<{ id: string; provider_name?: string; provider_id?: string }>) => setModelCatalog(list || [])}
                     placeholder="Search available models…"
+                    openOnMount
+                    inline
                   />
                 </div>
               )}

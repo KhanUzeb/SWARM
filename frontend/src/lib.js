@@ -151,7 +151,10 @@ export async function api(path, { token, method = "GET", body, json = true } = {
   return res;
 }
 
-/** GET with TTL cache; mutations can pass invalidate prefix to bust related keys. */
+/** GET with TTL cache; mutations can pass invalidate prefix to bust related keys.
+ * @param {string} path
+ * @param {{token?: string, method?: string, body?: unknown, cacheTtl?: number, invalidate?: string | string[] | null}} [options]
+ */
 export async function apiJson(path, {
   token,
   method = "GET",

@@ -104,7 +104,7 @@ export function TopBar({
         {onOpenSidebar && (
           <button
             type="button"
-            className="md:hidden flex items-center justify-center p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850 transition-colors"
+            className="topbar-sidebar-trigger flex items-center justify-center p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850 transition-colors"
             onClick={onOpenSidebar}
             aria-label="Open navigation"
           >

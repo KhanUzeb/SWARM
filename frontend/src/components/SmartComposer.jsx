@@ -17,12 +17,12 @@ export function SmartComposer({ onSend, contextItems = [], onRemoveContext, disa
   const [text, setText] = useState("");
   const active = MODES.find((m) => m.id === mode);
 
-  function submit(e) {
+  async function submit(e) {
     e?.preventDefault();
     const value = text.trim();
     if (!value || disabled) return;
-    onSend?.(value, { mode, context: contextItems });
-    setText("");
+    const result = await onSend?.(value, { mode, context: contextItems });
+    if (result !== false) setText("");
   }
 
   return (

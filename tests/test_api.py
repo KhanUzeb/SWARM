@@ -104,6 +104,22 @@ def test_post_history_and_pagination(client, auth):
     assert len(rows) == 2
 
 
+def test_invalid_message_does_not_consume_write_quota(client, auth):
+    _clear_rate()
+    invalid = client.post(
+        "/api/channels/general/messages",
+        json={"author": "uzeb", "body": "bad", "parent_id": 999999},
+        headers=auth,
+    )
+    assert invalid.status_code == 404
+    valid = client.post(
+        "/api/channels/general/messages",
+        json={"author": "uzeb", "body": "valid immediately after"},
+        headers=auth,
+    )
+    assert valid.status_code == 200
+
+
 def test_rate_limit(client, auth):
     client.post(
         "/api/channels/general/messages",

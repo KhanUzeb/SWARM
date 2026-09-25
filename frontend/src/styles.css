@@ -156,22 +156,9 @@
   --content-max: 780px;
 }
 
-/* Light mode (future) */
-@media (prefers-color-scheme: light) {
-  :root {
-    --color-bg: #ffffff;
-    --color-bg-elevated: #fafafa;
-    --color-bg-surface: #f5f5f5;
-    --color-bg-hover: #eeeeee;
-    --color-border-subtle: rgba(0, 0, 0, 0.06);
-    --color-border: rgba(0, 0, 0, 0.1);
-    --color-border-strong: rgba(0, 0, 0, 0.15);
-    --color-text-primary: #171717;
-    --color-text-secondary: #4d4d4d;
-    --color-text-muted: #808080;
-    --color-text-subtle: #a3a3a3;
-  }
-}
+/* The product is intentionally dark-native like Slack/Discord. Do not switch
+   semantic tokens from the OS while component chrome still uses hard-coded
+   dark Tailwind colors; that creates unreadable mixed surfaces. */
 
 /* ── Reset & Base ── */
 *, *::before, *::after { box-sizing: border-box; }
@@ -253,7 +240,7 @@ body::after {
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
-  background: rgba(8, 9, 10, 0.72);
+  background: #18191c;
 }
 
 .app.thread-open {
@@ -302,9 +289,9 @@ body::after {
   min-height: 0;
   margin: var(--workspace-inset) var(--workspace-inset) var(--workspace-inset) 0;
   border-radius: var(--radius-window);
-  background: #0d0d12;
+  background: #1e1f22;
   backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid #2b2d31;
   box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.6);
   overflow: hidden;
 }
@@ -315,7 +302,8 @@ body::after {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background: transparent;
+  background: #18191c !important;
+  border-right: 1px solid #2b2d31 !important;
   transition: width var(--transition-base);
 }
 
@@ -325,7 +313,7 @@ body::after {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: transparent;
+  background: #1e1f22;
   position: relative;
 }
 
@@ -499,7 +487,8 @@ body::after {
   gap: var(--space-4);
   padding: 0 var(--space-5);
   min-height: var(--topbar-height);
-  background: transparent;
+  background: #1e1f22;
+  border-bottom: 1px solid #2b2d31;
   flex-shrink: 0;
   z-index: 10;
 }
@@ -507,7 +496,7 @@ body::after {
 #composer {
   flex-shrink: 0;
   padding: var(--space-3) var(--space-5) var(--space-5);
-  background: linear-gradient(180deg, transparent 0%, rgba(17, 17, 20, 0.92) 30%);
+  background: linear-gradient(180deg, rgba(30,31,34,0) 0%, #1e1f22 30%);
   z-index: 5;
 }
 

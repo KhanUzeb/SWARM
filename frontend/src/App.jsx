@@ -57,7 +57,7 @@ export default function App() {
   const [loginErr, setLoginErr] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
-  const [computerOpen, setComputerOpen] = useState(() => localStorage.getItem("swarm_computer") !== "0");
+  const [computerOpen, setComputerOpen] = useState(false);
   const [panelTab, setPanelTab] = useState("files");
   const [mainView, setMainView] = useState("talk");
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -70,7 +70,7 @@ export default function App() {
   const [sendFailure, setSendFailure] = useState(null);
   const [contextStats, setContextStats] = useState(null);
   const [contextError, setContextError] = useState(false);
-  const [workRailOpen, setWorkRailOpen] = useState(() => localStorage.getItem("swarm_work_rail") !== "0");
+  const [workRailOpen, setWorkRailOpen] = useState(false);
   const [showContext, setShowContext] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -93,7 +93,7 @@ export default function App() {
   const wsGen = useRef(0);
   const loadReq = useRef(0);
   const toastTimer = useRef(null);
-  const lastSeenId = useRef(0);
+  const lastSeenId = useRef({});
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef(null);
   const intentionalClose = useRef(false);
@@ -135,7 +135,9 @@ export default function App() {
   }, []);
 
   const remember = useCallback((m) => {
-    if (m.id && m.id > lastSeenId.current) lastSeenId.current = m.id;
+    const channelKey = channelRef.current;
+    const previousId = lastSeenId.current[channelKey] || 0;
+    if (m.id && m.id > previousId) lastSeenId.current[channelKey] = m.id;
     setMessages(prev => ({ ...prev, [m.id]: m }));
     setReactions(prev => {
       if (m.reactions) return { ...prev, [m.id]: m.reactions.slice() };
@@ -171,7 +173,9 @@ export default function App() {
       if (prev[m.id]) return prev;
       return { ...prev, [m.id]: m };
     });
-    if (m.id && m.id > lastSeenId.current) lastSeenId.current = m.id;
+    const channelKey = channelRef.current;
+    const previousId = lastSeenId.current[channelKey] || 0;
+    if (m.id && m.id > previousId) lastSeenId.current[channelKey] = m.id;
     setReactions(prev => (prev[m.id] ? prev : { ...prev, [m.id]: m.reactions || [] }));
     if (m.parent_id) {
       setReplyCounts(prev => ({ ...prev, [m.parent_id]: (prev[m.parent_id] || 0) + 1 }));
@@ -293,7 +297,7 @@ export default function App() {
       nextMsgs[m.id] = m;
       nextReact[m.id] = m.reactions ? m.reactions.slice() : [];
       if (m.parent_id) counts[m.parent_id] = (counts[m.parent_id] || 0) + 1;
-      if (m.id > lastSeenId.current) lastSeenId.current = m.id;
+      if (m.id > (lastSeenId.current[channelId] || 0)) lastSeenId.current[channelId] = m.id;
     }
     setMessages(prev => ({ ...prev, ...nextMsgs }));
     setReactions(prev => ({ ...prev, ...nextReact }));
@@ -348,7 +352,7 @@ export default function App() {
       if (gen !== wsGen.current) { ws.close(); return; }
       reconnectAttempt.current = 0;
       setWsStatus("connected");
-      ws.send(JSON.stringify({ token: t, last_seen_id: lastSeenId.current || null }));
+      ws.send(JSON.stringify({ token: t, last_seen_id: lastSeenId.current[channelRef.current] || null }));
     };
     ws.onmessage = (ev) => {
       if (gen !== wsGen.current) return; // stale socket from a previous channel
@@ -498,9 +502,18 @@ export default function App() {
     const body = { author, body: text, author_kind: "human", parent_id: parentId };
     if (model) body.model = model;
     try {
-      const res = await apiJson(`/api/channels/${channelId}/messages`, {
+      let res = await apiJson(`/api/channels/${channelId}/messages`, {
         token: tokenRef.current, method: "POST", body,
       });
+      // The API intentionally rate-limits writes to 500ms. A chat composer
+      // should never lose a message because the user typed immediately after
+      // login or a previous send, so transparently wait and retry once.
+      if (res.status === 429) {
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
+        res = await apiJson(`/api/channels/${channelId}/messages`, {
+          token: tokenRef.current, method: "POST", body,
+        });
+      }
       if (!res.ok) {
         if (res.status === 0 || res.status >= 500) {
           // Server/network outage: queue for automatic resend, don't drop.

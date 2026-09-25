@@ -156,7 +156,7 @@ export function MessageList({
   );
   const quickStarts = buildQuickStarts(agents, allAgents, channelName);
 
-  if (roots.length === 0 && !loadingMore) {
+  if (roots.length === 0 && !loadingMore && liveStreams.length === 0 && !typing) {
     return (
       <div
         id="log"
@@ -408,7 +408,7 @@ function MessageRow({
           </div>
 
           {/* Quick hover action bar */}
-          <div className="absolute right-0 -bottom-6 hidden group-hover:flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 rounded-md px-1 py-0.5 shadow-md backdrop-blur-sm z-10 text-[11px]">
+          <div className="absolute right-0 -bottom-6 hidden group-hover:flex group-focus-within:flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 rounded-md px-1 py-0.5 shadow-md backdrop-blur-sm z-10 text-[11px]">
             <button
               onClick={() => setPickOpen((o) => !o)}
               className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
@@ -548,7 +548,7 @@ function MessageRow({
           )}
 
           {/* Action trigger buttons on hover */}
-          <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 rounded-md px-1 py-0.5 shadow-md backdrop-blur-sm z-10 text-[11px]">
+          <div className="absolute right-2 top-2 hidden group-hover:flex group-focus-within:flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 rounded-md px-1 py-0.5 shadow-md backdrop-blur-sm z-10 text-[11px]">
             {onReply && (
               <button
                 onClick={() => onReply(m.parent_id || m.id)}
@@ -677,7 +677,7 @@ function ReactPicker({
 }) {
   return (
     <div
-      className="absolute bottom-full right-0 mb-1 z-50 grid grid-cols-6 gap-1 p-2 rounded-xl border border-zinc-800 bg-zinc-900/95 shadow-xl backdrop-blur-md animate-in fade-in-0 zoom-in-95"
+      className="emoji-picker absolute bottom-full right-0 mb-1 z-50 grid w-52 grid-cols-6 gap-1.5 p-2 rounded-xl border border-zinc-800 bg-zinc-900/95 shadow-xl backdrop-blur-md animate-in fade-in-0 zoom-in-95"
       role="menu"
     >
       {EMOJI.map((emoji: string) => (
@@ -688,7 +688,7 @@ function ReactPicker({
             onPick(emoji);
             onClose();
           }}
-          className="p-1 hover:bg-zinc-800 rounded text-base transition-transform active:scale-125"
+          className="emoji flex h-8 w-8 items-center justify-center rounded-lg p-0 text-base transition-transform hover:bg-zinc-800 hover:scale-110 active:scale-125"
         >
           {emoji}
         </button>
@@ -725,7 +725,7 @@ function ReactionChips({
                 : "bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-700"
             }`}
           >
-            <span>{emoji}</span>
+            <span className="emoji whitespace-nowrap">{emoji}</span>
             {counts[emoji] > 1 && (
               <span className="text-[10px] text-zinc-400">{counts[emoji]}</span>
             )}

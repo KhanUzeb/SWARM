@@ -29,6 +29,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    watch: {
+      ignored: ["**/dist.zip", "**/dist/**"],
+    },
     proxy: {
       "/api/v2/ws": { target: "ws://127.0.0.1:8000", ws: true },
       "/api": "http://127.0.0.1:8000",
