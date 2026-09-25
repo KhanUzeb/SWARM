@@ -199,8 +199,28 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
     }
   }
 
-  async function verify(passed) {
+  async function retryRun() {
     setVerifyBusy(true);
+    setVerifyMsg("");
+    try {
+      const res = await apiJson(`/api/v2/runs/${run.id}/start`, { method: "POST", token });
+      if (res.ok) {
+        setCurrent(res.data);
+        onStatusChange?.(res.data);
+        const ev = await apiJson(`/api/v2/runs/${run.id}/events`, { token });
+        if (ev.ok) setEvents(ev.data);
+        setVerifyMsg("Run resumed — completed steps are skipped.");
+      } else {
+        setVerifyMsg(res.data?.detail || "Could not resume run");
+      }
+    } catch (e) {
+      setVerifyMsg(e.message || "Could not resume run");
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
+  async function verify(passed) {    setVerifyBusy(true);
     setVerifyMsg("");
     try {
       const res = await apiJson(`/api/v2/runs/${run.id}/verify`, {
@@ -258,7 +278,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
               detail={failure.payload?.error || failure.payload?.message}
               done={(progress?.plan || []).slice(0, 2)}
               missing={[progress?.current_step || "current step"].filter(Boolean)}
-              actions={[{ label: "Retry step", variant: "primary" }, { label: "View trace" }]}
+              actions={[{ label: "Retry step", variant: "primary", onClick: retryRun }, { label: "View trace", onClick: () => setTab("Activity") }]}
             />
           )}
           <div className="verify-row">

@@ -59,7 +59,7 @@ export function SmartComposer({ onSend, contextItems = [], onRemoveContext, disa
         </button>
       </div>
       <div className="composer-hints muted small">
-        <span>+ attach</span><span>@ mention</span><span>/ skill</span><span>⌘K commands</span><span>Model ▾</span>
+        <span><kbd>Enter</kbd> to send</span><span><kbd>⌘K</kbd> commands</span>
       </div>
     </form>
   );

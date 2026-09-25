@@ -1079,12 +1079,12 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
       <ScrollArea className="thread-body">
         {parent && (
           <div className="thread-parent">
-            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} streamText={streamText} />
+            <MessageList messages={messages} order={[parentId]} agents={[]} allAgents={allAgents} user={user} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} streamText={streamText} />
           </div>
         )}
         <Divider />
         {replyOrder.length > 0 && (
-          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReply={() => {}} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onOpenThread={() => {}} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} streamText={streamText} />
+          <MessageList messages={messages} order={replyOrder} agents={[]} allAgents={allAgents} user={user} onReact={onReact} onUnreact={onUnreact} onDelete={onDelete} canModerate={canModerate} onRetry={onRetry} retryingId={retryingId} replyCounts={{}} reactions={reactions} channelId="" groupedWith={() => false} streamText={streamText} />
         )}
       </ScrollArea>
       {sendFailure && (

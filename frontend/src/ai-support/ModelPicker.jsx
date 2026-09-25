@@ -102,6 +102,14 @@ export default function ModelPicker({
     }
   }, [autoSelectFirst, disabled, providerId, load]);
 
+  // Eager load on mount whenever a token is available: the picker badge,
+  // the parent model catalog (e.g. Composer's provider prefix), and the
+  // option list are all populated without requiring a first open.
+  useEffect(() => {
+    if (disabled || hasLoaded || !token) return;
+    load();
+  }, [disabled, hasLoaded, token, load]);
+
   useEffect(() => {
     if (!open) return undefined;
     function onDoc(ev) {

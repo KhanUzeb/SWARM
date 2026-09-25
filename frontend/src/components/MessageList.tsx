@@ -67,11 +67,11 @@ interface MessageListProps {
   agents?: Agent[];
   allAgents?: Agent[];
   user?: { handle?: string };
-  onReply: (id: number | string) => void;
+  onReply?: (id: number | string) => void;
   onReact: (id: number | string, emoji: string) => void;
   onUnreact?: (id: number | string, emoji: string) => void;
   onDelete?: (m: Message) => void;
-  onOpenThread: (id: number | string) => void;
+  onOpenThread?: (id: number | string) => void;
   onRetry?: (m: Message) => void;
   replyCounts: Record<string | number, number>;
   reactions: Record<string | number, Reaction[]>;
@@ -350,11 +350,11 @@ function MessageRow({
   agent?: Agent;
   reactions: Reaction[];
   replyCount: number;
-  onReply: (id: number | string) => void;
+  onReply?: (id: number | string) => void;
   onReact: (id: number | string, emoji: string) => void;
   onUnreact?: (id: number | string, emoji: string) => void;
   onDelete?: (m: Message) => void;
-  onOpenThread: (id: number | string) => void;
+  onOpenThread?: (id: number | string) => void;
   onRetry?: (m: Message) => void;
   retrying?: boolean;
   myHandle?: string;
@@ -416,7 +416,7 @@ function MessageRow({
             >
               <Smile className="w-3 h-3" />
             </button>
-            {!m.parent_id && (
+            {!m.parent_id && onOpenThread && (
               <button
                 onClick={() => onOpenThread(m.id)}
                 className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
@@ -452,7 +452,7 @@ function MessageRow({
           myHandle={myHandle}
           onToggle={toggleReact}
         />
-        {!grouped && !m.parent_id && replyCount > 0 && (
+        {!grouped && !m.parent_id && replyCount > 0 && onOpenThread && (
           <button
             onClick={() => onOpenThread(m.id)}
             className="mt-1 text-[11px] text-violet-400 hover:underline inline-flex items-center gap-1"
@@ -549,13 +549,15 @@ function MessageRow({
 
           {/* Action trigger buttons on hover */}
           <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 rounded-md px-1 py-0.5 shadow-md backdrop-blur-sm z-10 text-[11px]">
-            <button
-              onClick={() => onReply(m.parent_id || m.id)}
-              className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
-              title="Reply"
-            >
-              <MessageSquare className="w-3 h-3" />
-            </button>
+            {onReply && (
+              <button
+                onClick={() => onReply(m.parent_id || m.id)}
+                className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
+                title="Reply"
+              >
+                <MessageSquare className="w-3 h-3" />
+              </button>
+            )}
             <div className="relative">
               <button
                 onClick={() => setPickOpen((o) => !o)}
@@ -594,7 +596,7 @@ function MessageRow({
         />
 
         {/* Reply thread indicator */}
-        {!grouped && !m.parent_id && replyCount > 0 && (
+        {!grouped && !m.parent_id && replyCount > 0 && onOpenThread && (
           <button
             onClick={() => onOpenThread(m.id)}
             className="mt-1 text-[11px] text-violet-400 hover:underline inline-flex items-center gap-1"

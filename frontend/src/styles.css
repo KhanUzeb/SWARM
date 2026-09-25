@@ -8,42 +8,43 @@
  * color carries state, never decoration.
  */
 :root {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --card: #111114;
-  --card-foreground: #fafafa;
-  --popover: #121216;
-  --popover-foreground: #fafafa;
-  --primary: #7c3aed;
+  --background: #08090a;
+  --foreground: #f7f8f8;
+  --card: #0f1011;
+  --card-foreground: #f7f8f8;
+  --popover: #191a1b;
+  --popover-foreground: #f7f8f8;
+  --primary: #5e6ad2;
   --primary-foreground: #ffffff;
-  --secondary: #1f1f23;
-  --secondary-foreground: #fafafa;
-  --muted: #1c1c21;
-  --muted-foreground: #a1a1aa;
+  --secondary: #191a1b;
+  --secondary-foreground: #f7f8f8;
+  --muted: #28282c;
+  --muted-foreground: #8a8f98;
   --destructive: #ef4444;
-  --destructive-foreground: #fafafa;
-  --ring: #7c3aed;
+  --destructive-foreground: #f7f8f8;
+  --ring: #7170ff;
   --radius: 0.625rem;
 
-  /* ── Color Primitives (OpenCode Dark Neutral base) ── */
-  --color-bg: #09090b;
-  --color-bg-elevated: #111115;
-  --color-bg-surface: #18181f;
-  --color-bg-hover: #22222b;
-  --color-bg-glass: rgba(13, 13, 23, 0.82);
-  --color-border-subtle: rgba(235, 230, 255, 0.05);
-  --color-border: rgba(235, 230, 255, 0.08);
-  --color-border-strong: rgba(235, 230, 255, 0.12);
+  /* ── Color Primitives (Linear-native dark: near-black canvas,
+     white-opacity structure, single indigo accent) ── */
+  --color-bg: #08090a;
+  --color-bg-elevated: #0f1011;
+  --color-bg-surface: #191a1b;
+  --color-bg-hover: #28282c;
+  --color-bg-glass: rgba(15, 16, 17, 0.82);
+  --color-border-subtle: rgba(255, 255, 255, 0.05);
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.12);
   --color-bubble-agent: #181826;
   --color-bubble-agent-hover: #202033;
   --color-bubble-user: linear-gradient(135deg, #a678ff 0%, #7c5cf0 100%);
   --color-bubble-user-text: #ffffff;
   --color-bubble-user-muted: rgba(255, 255, 255, 0.65);
 
-  --color-text-primary: #f4f0fa;
-  --color-text-secondary: #b9b3cc;
-  --color-text-muted: #8b85a3;
-  --color-text-subtle: #5f5a76;
+  --color-text-primary: #f7f8f8;
+  --color-text-secondary: #d0d6e0;
+  --color-text-muted: #8a8f98;
+  --color-text-subtle: #62666d;
 
   /* Semantic token aliases (plan §35) */
   --bg-canvas: var(--color-bg);
@@ -55,8 +56,8 @@
   --text-primary: var(--color-text-primary);
   --text-secondary: var(--color-text-secondary);
   --text-muted: var(--color-text-muted);
-  --accent: #9d7bff;
-  --accent-soft: rgba(157, 123, 255, 0.14);
+  --accent: #7170ff;
+  --accent-soft: rgba(113, 112, 255, 0.14);
   --accent-magenta: #e5499b;
   --accent-magenta-soft: rgba(229, 73, 155, 0.12);
   --state-running: #7aa2ff;
@@ -75,11 +76,11 @@
   --duration-normal: 220ms;
   --duration-slow: 340ms;
 
-  --color-brand: #9d7bff;
-  --color-brand-bg: #5b4bc4;
-  --color-brand-hover: #b39dff;
-  --color-brand-subtle: rgba(157, 123, 255, 0.14);
-  --color-brand-glow: rgba(139, 92, 246, 0.35);
+  --color-brand: #5e6ad2;
+  --color-brand-bg: #5e6ad2;
+  --color-brand-hover: #828fff;
+  --color-brand-subtle: rgba(94, 106, 210, 0.14);
+  --color-brand-glow: rgba(94, 106, 210, 0.35);
 
   --color-success: #5da37a;
   --color-success-bg: rgba(93, 163, 122, 0.15);
@@ -195,26 +196,20 @@ body {
   font-size: 15px;
   line-height: 1.6;
   color: var(--color-text-primary);
-  background: #050508;
+  background: #08090a;
   font-feature-settings: "cv01", "ss03", "liga", "kern", "calt";
 }
 
-/* Ambient backdrop recreating the midnight aurora reference: near-black
-   canvas, violet band sweeping the middle, magenta bloom low-right, blue
-   breathing at the right edge, pale haze in the far corner, fine grain
-   over everything. App surfaces stay solid so glow lives at the margins. */
+/* Linear-style canvas: darkness IS the whitespace. One faint indigo
+   glow above the fold, nothing else — content emerges from black. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(720px 520px at 96% 100%, rgba(255, 244, 252, 0.10), transparent 55%),
-    radial-gradient(900px 620px at 90% 28%, rgba(59, 130, 246, 0.16), transparent 60%),
-    radial-gradient(1050px 720px at 58% 62%, rgba(139, 92, 246, 0.22), transparent 62%),
-    radial-gradient(1250px 820px at 76% 110%, rgba(236, 72, 153, 0.26), transparent 60%),
-    radial-gradient(900px 700px at 30% 110%, rgba(190, 60, 150, 0.12), transparent 60%),
-    linear-gradient(180deg, #050508 0%, #07070d 100%);
+    radial-gradient(900px 420px at 50% -8%, rgba(94, 106, 210, 0.10), transparent 62%),
+    linear-gradient(180deg, #08090a 0%, #08090a 100%);
 }
 body::after {
   content: "";
@@ -222,7 +217,7 @@ body::after {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.07;
+  opacity: 0.035;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
 }
 @media (prefers-reduced-motion: reduce) {
@@ -258,7 +253,7 @@ body::after {
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
-  background: rgba(14, 10, 13, 0.72);
+  background: rgba(8, 9, 10, 0.72);
 }
 
 .app.thread-open {
