@@ -4,11 +4,12 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 
 | Commit (search log) | Scope | Revert effect |
 |---------------------|-------|---------------|
+| Station board visual world | `styles.css` (rewritten, `components.css` deleted), `components/Flap.tsx`, roster/transcript/composer/topbar/login/palette, all `components/ui/*`, `AGENTS.md` §8a | Reverts the whole look to the midnight-indigo identity; `components.css` is gone and is not restored by reverting alone |
 | Add central tool registry, plugins, and custom tools | `backend/tools/`, `plugins/`, tool API routes | Removes extensible tools; agents use builtins only |
 | Add tau-style AI provider module | `backend/ai_support/`, `ai-support/README.md` | Removes multi-provider catalog + encrypted key store |
 | Add API security guard and frontend provider UI shell | `backend/security.py`, mascot, `frontend/src/ai-support/`, cache | Removes origin guard + UI panels (backend still has providers) |
 | Wire tools, providers, security, and onboarding into app | `db.py`, `agent.py`, `main.py`, `App.jsx`, tests | Breaks features if reverted alone; revert prior commits first |
-| Document tools, providers, and API security in specs | `README.md`, `SPEC.md`, `PROJECT.md`, this file | Docs only |
+| Document tools, providers, and API security in specs | `README.md`, `SPEC.md`, `PROJECT.md`, this file | Docs only; `SPEC.md` and `PROJECT.md` since deleted |
 | Add Pip mascot, custom Bot names, and group chats | mascot, `display_name`, `channel_members`, group trigger | Reverts companion UI, friendly names, and group rooms |
 | Make swarm a Slack-shaped AI workspace | admin, people DMs, `@team`, export, archive, mascot removed | Reverts small-team workspace + restores Pip |
 | Add chat retry and admin password docs | `POST /api/messages/{id}/retry`, PBKDF2 admin password, UI retry banner | Reverts user-facing retry + password reclaim docs (code may remain) |
@@ -25,7 +26,7 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 | Prune test suite 176 -> 141, fix flaky recovery test | merged/removed redundant tests, deterministic approval-parked recovery | Restores deleted tests (suite grows back); recovery test may flake again |
 | Prune test suite 141 -> 110 | merged endpoint neighbors into journey tests, folded thin guards | Same as above |
 | Task-aware model routing + live work detail + context drawer | `backend/routing.py`, route endpoint, `CommandCenter` Auto-route, live `WorkDetail` modal, `ContextDrawer` in talk view, `RunMonitor` removed | Reverts routing + detail unification; RunMonitor does not come back |
-| Midnight Magic + Galaxy Dust identity + aurora backdrop | `styles.css`, `components.css`, `docs/VISUAL-IDENTITY.md` | Reverts to neutral charcoal; backdrop returns to flat canvas |
+| Midnight Magic + Galaxy Dust identity + aurora backdrop | `styles.css`, `components.css` (both since replaced — see the station board row above) | Superseded; reverting is not a clean path |
 | Chat model picker + live token streaming | `messages.model` column + migration, per-message override threading, composer chip, bubble model tags, stream-text bubbles | Reverts composer to Auto-only; replies lose model tags; tokens stop rendering live |
 | Stop/resume, outage fallbacks, text-only composer | channel task registry + stop endpoint, cutoff persist, cutoff-aware retry, model-not-found fallback, offline outbox with auto-flush, composer stop/Auto-row polish (voice input removed) | Reverts stop/resume/outbox; errors and cutoffs stop being resumable |
 
@@ -36,7 +37,7 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 - **AI providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen (OpenAI SDK adapter, tau-inspired resolver); UI in Computer → AI; minimisable provider panel
 - **Apps:** Composio + Exa + Tavily + Firecrawl keys in Computer → Apps; Browser Use CLI and CUA are local installs
 - **Security:** Bearer required on data reads; CORS allowlist; `X-Swarm-Client: web` for browser origins; first user is admin; optional admin password stored as PBKDF2 hash (never plain text)
-- **Frontend:** Slack-style sidebar (DMs, teams, channels, search); Computer panel with Sandbox vs System file browser; Retry on agent error bubbles and failed human sends
+- **Frontend:** Slack-style sidebar (DMs, teams, channels, search); Computer panel with Sandbox vs System file browser; Retry on agent error and failed human sends. The visual world is the station board — flap modules for discrete state, printed lines for the transcript, two signal hues, Archivo + Departure Mono, no `backdrop-filter` (`AGENTS.md` §8a)
 - **Bots:** Custom `display_name`; group chats; `@core` team; archive instead of hard-delete
 - **People:** Private 1:1s; JSON/CSV audit export per channel
 - **Slash commands:** `/standup` `/digest` `/decide` `/research` `/page` `/repro` `/draft` `/review` `/plan` `/brief`

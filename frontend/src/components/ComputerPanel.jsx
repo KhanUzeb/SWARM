@@ -120,7 +120,7 @@ function PanelChrome({ activeGroup, activeTab, onSelectTab, onClose, onRefresh, 
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           </button>
         </Tooltip>
-        <button className="panel-close" onClick={onClose} aria-label="Close">×</button>
+        <button className="panel-close" onClick={onClose} aria-label="Close"><X size={14} /></button>
       </div>
     </div>
   );
@@ -156,7 +156,7 @@ function SandboxView({ computer, token, flash }) {
           {files.map(f => (
             <li key={f.path}>
               <button type="button" className="file-row" onClick={() => openFile(f.path)} disabled={busy}>
-                <span className="file-icon">📄</span>
+                <span className="file-icon"><FileText size={13} /></span>
                 <div className="file-info">
                   <span className="file-name">{f.path}</span>
                   <span className="file-size text-mono-xs text-subtle">{fmtBytes(f.size)}</span>

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { ChevronDown } from "lucide-react";
+import { Lamp } from "../components/Flap";
 import { apiJson } from "../lib.js";
 
 export interface ModelOption {
@@ -201,8 +203,11 @@ export default function ModelPicker({
         }}
       >
         <span className="model-picker-value">{current ? labelOf(current) : value || placeholder}</span>
-        <span className={`model-live${live ? " on" : ""}`}>{badge}</span>
-        <span className="model-picker-chevron" aria-hidden="true">⌄</span>
+        <span className={`model-badge${live ? " is-live" : ""}`}>
+          {live && <Lamp tone="go" />}
+          {badge}
+        </span>
+        <ChevronDown size={12} className="model-picker-chevron" aria-hidden="true" />
       </button>
       {open && (
         <div className={`model-picker-pop${inline ? " model-picker-pop-inline" : ""}`}>

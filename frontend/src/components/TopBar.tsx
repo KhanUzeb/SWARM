@@ -1,19 +1,17 @@
 import * as React from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Flap, Lamp } from "@/components/Flap";
 import {
-  Menu,
-  Hash,
-  Bot,
-  Users,
-  Search,
-  Terminal,
-  PanelRight,
-  ShieldAlert,
-  Sparkles,
   Activity,
+  Bot,
+  Menu,
+  PanelRight,
+  Search,
+  ShieldAlert,
+  Terminal,
+  Users,
 } from "lucide-react";
 
 interface TopBarProps {
@@ -24,7 +22,13 @@ interface TopBarProps {
   onOpenCommandPalette: () => void;
   onViewChange: (view: string) => void;
   currentView: string;
-  approvals: Array<{ id: string; status: string; channel_id?: string; agent_name?: string; action?: string }>;
+  approvals: Array<{
+    id: string;
+    status: string;
+    channel_id?: string;
+    agent_name?: string;
+    action?: string;
+  }>;
   onResolveApproval: (id: string, decision: string) => void;
   wsStatus?: string;
   workActive?: unknown[];
@@ -56,13 +60,13 @@ const VIEW_TARGETS: Record<string, string> = {
   knowledge: "knowledge",
 };
 
-const VIEW_LABELS: Record<string, string> = {
-  home: "Home",
-  work: "Work",
-  chat: "Chat",
-  agents: "Agents",
-  knowledge: "Knowledge",
-};
+const VIEWS: Array<[string, string]> = [
+  ["home", "Board"],
+  ["work", "Work"],
+  ["chat", "Talk"],
+  ["agents", "Roster"],
+  ["knowledge", "Knowledge"],
+];
 
 export function TopBar({
   channel,
@@ -80,101 +84,70 @@ export function TopBar({
   workConnected,
   onToggleWorkRail,
   workRailOpen,
-  participants,
   onOpenSidebar,
 }: TopBarProps) {
   const normalizedView = VIEW_ALIASES[currentView] || currentView;
   const go = (v: string) => onViewChange(VIEW_TARGETS[v] || v);
+
   const pendingApprovals = approvals.filter(
-    (a) => a.status === "pending" && a.channel_id === channel?.id
+    (a) => a.status === "pending" && a.channel_id === channel?.id,
   );
   const working = agents.filter((a) => a.status === "working").length;
   const attention = (workAttention || []).length;
+  const activeRuns = (workActive || []).length;
 
   const isDm = channel?.kind === "dm";
   const isAgent = isDm && agents.some((a) => a.name === channel?.name);
+  const link = wsStatus === "connected" ? "connected" : wsStatus === "connecting" ? "connecting" : "offline";
 
   return (
-    <header
-      id="topbar"
-      className="flex items-center justify-between h-12 px-4 border-b border-zinc-800/80 bg-zinc-950/70 backdrop-blur-md z-20 shrink-0 select-none transition-colors"
-    >
-      {/* Left: Breadcrumbs & Channel Topic */}
-      <div className="flex items-center gap-3 min-w-0 flex-1">
+    <header id="topbar">
+      <div className="topbar-left">
         {onOpenSidebar && (
           <button
             type="button"
-            className="topbar-sidebar-trigger flex items-center justify-center p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850 transition-colors"
+            className="btn btn-ghost btn-icon btn-sm topbar-sidebar-trigger"
             onClick={onOpenSidebar}
-            aria-label="Open navigation"
+            aria-label="Open roster"
           >
-            <Menu className="w-4 h-4" />
+            <Menu size={15} />
           </button>
         )}
 
-        <div className="flex items-center gap-2 min-w-0">
-          {/* Breadcrumb Workspace */}
-          <div className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-zinc-400">
-            <span className="flex h-2 w-2 rounded-full bg-violet-500 shadow-[0_0_8px_rgba(139,92,246,0.5)]" />
-            <span>Swarm</span>
-            <span className="text-zinc-600">/</span>
-          </div>
-
-          {/* Current Channel / Destination */}
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="flex items-center justify-center w-6 h-6 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-400 shrink-0">
-              {isAgent ? (
-                <Bot className="w-3.5 h-3.5 text-violet-400" />
-              ) : isDm ? (
-                <Users className="w-3.5 h-3.5 text-zinc-400" />
-              ) : (
-                <Hash className="w-3.5 h-3.5 text-zinc-400" />
-              )}
-            </div>
-
-            <div className="flex items-baseline gap-2 min-w-0 truncate">
-              <h1 className="text-xs font-semibold text-zinc-100 truncate tracking-tight">
-                {channel?.name || "Select a channel"}
-              </h1>
-
-              {channel?.topic && (
-                <span className="hidden xl:inline text-[11px] text-zinc-400 truncate max-w-[280px]">
-                  {channel.topic}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Connection Status or Active Session pill */}
-          {wsStatus && wsStatus !== "connected" && (
-            <span className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              {wsStatus === "connecting" ? "Connecting" : "Offline"}
-            </span>
-          )}
-
-          {(workActive || []).length > 0 && (
-            <span className="hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono bg-violet-500/10 text-violet-300 border border-violet-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-ping" />
-              {workActive?.length} run{!workConnected ? " (replaying)" : ""}
-            </span>
+        <div className="channel-avatar" aria-hidden="true">
+          {isAgent ? (
+            <Bot size={12} />
+          ) : isDm ? (
+            <Users size={12} />
+          ) : (
+            (channel?.name || "?").slice(0, 2).toUpperCase()
           )}
         </div>
+
+        <div className="channel-title-row">
+          <h1 className="channel-name">{channel?.name || "No room selected"}</h1>
+          {channel?.topic && <span className="channel-topic">{channel.topic}</span>}
+        </div>
+
+        {/* The connection lamp is the only always-lit element on the housing. */}
+        <span
+          className="status-chip"
+          title={
+            link === "connected"
+              ? "Linked to the workspace"
+              : link === "connecting"
+                ? "Reconnecting"
+                : "No link to the workspace"
+          }
+        >
+          <Lamp tone={link === "connected" ? "go" : link === "connecting" ? "amber" : "off"} />
+          <span className="reg">{link}</span>
+        </span>
       </div>
 
-      {/* Center: OpenCode-style View Navigation Tabs */}
-      <div className="hidden lg:flex items-center justify-center">
-        <div
-          role="tablist"
-          className="flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/90 border border-zinc-800/80 backdrop-blur-sm"
-        >
-          {[
-            ["home", "Home"],
-            ["work", "Work"],
-            ["chat", "Chat"],
-            ["agents", "Agents"],
-            ["knowledge", "Knowledge"],
-          ].map(([v, label]) => {
+      <div className="topbar-center">
+        <div className="view-tabs" role="tablist" aria-label="Views">
+          {VIEWS.map(([v, label]) => {
             const active = normalizedView === v;
             return (
               <button
@@ -182,11 +155,7 @@ export function TopBar({
                 role="tab"
                 aria-selected={active}
                 onClick={() => go(v)}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-all duration-150 select-none ${
-                  active
-                    ? "bg-zinc-800 text-zinc-100 shadow-sm font-semibold"
-                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-850/50"
-                }`}
+                className={`view-tab ${active ? "active" : ""}`}
               >
                 {label}
               </button>
@@ -195,97 +164,66 @@ export function TopBar({
         </div>
       </div>
 
-      {/* Right: Actions, Badges & Toggles */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        {/* Working status */}
-        {working > 0 && (
-          <Badge variant="success" className="gap-1 font-mono text-[10px]">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            {working} working
-          </Badge>
+      <div className="topbar-right">
+        {activeRuns > 0 && (
+          <Flap
+            value={`${activeRuns} run${activeRuns === 1 ? "" : "s"}`}
+            tone="amber"
+            title={workConnected ? "Runs in progress" : "Replaying run history"}
+          />
         )}
 
-        {/* Pending approvals */}
         {pendingApprovals.length > 0 && (
           <Dropdown
-            label={`${pendingApprovals.length} pending approvals`}
+            label={`${pendingApprovals.length} approvals waiting`}
             trigger={
-              <button className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 transition-colors">
-                <ShieldAlert className="w-3 h-3 text-amber-400" />
-                <span>
-                  {pendingApprovals.length} approval
-                  {pendingApprovals.length !== 1 ? "s" : ""}
-                </span>
+              <button className="chip chip-hold" type="button">
+                <ShieldAlert size={12} />
+                {pendingApprovals.length} to clear
               </button>
             }
             items={pendingApprovals.map((a) => ({
               id: a.id,
-              label: `${a.agent_name || "Agent"}: ${a.action || "Action"}`,
+              label: `${a.agent_name || "Teammate"}: ${a.action || "action"}`,
               onClick: () => onResolveApproval(a.id, "approved"),
             }))}
           />
         )}
 
-        {/* Attention badge */}
         {attention > 0 && (
-          <button
-            onClick={onToggleWorkRail}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25 transition-colors"
-            title="Open work needing attention"
-          >
-            <Activity className="w-3 h-3 text-rose-400" />
-            <span>
-              {attention} need{attention === 1 ? "s" : ""} you
-            </span>
+          <button onClick={onToggleWorkRail} className="chip chip-hold" type="button">
+            <Activity size={12} />
+            {attention} need{attention === 1 ? "s" : ""} you
           </button>
         )}
 
-        {/* Command Search Trigger */}
-        <Tooltip content="Quick command palette (⌘K)">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onOpenCommandPalette}
-            className="text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850"
-            aria-label="Command palette"
-          >
-            <Search className="w-3.5 h-3.5" />
+        <Tooltip content="Command palette">
+          <Button variant="ghost" size="icon-sm" onClick={onOpenCommandPalette} aria-label="Command palette">
+            <Search size={14} />
           </Button>
         </Tooltip>
 
-        {/* Work Rail Toggle */}
         <Tooltip content={workRailOpen ? "Hide work rail" : "Show work rail"}>
           <Button
             variant={workRailOpen ? "secondary" : "ghost"}
             size="icon-sm"
             onClick={onToggleWorkRail}
-            className={`transition-colors ${
-              workRailOpen
-                ? "bg-zinc-800 text-zinc-100 border-zinc-700"
-                : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850"
-            }`}
             aria-expanded={workRailOpen}
             aria-label="Toggle work rail"
           >
-            <PanelRight className="w-3.5 h-3.5" />
+            <PanelRight size={14} />
           </Button>
         </Tooltip>
 
-        {/* Computer Sandbox Toggle */}
-        <Tooltip content={computerOpen ? "Hide computer sandbox" : "Open computer sandbox"}>
+        <Tooltip content={computerOpen ? "Hide computer" : "Open computer"}>
           <Button
-            variant={computerOpen ? "primary" : "ghost"}
+            variant={computerOpen ? "secondary" : "ghost"}
             size="icon-sm"
             onClick={onToggleComputer}
-            className={`transition-colors ${
-              computerOpen
-                ? "bg-violet-600 text-white shadow-sm"
-                : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850"
-            }`}
             aria-expanded={computerOpen}
-            aria-label="Toggle computer sandbox"
+            aria-label="Toggle computer"
           >
-            <Terminal className="w-3.5 h-3.5" />
+            <Terminal size={14} />
           </Button>
         </Tooltip>
       </div>

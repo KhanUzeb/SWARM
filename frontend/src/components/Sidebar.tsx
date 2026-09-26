@@ -1,25 +1,23 @@
 import * as React from "react";
 import { Avatar } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Dropdown } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Flap, Lamp } from "@/components/Flap";
 import {
-  Home,
   Activity,
-  MessageSquare,
   Bot,
   BookOpen,
-  Search,
-  Plus,
-  Hash,
-  Users,
-  Settings,
+  Home,
   LogOut,
-  PanelLeftClose,
+  MessageSquare,
   PanelLeft,
-  X,
+  PanelLeftClose,
+  Plus,
+  Search,
+  Settings,
   SquarePen,
+  Users,
+  X,
 } from "lucide-react";
 
 interface Channel {
@@ -33,6 +31,7 @@ interface Agent {
   display_name?: string;
   avatar?: string;
   status?: string;
+  job?: string;
   dm_channel_id?: string;
 }
 
@@ -61,18 +60,54 @@ interface SidebarProps {
   currentView?: string;
   onViewChange?: (view: string) => void;
   workAttentionCount?: number;
-  pinned?: unknown[];
   open?: boolean;
   onClose?: () => void;
 }
 
 const PRIMARY_NAV = [
-  { id: "home", label: "Home", icon: Home },
+  { id: "home", label: "Board", icon: Home },
   { id: "work", label: "Work", icon: Activity },
-  { id: "chat", label: "Chat", icon: MessageSquare },
-  { id: "agents", label: "Agents", icon: Bot },
+  { id: "chat", label: "Talk", icon: MessageSquare },
+  { id: "agents", label: "Roster", icon: Bot },
   { id: "knowledge", label: "Knowledge", icon: BookOpen },
 ];
+
+/**
+ * A teammate's state, as a flap face. The board's whole promise is that
+ * you can read this column without reading a word of it, so the state
+ * gets the machine register and the name gets ordinary sentence case.
+ */
+function flapFor(status?: string): { value: string; tone: "go" | "amber" | "hold" | "unlit" } {
+  switch (status) {
+    case "working":
+    case "running":
+      return { value: "Work", tone: "amber" };
+    case "needs_approval":
+    case "waiting_for_approval":
+      return { value: "Hold", tone: "hold" };
+    case "idle":
+    case "online":
+      return { value: "Ready", tone: "go" };
+    default:
+      return { value: "Off", tone: "unlit" };
+  }
+}
+
+function lampFor(status?: string): "go" | "amber" | "hold" | "off" {
+  switch (status) {
+    case "working":
+    case "running":
+      return "amber";
+    case "needs_approval":
+    case "waiting_for_approval":
+      return "hold";
+    case "idle":
+    case "online":
+      return "go";
+    default:
+      return "off";
+  }
+}
 
 export function Sidebar({
   user,
@@ -95,65 +130,51 @@ export function Sidebar({
   onViewChange,
   workAttentionCount,
   open = false,
-  onClose,
 }: SidebarProps) {
   const [search, setSearch] = React.useState("");
   const [collapsed, setCollapsed] = React.useState(false);
 
   const q = search.trim().toLowerCase();
-  const matchChannel = (c: Channel) =>
-    !q || (c.name || "").toLowerCase().includes(q);
+  const matchChannel = (c: Channel) => !q || (c.name || "").toLowerCase().includes(q);
   const matchAgent = (a: Agent) =>
     !q ||
     (a.name || "").toLowerCase().includes(q) ||
     (a.display_name || "").toLowerCase().includes(q);
 
   const rooms = channels.filter(
-    (c) => (c.kind === "room" || c.kind === undefined) && matchChannel(c)
+    (c) => (c.kind === "room" || c.kind === undefined) && matchChannel(c),
   );
   const groups = channels.filter((c) => c.kind === "group" && matchChannel(c));
-  const peopleDms = channels.filter(
-    (c) => c.kind === "people" && matchChannel(c)
-  );
+  const peopleDms = channels.filter((c) => c.kind === "people" && matchChannel(c));
   const matchedAgents = (agents || []).filter(matchAgent);
   const matchedTeams = (teams || []).filter(
-    (t) => !q || (t.name || "").toLowerCase().includes(q)
+    (t) => !q || (t.name || "").toLowerCase().includes(q),
   );
 
   return (
     <aside
       id="sidebar"
-      className={`relative flex flex-col h-full border-r border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md select-none transition-all duration-200 z-30 shrink-0 ${
-        collapsed ? "w-16" : "w-64"
-      } ${open ? "translate-x-0" : ""}`}
-      aria-label="Primary navigation"
+      className={open ? "open" : ""}
+      style={collapsed && !open ? { width: 56 } : undefined}
+      aria-label="Roster"
     >
-      {/* Sidebar Header */}
-      <div className="flex items-center justify-between h-12 px-3 border-b border-zinc-850 shrink-0">
+      <div className="sidebar-header">
         {!collapsed && (
-          <div className="flex items-center gap-2">
-            <div className="flex items-center justify-center w-6 h-6 rounded-md bg-gradient-to-br from-violet-600 to-indigo-700 text-white font-bold text-xs shadow-sm shadow-violet-950/40">
-              S
-            </div>
-            <span className="font-semibold text-xs tracking-tight text-zinc-100">
-              swarm
-            </span>
+          <div className="brand">
+            <span className="brand-mark">Swarm</span>
+            <span className="brand-sub">ops desk</span>
           </div>
         )}
 
-        <div className={`flex items-center gap-1 ${collapsed ? "mx-auto" : ""}`}>
-          <Tooltip content={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 2 }}>
+          <Tooltip content={collapsed ? "Expand roster" : "Collapse roster"}>
             <button
               type="button"
+              className="btn btn-ghost btn-icon btn-sm"
               onClick={() => setCollapsed((c) => !c)}
-              className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850 transition-colors"
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={collapsed ? "Expand roster" : "Collapse roster"}
             >
-              {collapsed ? (
-                <PanelLeft className="w-4 h-4" />
-              ) : (
-                <PanelLeftClose className="w-4 h-4" />
-              )}
+              {collapsed ? <PanelLeft size={14} /> : <PanelLeftClose size={14} />}
             </button>
           </Tooltip>
 
@@ -161,80 +182,90 @@ export function Sidebar({
             <Tooltip content="New message">
               <button
                 type="button"
+                className="btn btn-ghost btn-icon btn-sm"
                 onClick={onNewDM}
-                className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850 transition-colors"
                 aria-label="New message"
               >
-                <SquarePen className="w-3.5 h-3.5" />
+                <SquarePen size={14} />
               </button>
             </Tooltip>
           )}
         </div>
       </div>
 
-      {/* Primary Destinations Nav */}
-      <nav className="flex flex-col gap-0.5 p-2 border-b border-zinc-850 shrink-0">
+      <nav className="sidebar-section" style={{ padding: "8px 8px 4px" }} aria-label="Destinations">
         {PRIMARY_NAV.map((item) => {
           const Icon = item.icon;
           const isActive =
-            currentView === item.id ||
-            (item.id === "chat" && currentView === "talk");
+            currentView === item.id || (item.id === "chat" && currentView === "talk");
           return (
             <button
               key={item.id}
-              onClick={() =>
-                onViewChange?.(item.id === "chat" ? "talk" : item.id)
-              }
+              onClick={() => onViewChange?.(item.id === "chat" ? "talk" : item.id)}
               title={collapsed ? item.label : undefined}
-              className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 text-left ${
-                isActive
-                  ? "bg-zinc-850 text-zinc-100 font-semibold shadow-xs"
-                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/80"
-              } ${collapsed ? "justify-center px-0" : ""}`}
+              className={`channel-link ${isActive ? "active" : ""}`}
+              style={collapsed ? { justifyContent: "center", padding: 0 } : undefined}
+              aria-current={isActive ? "page" : undefined}
             >
-              <Icon
-                className={`w-4 h-4 shrink-0 ${
-                  isActive ? "text-violet-400" : "text-zinc-400"
-                }`}
-              />
-              {!collapsed && <span>{item.label}</span>}
-              {!collapsed &&
-                item.id === "work" &&
-                (workAttentionCount || 0) > 0 && (
-                  <span className="ml-auto px-1.5 py-0.2 rounded-full text-[10px] font-medium bg-rose-500/15 text-rose-300 border border-rose-500/20">
-                    {workAttentionCount}
-                  </span>
-                )}
+              <Icon size={14} className="shrink-0" />
+              {!collapsed && <span className="channel-name">{item.label}</span>}
+              {!collapsed && item.id === "work" && (workAttentionCount || 0) > 0 && (
+                <span className="flap flap-hold" style={{ marginLeft: "auto" }}>
+                  <span>{workAttentionCount}</span>
+                </span>
+              )}
             </button>
           );
         })}
       </nav>
 
-      {/* Search Filter */}
       {!collapsed && (
-        <div className="p-2 border-b border-zinc-850 shrink-0">
-          <div className="relative flex items-center">
-            <Search className="absolute left-2.5 w-3.5 h-3.5 text-zinc-500 pointer-events-none" />
+        <div className="sidebar-search">
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <Search
+              size={13}
+              aria-hidden="true"
+              style={{ position: "absolute", left: 8, color: "var(--ink-3)", pointerEvents: "none" }}
+            />
             <input
               type="search"
-              placeholder="Search..."
+              placeholder="Filter the board"
+              aria-label="Filter rooms and teammates"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full h-7 pl-8 pr-2 text-xs rounded-md bg-zinc-900/80 border border-zinc-800 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-violet-500/60 transition-colors"
+              className="input"
+              style={{ height: 28, paddingLeft: 26, fontSize: "var(--t-sm)" }}
             />
           </div>
         </div>
       )}
 
-      {/* Scrollable Navigation Channels & Agents */}
-      <ScrollArea className="flex-1 p-2 space-y-4">
-        {/* Channels */}
+      <div className="sidebar-scroll scroll-y">
+        {matchedAgents.length > 0 && (
+          <Section
+            title="Teammates"
+            count={matchedAgents.length}
+            action={onNewAgent}
+            actionLabel="New teammate"
+          >
+            {matchedAgents.map((a) => (
+              <AgentItem
+                key={a.name}
+                agent={a}
+                collapsed={collapsed}
+                active={activeChannel === a.dm_channel_id}
+                onClick={() => onSelectChannel(a.dm_channel_id)}
+              />
+            ))}
+          </Section>
+        )}
+
         {rooms.length > 0 && (
           <Section
-            title="Channels"
-            collapsed={collapsed}
+            title="Rooms"
+            count={rooms.length}
             action={onNewChannel}
-            actionLabel="New channel"
+            actionLabel="New room"
           >
             {rooms.map((c) => (
               <ChannelItem
@@ -249,31 +280,10 @@ export function Sidebar({
           </Section>
         )}
 
-        {/* AI Agents / Teammates */}
-        {matchedAgents.length > 0 && (
-          <Section
-            title="Teammates"
-            collapsed={collapsed}
-            action={onNewAgent}
-            actionLabel="New agent"
-          >
-            {matchedAgents.map((a) => (
-              <AgentItem
-                key={a.name}
-                agent={a}
-                collapsed={collapsed}
-                active={activeChannel === a.dm_channel_id}
-                onClick={() => onSelectChannel(a.dm_channel_id)}
-              />
-            ))}
-          </Section>
-        )}
-
-        {/* Groups */}
         {groups.length > 0 && (
           <Section
             title="Groups"
-            collapsed={collapsed}
+            count={groups.length}
             action={onNewGroup}
             actionLabel="New group"
           >
@@ -290,13 +300,12 @@ export function Sidebar({
           </Section>
         )}
 
-        {/* Direct Messages */}
         {peopleDms.length > 0 && (
           <Section
-            title="Direct Messages"
-            collapsed={collapsed}
+            title="People"
+            count={peopleDms.length}
             action={onNewDM}
-            actionLabel="New DM"
+            actionLabel="New message"
           >
             {peopleDms.map((c) => (
               <ChannelItem
@@ -311,11 +320,10 @@ export function Sidebar({
           </Section>
         )}
 
-        {/* Teams */}
         {matchedTeams.length > 0 && (
           <Section
             title="Teams"
-            collapsed={collapsed}
+            count={matchedTeams.length}
             action={onNewTeam}
             actionLabel="New team"
           >
@@ -337,81 +345,37 @@ export function Sidebar({
           peopleDms.length === 0 &&
           matchedAgents.length === 0 &&
           matchedTeams.length === 0 && (
-            <p className="px-2 py-4 text-xs text-zinc-500 text-center">
-              No matches for “{search.trim()}”
-            </p>
+            <p className="sidebar-empty">Nothing on the board matches “{search.trim()}”.</p>
           )}
-      </ScrollArea>
+      </div>
 
-      {/* User Footer Profile Dock */}
-      <div className="flex items-center justify-between p-2.5 border-t border-zinc-850 bg-zinc-950/60 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <Avatar
-            name={user?.handle || "User"}
-            kind="human"
-            size="sm"
-            className="shrink-0"
-          />
-          {!collapsed && (
-            <div className="flex flex-col min-w-0">
-              <span className="text-xs font-semibold text-zinc-200 truncate">
-                {user?.handle}
-              </span>
-              <div className="flex items-center gap-1.5 text-[10px] text-zinc-400">
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    wsStatus === "connected"
-                      ? "bg-emerald-400"
-                      : wsStatus === "connecting"
-                      ? "bg-amber-400 animate-pulse"
-                      : "bg-zinc-600"
-                  }`}
-                />
-                <span>
-                  {wsStatus === "connected"
-                    ? "Online"
-                    : wsStatus === "connecting"
-                    ? "Connecting"
-                    : "Offline"}
-                </span>
-                {meRole === "admin" && (
-                  <Badge variant="warning" size="sm" className="ml-1 text-[9px] py-0 px-1">
-                    Admin
-                  </Badge>
-                )}
-              </div>
-            </div>
-          )}
+      <div id="me">
+        <Avatar name={user?.handle || "User"} kind="human" size="sm" />
+        <div className="me-meta">
+          <span className="handle">{user?.handle}</span>
+          <span className={`sub ${wsStatus === "connected" ? "online" : wsStatus === "connecting" ? "connecting" : ""}`}>
+            {wsStatus === "connected"
+              ? "Live"
+              : wsStatus === "connecting"
+                ? "Linking"
+                : "No link"}
+          </span>
         </div>
-
-        {!collapsed && (
-          <Dropdown
-            align="right"
-            trigger={
-              <button
-                type="button"
-                className="p-1 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850 transition-colors"
-                aria-label="Account options"
-              >
-                <Settings className="w-3.5 h-3.5" />
-              </button>
-            }
-            items={[
-              {
-                label: "Settings",
-                icon: <Settings className="w-3.5 h-3.5" />,
-                onClick: onOpenSettings,
-              },
-              "divider",
-              {
-                label: "Sign out",
-                icon: <LogOut className="w-3.5 h-3.5 text-rose-400" />,
-                danger: true,
-                onClick: onLogout,
-              },
-            ]}
-          />
-        )}
+        {meRole === "admin" && <span className="role-pill">Admin</span>}
+        <Dropdown
+          align="right"
+          label="Account"
+          trigger={
+            <button type="button" className="btn btn-ghost btn-icon btn-sm" aria-label="Account options">
+              <Settings size={14} />
+            </button>
+          }
+          items={[
+            { label: "Settings", icon: <Settings size={14} />, onClick: onOpenSettings },
+            "divider",
+            { label: "Sign out", icon: <LogOut size={14} />, danger: true, onClick: onLogout },
+          ]}
+        />
       </div>
     </aside>
   );
@@ -419,35 +383,36 @@ export function Sidebar({
 
 function Section({
   title,
+  count,
   children,
   action,
   actionLabel,
-  collapsed,
 }: {
   title: string;
+  count?: number;
   children: React.ReactNode;
   action?: () => void;
   actionLabel?: string;
-  collapsed?: boolean;
 }) {
   return (
-    <div className="space-y-1">
-      {!collapsed && (
-        <div className="flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-zinc-400 tracking-wider">
-          <span>{title}</span>
-          {action && (
-            <button
-              onClick={action}
-              className="p-0.5 rounded hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
-              title={actionLabel}
-              aria-label={actionLabel}
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      )}
-      <ul className="space-y-0.5">{children}</ul>
+    <div className="sidebar-section">
+      <div className="section-header">
+        <span className="section-label">
+          {title}
+          {typeof count === "number" && <span style={{ opacity: 0.55 }}> {count}</span>}
+        </span>
+        {action && (
+          <button
+            onClick={action}
+            className="section-action"
+            title={actionLabel}
+            aria-label={actionLabel}
+          >
+            <Plus size={13} />
+          </button>
+        )}
+      </div>
+      <ul className="channel-list">{children}</ul>
     </div>
   );
 }
@@ -468,22 +433,20 @@ function ChannelItem({
   collapsed?: boolean;
 }) {
   return (
-    <li className="relative group">
+    <li className="channel-item group">
       <button
         onClick={onClick}
         title={collapsed ? channel.name : undefined}
-        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs font-medium transition-all text-left ${
-          active
-            ? "bg-zinc-850 text-zinc-100 font-semibold shadow-xs"
-            : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/80"
-        } ${collapsed ? "justify-center px-0" : ""}`}
+        className={`channel-link ${active ? "active" : ""}`}
+        style={collapsed ? { justifyContent: "center", padding: 0 } : undefined}
+        aria-current={active ? "page" : undefined}
       >
         {dm ? (
-          <Users className="w-3.5 h-3.5 shrink-0 text-zinc-400" />
+          <Users size={13} className="shrink-0" />
         ) : (
-          <Hash className="w-3.5 h-3.5 shrink-0 text-zinc-400" />
+          <span className="channel-dot" aria-hidden="true" />
         )}
-        {!collapsed && <span className="truncate">{channel.name}</span>}
+        {!collapsed && <span className="channel-name">{channel.name}</span>}
       </button>
       {onDelete && !dm && !collapsed && (
         <button
@@ -491,11 +454,12 @@ function ChannelItem({
             e.stopPropagation();
             onDelete();
           }}
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 opacity-0 group-hover:opacity-100 transition-opacity"
-          title={`Delete #${channel.name}`}
-          aria-label={`Delete channel ${channel.name}`}
+          className="section-action"
+          style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)" }}
+          title={`Delete ${channel.name}`}
+          aria-label={`Delete room ${channel.name}`}
         >
-          <X className="w-3 h-3" />
+          <X size={12} />
         </button>
       )}
     </li>
@@ -513,44 +477,35 @@ function AgentItem({
   onClick: () => void;
   collapsed?: boolean;
 }) {
-  const isWorking = agent.status === "working";
-  const needsApproval = agent.status === "needs_approval";
+  const { value, tone } = flapFor(agent.status);
+  const lamp = lampFor(agent.status);
+  const label = agent.display_name || agent.name;
 
   return (
-    <li>
+    <li className="channel-item">
       <button
         onClick={onClick}
-        title={collapsed ? agent.display_name || agent.name : undefined}
-        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs font-medium transition-all text-left ${
-          active
-            ? "bg-zinc-850 text-zinc-100 font-semibold shadow-xs"
-            : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/80"
-        } ${collapsed ? "justify-center px-0" : ""}`}
+        title={collapsed ? `${label} — ${value}` : undefined}
+        className={`channel-link ${active ? "active" : ""}`}
+        style={collapsed ? { justifyContent: "center", padding: 0 } : undefined}
+        aria-current={active ? "page" : undefined}
       >
-        <div className="relative shrink-0">
-          <Avatar
-            name={agent.display_name || agent.name}
-            kind="agent"
-            size="xs"
-            avatar={agent.avatar}
-          />
-          <span
-            className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-zinc-950 ${
-              isWorking
-                ? "bg-violet-400 animate-ping"
-                : needsApproval
-                ? "bg-amber-400"
-                : "bg-emerald-400"
-            }`}
-          />
-        </div>
-        {!collapsed && (
-          <span className="truncate">{agent.display_name || agent.name}</span>
-        )}
-        {!collapsed && needsApproval && (
-          <Badge variant="warning" size="sm" className="ml-auto text-[9px] py-0 px-1">
-            !
-          </Badge>
+        {collapsed ? (
+          <Lamp tone={lamp} title={`${label} — ${value}`} />
+        ) : (
+          <>
+            <Avatar
+              name={label}
+              kind="agent"
+              size="xs"
+              avatar={agent.avatar}
+              className="shrink-0"
+            />
+            <span className="channel-name" style={{ fontWeight: 500 }}>
+              {label}
+            </span>
+            <Flap value={value} tone={tone} />
+          </>
         )}
       </button>
     </li>

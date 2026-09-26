@@ -63,6 +63,11 @@ Human posts in #general, a bot 1:1, or a group chat
   offline outbox with auto-resend, JSON/CSV audit export.
 - **Self-host in minutes** — single container, SQLite on a named volume,
   health probe at `GET /health`. See [docs/DEPLOY.md](docs/DEPLOY.md).
+- **A board you can read at a glance** — every teammate's state is a flap
+  module with a lamp behind it, so who is ready, who is working, and who is
+  waiting on you is legible before you read a word. The transcript is printed
+  lines, not bubbles, and every tool call, handoff, and failure stays in the
+  channel where it happened.
 
 ## Quick start
 
@@ -143,7 +148,7 @@ network-isolation boundary. Do not treat it as one.
 5. **Governance (45s):** bot calls `request_approval` → Allow / Deny
    in-thread, bot continues.
 6. **Computer (30s):** open the computer panel — files the bots wrote.
-7. **Close (15s):** self-hosted, spec'd (`SPEC.md`), tested, Docker.
+7. **Close (15s):** self-hosted, tested, Docker.
    Admin-gated bots, people DMs, `@team` pods, audit export.
 
 ## CLI
@@ -174,8 +179,9 @@ Set `SWARM_URL` if not on `localhost:8000`.
 | Work sessions | `/api/work`, `/api/work/{id}`, `/api/work/{id}/events` |
 | Governance | `/api/approvals`, `/api/routines`, `/api/skills`, `/api/knowledge` |
 
-The full contract lives in [SPEC.md](SPEC.md). If code and `SPEC.md`
-disagree, file it as a bug.
+The code is the contract for behaviour. `docs/PRODUCT.md` records the thesis
+and what is deliberately out of scope; [AGENTS.md](AGENTS.md) records the agent
+contract and the visual system. If the code drifts from either, that is a bug.
 
 ## Project layout
 
@@ -201,12 +207,10 @@ swarm/
 
 | File | Purpose |
 | ---- | ------- |
-| [SPEC.md](SPEC.md) | API + agent contract (source of truth) |
 | [docs/PRODUCT.md](docs/PRODUCT.md) | Product thesis, competition, demo script |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Docker Compose deployment guide |
-| [docs/PRODUCT-APPROACH.md](docs/PRODUCT-APPROACH.md) | Problem, core loop, principles, success criteria |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Feature layers + revert map |
-| [AGENTS.md](AGENTS.md) | How coding agents should work in this repo |
+| [AGENTS.md](AGENTS.md) | Product rules and the visual system, for coding agents |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, checks, PR rules |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting + hardening |
 

@@ -1,22 +1,18 @@
 import * as React from "react";
 import { Avatar } from "@/components/ui/avatar";
-import { Tooltip } from "@/components/ui/tooltip";
-import { LoadingState, Shimmer } from "../beautifului.jsx";
+import { Flap, Lamp } from "@/components/Flap";
 import { RichBody } from "../ui.jsx";
 import { fmtTime, isAgentError, isResumable, shortModel, EMOJI } from "@/lib";
 import {
-  MessageSquare,
-  Smile,
-  Trash2,
-  RotateCcw,
-  Sparkles,
-  ChevronDown,
-  ChevronUp,
-  Terminal,
   Activity,
   ArrowDown,
+  ChevronDown,
   CornerDownRight,
-  ShieldAlert,
+  MessageSquare,
+  RotateCcw,
+  Smile,
+  Terminal,
+  Trash2,
 } from "lucide-react";
 
 interface Reaction {
@@ -97,12 +93,28 @@ const EMPTY_REACTIONS: Reaction[] = [];
 const EMPTY_WORK_EVENTS: WorkEvent[] = [];
 
 // Latest-ref wrapper: parents (App) pass fresh closures every render.
-// Stable wrappers forwarding through a ref keep memoized rows from
-// re-rendering while never calling a stale closure.
 function useLatest<T>(value: T) {
   const ref = React.useRef(value);
   ref.current = value;
   return ref;
+}
+
+function workFlap(status?: string): { value: string; tone: "go" | "amber" | "hold" | "unlit" } {
+  switch (status) {
+    case "waiting_for_approval":
+    case "needs_approval":
+      return { value: "Hold", tone: "hold" };
+    case "running":
+    case "active":
+      return { value: "Run", tone: "amber" };
+    case "completed":
+    case "done":
+      return { value: "Done", tone: "go" };
+    case "failed":
+      return { value: "Fail", tone: "hold" };
+    default:
+      return { value: status || "Idle", tone: "unlit" };
+  }
 }
 
 export function MessageList({
@@ -155,7 +167,7 @@ export function MessageList({
 
   const streamChars = Object.values(streamText).reduce(
     (n, t) => n + String(t || "").length,
-    0
+    0,
   );
 
   React.useEffect(() => {
@@ -166,12 +178,10 @@ export function MessageList({
 
   const roots = order.map((id) => messages[id]).filter(Boolean);
   const liveStreams = Object.entries(streamText).filter(
-    ([, text]) => text && text.length > 0
+    ([, text]) => text && text.length > 0,
   );
   const quickStarts = buildQuickStarts(agents, allAgents, channelName);
 
-  // Stable per-row callbacks (see useLatest): memoized rows skip
-  // re-renders from streaming keystrokes elsewhere in the list.
   const onReplyRef = useLatest(onReply);
   const onReactRef = useLatest(onReact);
   const onUnreactRef = useLatest(onUnreact);
@@ -179,108 +189,98 @@ export function MessageList({
   const onOpenThreadRef = useLatest(onOpenThread);
   const onRetryRef = useLatest(onRetry);
   const stableOnReply = React.useCallback(
-    (id: number | string) => onReplyRef.current?.(id), []
+    (id: number | string) => onReplyRef.current?.(id),
+    [],
   );
   const stableOnReact = React.useCallback(
-    (id: number | string, emoji: string) => onReactRef.current(id, emoji), []
+    (id: number | string, emoji: string) => onReactRef.current(id, emoji),
+    [],
   );
   const stableOnUnreact = React.useCallback(
-    (id: number | string, emoji: string) => onUnreactRef.current?.(id, emoji), []
+    (id: number | string, emoji: string) => onUnreactRef.current?.(id, emoji),
+    [],
   );
   const stableOnDelete = React.useCallback(
-    (m: Message) => onDeleteRef.current?.(m), []
+    (m: Message) => onDeleteRef.current?.(m),
+    [],
   );
   const stableOnOpenThread = React.useCallback(
-    (id: number | string) => onOpenThreadRef.current?.(id), []
+    (id: number | string) => onOpenThreadRef.current?.(id),
+    [],
   );
   const stableOnRetry = React.useCallback(
-    (m: Message) => onRetryRef.current?.(m), []
+    (m: Message) => onRetryRef.current?.(m),
+    [],
   );
 
+  // ── Empty room: the board is set, nothing has run on it yet ──
   if (roots.length === 0 && !loadingMore && liveStreams.length === 0 && !typing) {
     return (
-      <div
-        id="log"
-        className="flex-1 overflow-y-auto flex items-center justify-center p-6 text-center select-none"
-      >
-        <div className="max-w-md mx-auto space-y-4">
-          <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 text-violet-400 mx-auto shadow-sm">
-            <MessageSquare className="w-6 h-6" />
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-base font-semibold text-zinc-100">
-              {channelName ? `#${channelName}` : "This room"}
-            </h2>
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              @mention a teammate or type a prompt. Teammates collaborate and keep a visible audit trail.
+      <div id="log">
+        <div className="log-empty">
+          <div className="talk-empty">
+            <h2>{channelName ? channelName : "This room is empty"}</h2>
+            <p>
+              Mention a teammate by name to hand it the room. Everything it does —
+              every tool call, handoff, and failure — is printed here in the order
+              it happened.
             </p>
-          </div>
 
-          {onQuickStart && quickStarts.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 text-left">
-              {quickStarts.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onQuickStart(item.text)}
-                  className="flex flex-col gap-0.5 p-2.5 rounded-xl border border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-850 transition-all text-xs group"
-                >
-                  <span className="font-semibold text-zinc-200 group-hover:text-violet-300 transition-colors">
-                    {item.label}
-                  </span>
-                  {item.hint && (
-                    <span className="text-[11px] text-zinc-500">{item.hint}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
+            {onQuickStart && quickStarts.length > 0 && (
+              <div className="talk-quickstarts">
+                {quickStarts.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onQuickStart(item.text)}
+                    className="talk-quickstart"
+                  >
+                    <span className="qs-label">{item.label}</span>
+                    {item.hint && <span className="qs-hint">{item.hint}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div
-      id="log"
-      ref={logRef}
-      onScroll={handleScroll}
-      className="flex-1 overflow-y-auto relative scroll-smooth [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.1)_transparent]"
-    >
+    <div id="log" ref={logRef} onScroll={handleScroll}>
       {!pinned && roots.length > 0 && (
         <button
           type="button"
           onClick={jumpToLatest}
-          aria-label="Jump to latest messages"
-          className="fixed bottom-24 right-8 z-30 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 text-zinc-200 border border-zinc-750 shadow-xl text-xs font-medium hover:bg-zinc-850 hover:text-white transition-all animate-in fade-in-0 duration-150"
+          aria-label="Jump to the newest line"
+          className="btn btn-sm jump-latest"
         >
-          <ArrowDown className="w-3.5 h-3.5" />
-          <span>Latest</span>
+          <ArrowDown size={13} />
+          Newest
         </button>
       )}
 
-      <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 py-6 space-y-4">
+      <div className="log-inner">
         {hasMore && (
-          <div className="flex justify-center pb-2">
-            <button
-              onClick={onLoadMore}
-              disabled={loadingMore}
-              className="text-xs text-zinc-500 hover:text-zinc-300 py-1 px-3 rounded-md hover:bg-zinc-900 transition-colors disabled:opacity-60"
-              aria-live="polite"
-            >
-              {loadingMore ? "Loading earlier messages…" : "Load earlier messages"}
+          <div style={{ display: "grid", placeItems: "center", paddingBottom: 8 }}>
+            <button onClick={onLoadMore} disabled={loadingMore} className="btn btn-ghost btn-sm" aria-live="polite">
+              {loadingMore ? "Loading earlier lines" : "Load earlier lines"}
             </button>
           </div>
         )}
+
         {loadingMore && roots.length === 0 && (
-          <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 py-6 space-y-4" aria-label="Loading messages" role="status">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="flex gap-3">
-                <div className="skeleton skeleton-avatar" aria-hidden />
-                <div className="flex-1 space-y-2">
-                  <div className="skeleton skeleton-text" style={{ width: "32%" }} aria-hidden />
-                  <div className="skeleton skeleton-text" aria-hidden />
-                  <div className="skeleton skeleton-text" aria-hidden />
+          <div aria-label="Loading lines" role="status" style={{ display: "grid", gap: 12 }}>
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="entry" aria-hidden>
+                <div className="entry-head">
+                  <div className="skeleton skeleton-text" style={{ width: "58%" }} />
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div className="skeleton skeleton-text" />
+                  <div className="skeleton skeleton-text" />
+                  <div className="skeleton skeleton-text" style={{ width: "32%" }} />
                 </div>
               </div>
             ))}
@@ -293,8 +293,7 @@ export function MessageList({
           const grouped = groupedWith(prev, m);
           const label =
             m.author_kind === "agent"
-              ? allAgents.find((a) => a.name === m.author)?.display_name ||
-                m.author
+              ? allAgents.find((a) => a.name === m.author)?.display_name || m.author
               : m.author;
           const agent =
             m.author_kind === "agent"
@@ -304,12 +303,8 @@ export function MessageList({
           return (
             <React.Fragment key={m.id}>
               {dayLabel && (
-                <div className="flex items-center justify-center my-6 select-none" role="separator">
-                  <div className="h-px bg-zinc-850 flex-1" />
-                  <span className="px-3 text-[11px] font-medium text-zinc-500 uppercase tracking-wider">
-                    {dayLabel}
-                  </span>
-                  <div className="h-px bg-zinc-850 flex-1" />
+                <div className="day-sep" role="separator">
+                  {dayLabel}
                 </div>
               )}
               <MessageRow
@@ -319,10 +314,6 @@ export function MessageList({
                 agent={agent}
                 reactions={reactions[m.id] ?? EMPTY_REACTIONS}
                 replyCount={replyCounts[m.id] || 0}
-                // Preserve optional-handler semantics: memoized rows must
-                // still hide actions (reply/delete/…) when the parent
-                // passes no handler. Defined-ness never flips mid-session,
-                // so memoization stays effective.
                 onReply={onReply ? stableOnReply : undefined}
                 onReact={stableOnReact}
                 onUnreact={onUnreact ? stableOnUnreact : undefined}
@@ -343,40 +334,35 @@ export function MessageList({
           );
         })}
 
-        {/* Live streaming bubbles */}
+        {/* Live lines: the machine is still setting type. */}
         {liveStreams.map(([author, text]) => {
           const who = allAgents.find((a) => a.name === author);
           return (
-            <div className="flex gap-3 text-xs" key={`stream-${author}`}>
-              <Avatar
-                name={who?.display_name || author}
-                kind="agent"
-                size="md"
-                avatar={who?.avatar}
-                className="shrink-0 mt-0.5"
-              />
-              <div className="flex-1 space-y-1.5 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-zinc-100">
-                    {who?.display_name || author}
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-[10px] text-violet-400 font-mono">
-                    <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                    <Shimmer>streaming</Shimmer>
-                  </span>
-                </div>
-                <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5 text-zinc-200 leading-relaxed">
-                  <RichBody body={text} />
-                  <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-violet-400 animate-pulse align-middle" />
-                </div>
+            <div className="entry streaming-entry" key={`stream-${author}`}>
+              <div className="entry-head">
+                <span className="entry-author">{who?.display_name || author}</span>
+                <span className="entry-time">now</span>
+              </div>
+              <div className="entry-body">
+                <RichBody body={text} />
+                <span className="streaming-cursor" aria-hidden="true" />
+                <span className="sr-only">is still writing</span>
               </div>
             </div>
           );
         })}
 
         {typing && !liveStreams.length && (
-          <div className="py-2 text-xs text-zinc-500">
-            <LoadingState label={`${typing} is typing…`} startedAt={Date.now()} />
+          <div className="entry">
+            <div className="entry-head">
+              <span className="entry-author">{typing}</span>
+            </div>
+            <div className="entry-body">
+              <span className="bui-loading">
+                <span className="spinner spinner-sm" aria-hidden="true" />
+                reading the room
+              </span>
+            </div>
           </div>
         )}
 
@@ -386,10 +372,6 @@ export function MessageList({
   );
 }
 
-// Memoized: rows re-render only when their own message data changes.
-// Parent callbacks arrive as stable latest-ref wrappers (above), and list
-// fallbacks use shared EMPTY_* constants, so streaming keystrokes and typing
-// indicators elsewhere don't reconcile all 50 rows.
 const MessageRow = React.memo(function MessageRow({
   m,
   grouped,
@@ -469,235 +451,122 @@ const MessageRow = React.memo(function MessageRow({
     String(m.body || "").includes("[reply cut off");
   const resumable = m.author_kind === "agent" && isResumable(m.body);
 
-  const kind = m.author_kind || "human";
-  const avatarKind = kind === "system" ? "system" : agent ? "agent" : "human";
-
-  if (kind === "system") {
+  // A system line is the machine register speaking about itself.
+  if (m.author_kind === "system") {
     return (
-      <div className="flex items-center gap-2 py-1 px-3 text-[11px] text-zinc-500 font-mono">
-        <Activity className="w-3 h-3 text-zinc-600 shrink-0" />
+      <div className="sys-line" style={{ padding: "6px 0" }}>
+        <Activity size={12} className="shrink-0" aria-hidden="true" />
         <RichBody body={m.body || ""} />
       </div>
     );
   }
 
-  // Human user message (me)
-  if (isMe) {
-    return (
-      <div className={`flex flex-col items-end group ${grouped ? "mt-1" : "mt-3"}`}>
-        <div className="relative max-w-2xl">
-          <div className="rounded-2xl rounded-tr-sm bg-gradient-to-br from-violet-600 to-indigo-600 px-4 py-2.5 text-xs text-white shadow-sm leading-relaxed">
-            <RichBody body={m.body || ""} />
-          </div>
+  const avatarKind = agent ? "agent" : "human";
+  const workState = workFlap(work?.status);
 
-          {/* Quick hover action bar */}
-          <div className="absolute right-0 -bottom-6 hidden group-hover:flex group-focus-within:flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 rounded-md px-1 py-0.5 shadow-md backdrop-blur-sm z-10 text-[11px]">
-            <button
-              onClick={() => setPickOpen((o) => !o)}
-              className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
-              title="React"
-              aria-label={`React to message from ${label}`}
-              aria-expanded={pickOpen}
-            >
-              <Smile className="w-3 h-3" />
-            </button>
-            {!m.parent_id && onOpenThread && (
-              <button
-                onClick={() => onOpenThread(m.id)}
-                className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
-                title="Thread reply"
-                aria-label={`Reply in thread to message from ${label}`}
-              >
-                <MessageSquare className="w-3 h-3" />
-              </button>
-            )}
-            {onDelete && canDelete && (
-              <button
-                onClick={() => {
-                  if (window.confirm("Delete this message?")) onDelete(m);
-                }}
-                className="p-1 hover:text-rose-400 text-zinc-400 rounded hover:bg-zinc-800"
-                title="Delete"
-                aria-label="Delete message"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            )}
-            {pickOpen && (
-              <ReactPicker
-                onPick={(emoji) => onReact(m.id, emoji)}
-                onClose={() => setPickOpen(false)}
+  return (
+    <div className={`entry ${grouped ? "grouped" : ""} ${isMe ? "mine" : ""} ${streaming ? "is-streaming" : ""}`}>
+      <div className="entry-head">
+        {!grouped && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+              <Avatar
+                name={label}
+                kind={avatarKind}
+                size="xs"
+                avatar={agent?.avatar}
+                className="shrink-0"
               />
-            )}
-          </div>
-        </div>
-
-        {/* Reactions & Thread count */}
-        <ReactionChips
-          counts={counts}
-          byEmoji={byEmoji}
-          myHandle={myHandle}
-          onToggle={toggleReact}
-        />
-        {!grouped && !m.parent_id && replyCount > 0 && onOpenThread && (
-          <button
-            onClick={() => onOpenThread(m.id)}
-            className="mt-1 text-[11px] text-violet-400 hover:underline inline-flex items-center gap-1"
-          >
-            <CornerDownRight className="w-3 h-3" />
-            <span>
-              {replyCount} {replyCount === 1 ? "reply" : "replies"}
-            </span>
-          </button>
+              <span className="entry-author">{label}</span>
+            </div>
+            <span className="entry-time">{fmtTime(m.created_at)}</span>
+            {agent?.job && !grouped && <span className="entry-job">{agent.job}</span>}
+          </>
         )}
       </div>
-    );
-  }
 
-  // Teammate / Other user message
-  return (
-    <div className={`flex gap-3 text-xs group ${grouped ? "mt-1.5" : "mt-4"}`}>
-      {!grouped ? (
-        <Avatar
-          name={label}
-          kind={avatarKind}
-          size="md"
-          avatar={agent?.avatar}
-          className="shrink-0 mt-0.5"
-        />
-      ) : (
-        <div className="w-8 shrink-0" />
-      )}
-
-      <div className="flex-1 space-y-1 min-w-0">
-        {!grouped && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-zinc-100">{label}</span>
-            {agent?.job && (
-              <span className="text-[11px] text-zinc-400">{agent.job}</span>
-            )}
+      <div className="entry-main">
+        {/* The machine register: everything the run did, printed on the line. */}
+        {(m.model || work) && !grouped && (
+          <div className="entry-annotations">
             {m.model && (
-              <span
-                className="inline-flex items-center gap-1 text-[10px] font-mono text-zinc-400 px-1.5 py-0.2 rounded bg-zinc-900 border border-zinc-800"
-                title={`Answered with ${m.model}`}
-              >
-                <Sparkles className="w-2.5 h-2.5 text-violet-400" />
-                {shortModel(m.model, 20)}
+              <span className="tool-chip tool-chip-icon" title={`Answered with ${m.model}`}>
+                {shortModel(m.model, 22)}
               </span>
             )}
-            {work && (
-              <span
-                className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                  work.status === "waiting_for_approval"
-                    ? "bg-amber-500/10 text-amber-300 border border-amber-500/20"
-                    : "bg-zinc-900 text-zinc-400"
-                }`}
-              >
-                {work.status === "waiting_for_approval"
-                  ? "needs approval"
-                  : work.status}
-              </span>
-            )}
-            <span className="text-[10px] text-zinc-400 ml-auto font-mono">
-              {fmtTime(m.created_at)}
-            </span>
+            {work && <Flap value={workState.value} tone={workState.tone} />}
           </div>
         )}
 
-        {/* Message bubble */}
         <div
-          className={`relative rounded-xl border p-3.5 leading-relaxed text-zinc-200 transition-all ${
-            failedAgent
-              ? "border-rose-500/30 bg-rose-500/5 text-rose-200"
-              : stoppedAgent
-              ? "border-amber-500/30 bg-amber-500/5"
-              : "border-zinc-800/80 bg-zinc-900/60"
-          }`}
+          className={`entry-body ${failedAgent ? "is-failed" : ""} ${stoppedAgent ? "is-stopped" : ""}`}
         >
           <RichBody body={m.body || ""} />
-
-          {/* Collapsible OpenCode-style Tool / Work Trace */}
-          {workEvents.length > 0 && <AgentTrace events={workEvents} />}
-
-          {/* Retry / Resume Button */}
-          {resumable && onRetry && (
-            <div className="mt-2.5 pt-2 border-t border-zinc-800/80 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onRetry(m)}
-                disabled={retrying}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white border border-zinc-700 transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>{retrying ? "Retrying…" : stoppedAgent ? "Resume" : "Retry"}</span>
-              </button>
-            </div>
-          )}
-
-          {/* Action trigger buttons on hover */}
-          <div className="absolute right-2 top-2 hidden group-hover:flex group-focus-within:flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 rounded-md px-1 py-0.5 shadow-md backdrop-blur-sm z-10 text-[11px]">
-            {onReply && (
-              <button
-                onClick={() => onReply(m.parent_id || m.id)}
-                className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
-                title="Reply"
-                aria-label={`Reply to ${label}`}
-              >
-                <MessageSquare className="w-3 h-3" />
-              </button>
-            )}
-            <div className="relative" ref={pickRef}>
-              <button
-                onClick={() => setPickOpen((o) => !o)}
-                className="p-1 hover:text-white text-zinc-400 rounded hover:bg-zinc-800"
-                title="React"
-                aria-label={`React to message from ${label}`}
-                aria-expanded={pickOpen}
-              >
-                <Smile className="w-3 h-3" />
-              </button>
-              {pickOpen && (
-                <ReactPicker
-                  onPick={(emoji) => onReact(m.id, emoji)}
-                  onClose={() => setPickOpen(false)}
-                />
-              )}
-            </div>
-            {onDelete && canDelete && (
-              <button
-                onClick={() => {
-                  if (window.confirm("Delete this message?")) onDelete(m);
-                }}
-                className="p-1 hover:text-rose-400 text-zinc-400 rounded hover:bg-zinc-800"
-                title="Delete"
-                aria-label="Delete message"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            )}
-          </div>
         </div>
 
-        {/* Reactions */}
-        <ReactionChips
-          counts={counts}
-          byEmoji={byEmoji}
-          myHandle={myHandle}
-          onToggle={toggleReact}
-        />
+        {workEvents.length > 0 && <AgentTrace events={workEvents} />}
 
-        {/* Reply thread indicator */}
-        {!grouped && !m.parent_id && replyCount > 0 && onOpenThread && (
-          <button
-            onClick={() => onOpenThread(m.id)}
-            className="mt-1 text-[11px] text-violet-400 hover:underline inline-flex items-center gap-1"
-          >
-            <CornerDownRight className="w-3 h-3" />
-            <span>
-              {replyCount} {replyCount === 1 ? "reply" : "replies"}
-            </span>
-          </button>
+        {resumable && onRetry && (
+          <div className="entry-foot">
+            <button
+              type="button"
+              onClick={() => onRetry(m)}
+              disabled={retrying}
+              className="btn btn-sm"
+            >
+              <RotateCcw size={12} />
+              {retrying ? "Retrying" : stoppedAgent ? "Resume" : "Retry"}
+            </button>
+          </div>
         )}
+
+        <div className="entry-foot agent-msg-actions">
+          {onReply && (
+            <button
+              onClick={() => onReply(m.parent_id || m.id)}
+              className="msg-mini-action"
+              title="Reply"
+              aria-label={`Reply to ${label}`}
+            >
+              <MessageSquare size={13} />
+            </button>
+          )}
+          <div className="relative" ref={pickRef}>
+            <button
+              onClick={() => setPickOpen((o) => !o)}
+              className="msg-mini-action"
+              title="React"
+              aria-label={`React to the line from ${label}`}
+              aria-expanded={pickOpen}
+            >
+              <Smile size={13} />
+            </button>
+            {pickOpen && (
+              <ReactPicker onPick={(emoji) => onReact(m.id, emoji)} onClose={() => setPickOpen(false)} />
+            )}
+          </div>
+          {onDelete && canDelete && (
+            <button
+              onClick={() => {
+                if (window.confirm("Delete this line?")) onDelete(m);
+              }}
+              className="msg-mini-action is-danger"
+              title="Delete"
+              aria-label="Delete line"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+
+          <ReactionChips counts={counts} byEmoji={byEmoji} myHandle={myHandle} onToggle={toggleReact} />
+
+          {!grouped && !m.parent_id && replyCount > 0 && onOpenThread && (
+            <button onClick={() => onOpenThread(m.id)} className="thread-link" style={{ marginLeft: "auto" }}>
+              <CornerDownRight size={12} />
+              {replyCount} {replyCount === 1 ? "reply" : "replies"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -709,8 +578,7 @@ const AgentTrace = React.memo(function AgentTrace({ events }: { events: WorkEven
   const seen = new Set<string>();
 
   for (const e of events) {
-    const t =
-      e.payload?.tool || (e.type.startsWith("tool_") ? e.step_id : null);
+    const t = e.payload?.tool || (e.type.startsWith("tool_") ? e.step_id : null);
     if (t && !seen.has(t)) {
       seen.add(t);
       tools.push(t);
@@ -720,41 +588,36 @@ const AgentTrace = React.memo(function AgentTrace({ events }: { events: WorkEven
   if (tools.length === 0 && events.length === 0) return null;
 
   return (
-    <div className="mt-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60 overflow-hidden text-xs">
+    <div className="trace">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="w-full flex items-center justify-between px-3 py-2 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60 transition-colors min-h-[36px]"
+        className="trace-toggle"
       >
-        <div className="flex items-center gap-2">
-          <Terminal className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-          <span className="font-mono text-[11px]">
-            {tools.length > 0 ? tools.slice(0, 3).join(", ") : "Execution trace"}
-            {tools.length > 3 && ` +${tools.length - 3}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 text-[11px] text-zinc-400">
-          <span>
-            {events.length} step{events.length === 1 ? "" : "s"}
-          </span>
-          {open ? (
-            <ChevronUp className="w-3 h-3" />
-          ) : (
-            <ChevronDown className="w-3 h-3" />
-          )}
-        </div>
+        <Terminal size={12} className="shrink-0" />
+        <span>
+          {tools.length > 0 ? tools.slice(0, 3).join(" · ") : "Execution trace"}
+          {tools.length > 3 && ` +${tools.length - 3}`}
+        </span>
+        <span style={{ opacity: 0.6 }}>
+          {events.length} step{events.length === 1 ? "" : "s"}
+        </span>
+        <ChevronDown
+          size={12}
+          style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 110ms" }}
+        />
       </button>
 
       {open && (
-        <ol className="divide-y divide-zinc-850 border-t border-zinc-850 px-3 py-2 space-y-1 font-mono text-[11px]">
+        <div className="trace-body">
           {events.map((e) => (
-            <li key={e.seq} className="flex items-center gap-2 text-zinc-400 pt-1">
-              <span className="text-zinc-600">#{e.seq}</span>
-              <span className="truncate">{traceLabel(e)}</span>
-            </li>
+            <div className="thinking-step" key={e.seq}>
+              <span className="node-index">{String(e.seq).padStart(3, "0")}</span>
+              <span className="thinking-step-detail">{traceLabel(e)}</span>
+            </div>
           ))}
-        </ol>
+        </div>
       )}
     </div>
   );
@@ -767,24 +630,35 @@ function ReactPicker({
   onPick: (emoji: string) => void;
   onClose: () => void;
 }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [onClose]);
+
   return (
-    <div
-      className="emoji-picker absolute bottom-full right-0 mb-1 z-50 grid w-52 grid-cols-6 gap-1.5 p-2 rounded-xl border border-zinc-800 bg-zinc-900/95 shadow-xl backdrop-blur-md animate-in fade-in-0 zoom-in-95"
-      role="menu"
-    >
-      {EMOJI.map((emoji: string) => (
-        <button
-          key={emoji}
-          type="button"
-          onClick={() => {
-            onPick(emoji);
-            onClose();
-          }}
-          className="emoji flex h-8 w-8 items-center justify-center rounded-lg p-0 text-base transition-transform hover:bg-zinc-800 hover:scale-110 active:scale-125"
-        >
-          {emoji}
-        </button>
-      ))}
+    <div ref={ref} className="dropdown-menu" style={{ bottom: "calc(100% + 6px)", left: 0, width: 232 }} role="menu">
+      <div className="dropdown-section reg">React</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 2 }}>
+        {EMOJI.map((emoji: string) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => {
+              onPick(emoji);
+              onClose();
+            }}
+            className="msg-mini-action"
+            style={{ width: "100%", height: 30, fontSize: 15 }}
+            aria-label={`React with ${emoji}`}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -804,36 +678,28 @@ function ReactionChips({
   if (!emojis.length) return null;
 
   return (
-    <div className="flex flex-wrap gap-1.5 mt-1.5">
+    <>
       {emojis.map((emoji) => {
         const mine = (byEmoji[emoji] || []).includes(myHandle || "");
         return (
           <button
             key={emoji}
             onClick={() => onToggle(emoji)}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs transition-colors border ${
-              mine
-                ? "bg-violet-500/15 text-violet-300 border-violet-500/30 font-medium"
-                : "bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-700"
-            }`}
+            className={`reaction ${mine ? "mine" : ""}`}
+            aria-label={`${emoji}${mine ? ", remove your reaction" : ", react"}`}
           >
-            <span className="emoji whitespace-nowrap">{emoji}</span>
-            {counts[emoji] > 1 && (
-              <span className="text-[10px] text-zinc-400">{counts[emoji]}</span>
-            )}
+            <span>{emoji}</span>
+            {counts[emoji] > 1 && <span>{counts[emoji]}</span>}
           </button>
         );
       })}
-    </div>
+    </>
   );
 }
 
 function toDayKey(m?: Message): string {
   if (!m?.created_at) return "";
-  const ms =
-    typeof m.created_at === "number"
-      ? m.created_at * 1000
-      : Date.parse(m.created_at);
+  const ms = typeof m.created_at === "number" ? m.created_at * 1000 : Date.parse(m.created_at);
   if (!ms) return "";
   const d = new Date(ms);
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
@@ -844,50 +710,38 @@ function daySeparator(prev?: Message, m?: Message): string | null {
   const cur = toDayKey(m);
   if (!cur) return null;
   if (!prev || toDayKey(prev) !== cur) {
-    const ms =
-      typeof m.created_at === "number"
-        ? m.created_at * 1000
-        : Date.parse(m.created_at);
+    const ms = typeof m.created_at === "number" ? m.created_at * 1000 : Date.parse(m.created_at);
     const d = new Date(ms);
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
     if (d.toDateString() === today.toDateString()) return "Today";
     if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-    return d.toLocaleDateString(undefined, {
-      weekday: "long",
-      month: "short",
-      day: "numeric",
-    });
+    return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
   }
   return null;
 }
 
-function buildQuickStarts(
-  roomAgents: Agent[],
-  allAgents: Agent[],
-  channelName?: string
-) {
+function buildQuickStarts(roomAgents: Agent[], allAgents: Agent[], channelName?: string) {
   const pool = (roomAgents && roomAgents.length ? roomAgents : allAgents) || [];
-  const picks = pool.slice(0, 3);
-  const items = picks.map((a) => ({
+  const items = pool.slice(0, 3).map((a) => ({
     id: `agent-${a.name}`,
     label: `@${a.name}`,
-    hint: a.job || "Agent",
+    hint: a.job || "Teammate",
     text: `@${a.name} `,
   }));
   if (channelName && channelName !== "general") {
     items.unshift({
       id: "summarize",
-      label: "Summarize thread",
-      hint: "Catch up",
+      label: "Catch me up",
+      hint: "Summarize this room",
       text: "@swarm Please summarize what we know so far in this channel. ",
     });
   } else {
     items.unshift({
       id: "standup",
-      label: "What’s blocking us?",
-      hint: "@swarm",
+      label: "What is blocked?",
+      hint: "Ask the room",
       text: "@swarm What's blocking us right now? ",
     });
   }
@@ -898,17 +752,15 @@ function traceLabel(e: WorkEvent): string {
   const map: Record<string, string> = {
     work_queued: "Queued",
     work_started: "Started",
-    agent_started: `Agent ${e.payload?.agent || "working"}`,
-    tool_started: `Tool ${e.payload?.tool || e.step_id || ""} started`,
-    tool_finished: `Tool ${e.payload?.tool || e.step_id || ""} finished`,
+    agent_started: `${e.payload?.agent || "Teammate"} working`,
+    tool_started: `${e.payload?.tool || e.step_id || "tool"} started`,
+    tool_finished: `${e.payload?.tool || e.step_id || "tool"} finished`,
     approval_requested: "Approval requested — action needed",
     approval_resolved: `Approval ${e.payload?.decision || "resolved"}`,
     message_linked: "Reply posted",
     artifact_created: "Artifact created",
     work_completed: "Completed",
-    work_failed: `Failed${
-      e.payload?.error ? `: ${e.payload.error.slice(0, 120)}` : ""
-    }`,
+    work_failed: `Failed${e.payload?.error ? `: ${e.payload.error.slice(0, 120)}` : ""}`,
     work_cancelled: "Cancelled",
   };
   return map[e.type] || e.type;

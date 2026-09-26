@@ -138,7 +138,9 @@ Rules (Rakazo-shaped, enforced in review):
   persisted `message`. Partial streams persist with a cutoff marker.
 - Failures become `[agent error: …]` messages (never raw exceptions,
   never a 500); retry via `POST /api/messages/{id}/retry`.
-- `SPEC.md` is the contract. Code vs `SPEC.md` disagreement = bug.
+- The code is the contract. `docs/PRODUCT.md` records what the product is for
+  and what is deliberately out of scope; section 8a records the visual system.
+  If the code drifts from either, that is the bug.
 
 ## 7. Data and migrations
 
@@ -149,23 +151,66 @@ Rules (Rakazo-shaped, enforced in review):
 - Tests use a temp SQLite file and never touch `swarm.db`. Keep tests
   deterministic and offline (Groq mocked).
 
-## 8. Docs map (after the 2026 cleanup)
+## 8. Docs map
 
 | File | Purpose |
 | ---- | ------- |
 | `README.md` | SEO-friendly front door + quick start + demo script |
-| `SPEC.md` | API + agent contract (source of truth) |
+| `AGENTS.md` | This file. Product rules **and** the visual system |
 | `docs/PRODUCT.md` | Thesis, competition, scope, principles |
-| `docs/PRODUCT-APPROACH.md` | Problem, core loop, success criteria |
 | `docs/DEPLOY.md` | Docker deployment |
 | `docs/CHANGELOG.md` | Feature layers + revert map |
-| `docs/adr/` | Architecture decisions (append-only, never rewrite) |
 | `ai-support/README.md` | Provider settings user guide |
 
-Deleted in the cleanup: root `VISION.md`, `PROJECT.md`, `PROBLEM.md`
-(folded into `docs/PRODUCT.md`) and `frontend/frontend/` (stale duplicate
-of `frontend/src/`). Do not reintroduce root-level vision/project/problem
-docs or nested frontend copies.
+Two things are the whole durable record: **the code** for behaviour and **this
+file's section 8a** for the visual system. `docs/PRODUCT.md` says what the
+product is for and what is deliberately out of scope. A local `DESIGN.md` may
+exist on a working machine; it is gitignored, so never rely on it being present
+and never add a tracked reference to it.
+
+Deleted: root `VISION.md`, `PROJECT.md`, `PROBLEM.md` (folded into
+`docs/PRODUCT.md`); `frontend/frontend/` (stale duplicate of `frontend/src/`);
+`SPEC.md`, `docs/PRODUCT-APPROACH.md`, and `docs/adr/` (2026-09-26 — their
+content lives in the code, section 8a below, and `docs/CHANGELOG.md`).
+`docs/VISUAL-IDENTITY.md` went at the same time, replaced by the station board.
+Do not reintroduce any of them, root-level vision/project/problem docs, or
+nested frontend copies. Record a decision's rationale in the code comment or the
+section below that it affects, and add a row to `docs/CHANGELOG.md`.
+
+## 8a. Design system
+
+**Section 8a is the contract for anything visual.** Read it before touching
+`frontend/src/styles.css` or any component's markup.
+
+- **The station board.** Two rules generate the whole interface: every
+  discrete, stateful thing is a physical flap module with a lamp behind it;
+  everything continuous is a printed line on a roll. There are no message
+  bubbles, for anyone.
+- **State is never a tint.** A component's state is carried by the lamp
+  behind a flap and by the flap face inverting. Exactly two signal hues
+  exist: enamel green (`--go`) for live/cleared, enamel red (`--hold`) for
+  needs-you/hold. Adding a third hue means re-deciding the world, not
+  picking a colour.
+- **One stylesheet, one control grammar.** `styles.css` is the only
+  stylesheet — `components.css` is gone. The primitives in
+  `frontend/src/components/ui/*` delegate to it via the `.btn`, `.chip`,
+  `.input` classes rather than carrying their own Tailwind colours. Do not
+  reintroduce a second styling system or hard-coded hex in JSX.
+- **Render budget is architecture.** No `backdrop-filter`, no blur filters,
+  no canvas/WebGL, no gradient washes, no infinite animation on an idle
+  surface, and no `width`/`height` transitions. The app is open all day.
+  Depth comes from the three declared shadows in `:root`.
+- **Icons** are lucide at one weight. Emoji may not stand in for an
+  interface icon. A teammate's own avatar glyph is user content and is
+  fine.
+- **Typography:** Archivo for interface text, Departure Mono for the machine
+  register only (codes, timestamps, flap faces, counts). Departure Mono is
+  never a costume for "technical".
+- No eyebrow labels above headings, no section numbers, no middle-dot meta
+  strings, no gradient text, no nested cards.
+
+Rationale for a visual decision lives in section 8a and in the comment on the
+code it governs. Add a row to `docs/CHANGELOG.md` when you change the world.
 
 ## 9. Verification before every PR
 

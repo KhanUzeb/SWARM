@@ -32,67 +32,49 @@ export function Dropdown({
   const [open, setOpen] = React.useState(false);
   const [placement, setPlacement] = React.useState<"top" | "bottom">("bottom");
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const menuRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
+    if (!open) return;
+    function onClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     }
-    function handleKeyDown(e: KeyboardEvent) {
+    function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
-    if (open) {
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (rect) {
-        const spaceBelow = window.innerHeight - rect.bottom;
-        setPlacement(spaceBelow < 190 && rect.top > 190 ? "top" : "bottom");
-      }
-      document.addEventListener("mousedown", handleClickOutside);
-      document.addEventListener("keydown", handleKeyDown);
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (rect) {
+      setPlacement(
+        window.innerHeight - rect.bottom < 190 && rect.top > 190 ? "top" : "bottom",
+      );
     }
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
 
   return (
     <div className={cn("relative inline-block text-left", className)} ref={containerRef}>
-      <span
-        onClick={() => setOpen((prev) => !prev)}
-        className="inline-flex cursor-pointer"
-      >
+      <span onClick={() => setOpen((p) => !p)} className="inline-flex cursor-pointer">
         {trigger}
       </span>
 
       {open && (
         <div
-          ref={menuRef}
           role="menu"
           aria-label={label}
           style={placement === "top" ? { bottom: "calc(100% + 6px)" } : { top: "calc(100% + 6px)" }}
-          className={cn(
-            "absolute z-[var(--z-dropdown)] max-h-[min(320px,calc(100vh-24px))] min-w-[180px] overflow-y-auto overflow-x-hidden rounded-xl border border-zinc-800 bg-zinc-900/98 p-1 text-zinc-200 shadow-2xl backdrop-blur-xl animate-in fade-in-0 zoom-in-95 duration-100",
-            align === "right" ? "right-0" : "left-0"
-          )}
+          className={cn("dropdown-menu", align === "right" ? "right-0" : "left-0")}
         >
           {items.map((item, i) => {
-            if (item === "divider") {
-              return (
-                <div
-                  key={`div-${i}`}
-                  className="my-1 h-px bg-zinc-800/80 -mx-1"
-                />
-              );
-            }
+            if (item === "divider") return <div key={`d${i}`} className="dropdown-divider" />;
             if (item.section) {
               return (
-                <div
-                  key={`sec-${i}`}
-                  className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500"
-                >
+                <div key={`s${i}`} className="dropdown-section reg">
                   {item.section}
                 </div>
               );
@@ -106,19 +88,11 @@ export function Dropdown({
                   item.onClick?.();
                   setOpen(false);
                 }}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-normal text-zinc-300 transition-colors hover:bg-zinc-800/80 hover:text-zinc-100 disabled:pointer-events-none disabled:opacity-40 text-left select-none",
-                  item.danger &&
-                    "text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
-                )}
+                className={cn("dropdown-item", item.danger && "danger")}
               >
                 {item.icon && <span className="shrink-0">{item.icon}</span>}
                 <span className="flex-1 truncate">{item.label}</span>
-                {item.shortcut && (
-                  <span className="ml-auto text-[10px] font-mono text-zinc-500">
-                    {item.shortcut}
-                  </span>
-                )}
+                {item.shortcut && <span className="reg">{item.shortcut}</span>}
               </button>
             );
           })}

@@ -66,7 +66,7 @@ in daily use — speculative work stays gated).
 
 The 5-minute demo script lives in [README.md](../README.md)
 (“Demo script”). The contract for everything the demo shows lives in
-[SPEC.md](../SPEC.md).
+the code and [`AGENTS.md`](../AGENTS.md).
 
 ## Design principles
 
@@ -74,6 +74,6 @@ The 5-minute demo script lives in [README.md](../README.md)
    channel, including tool calls.
 2. **Gate speculative work.** Don't build it until the simpler thing has
    failed in daily use.
-3. **Spec is the contract.** Code and `SPEC.md` disagree → bug.
+3. **The code is the contract.** Code and `AGENTS.md` disagree is a bug.
 4. **Portfolio-real.** Every change ships something runnable, not a
    design doc.

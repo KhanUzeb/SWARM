@@ -1,6 +1,10 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
+/**
+ * A card is a physical object with a real edge. Elevation is declared once
+ * in styles.css — a card is never a border under a wide soft shadow.
+ */
 const Card = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement> & { padded?: boolean; interactive?: boolean }
@@ -8,11 +12,10 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-xl border border-zinc-800/80 bg-zinc-900/60 text-zinc-100 shadow-sm backdrop-blur-sm transition-all duration-150",
-      padded && "p-4",
-      interactive &&
-        "cursor-pointer hover:border-zinc-700 hover:bg-zinc-900/90 active:scale-[0.995]",
-      className
+      "card",
+      padded && "card-padded",
+      interactive && "card-interactive cursor-pointer hover:bg-[var(--housing-high)]",
+      className,
     )}
     {...props}
   />
@@ -23,26 +26,15 @@ const CardHeader = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
 >(({ className, ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn("flex flex-col space-y-1.5 p-4 pb-2", className)}
-    {...props}
-  />
+  <div ref={ref} className={cn("flex flex-col gap-1.5", className)} {...props} />
 ));
 CardHeader.displayName = "CardHeader";
 
 const CardTitle = React.forwardRef<
-  HTMLParagraphElement,
+  HTMLHeadingElement,
   React.HTMLAttributes<HTMLHeadingElement>
 >(({ className, ...props }, ref) => (
-  <h3
-    ref={ref}
-    className={cn(
-      "text-sm font-semibold leading-none tracking-tight text-zinc-100",
-      className
-    )}
-    {...props}
-  />
+  <h3 ref={ref} className={cn("text-sm font-semibold text-[var(--ink-on-housing)]", className)} {...props} />
 ));
 CardTitle.displayName = "CardTitle";
 
@@ -50,11 +42,7 @@ const CardDescription = React.forwardRef<
   HTMLParagraphElement,
   React.HTMLAttributes<HTMLParagraphElement>
 >(({ className, ...props }, ref) => (
-  <p
-    ref={ref}
-    className={cn("text-xs text-zinc-400 leading-relaxed", className)}
-    {...props}
-  />
+  <p ref={ref} className={cn("text-sm text-[var(--ink-3)]", className)} {...props} />
 ));
 CardDescription.displayName = "CardDescription";
 
@@ -62,7 +50,7 @@ const CardContent = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
 >(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("p-4 pt-0", className)} {...props} />
+  <div ref={ref} className={cn("min-w-0", className)} {...props} />
 ));
 CardContent.displayName = "CardContent";
 
@@ -70,19 +58,8 @@ const CardFooter = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
 >(({ className, ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn("flex items-center p-4 pt-0", className)}
-    {...props}
-  />
+  <div ref={ref} className={cn("flex items-center gap-2 pt-1", className)} {...props} />
 ));
 CardFooter.displayName = "CardFooter";
 
-export {
-  Card,
-  CardHeader,
-  CardFooter,
-  CardTitle,
-  CardDescription,
-  CardContent,
-};
+export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent };

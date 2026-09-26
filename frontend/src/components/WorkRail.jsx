@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Avatar, Badge, Button, EmptyState, fmtTime } from "../ui.jsx";
 import { WORK_ACTIVE, cancelWork, fetchWorkMessages, workStatusLabel, workStatusTone } from "../work/sessionStore.js";
+import { X, ChevronRight, PanelRightClose } from "lucide-react";
 
 const EVENT_LABEL = {
   work_queued: "Queued", work_started: "Started", agent_started: "Agent working",
@@ -23,7 +24,7 @@ export function WorkRail({
     return (
       <aside id="work-rail" className="collapsed" aria-label="Work rail collapsed">
         <button className="work-rail-expand" onClick={onToggle} aria-label="Open work rail">
-          <span className="work-rail-expand-icon" aria-hidden>▸</span>
+          <ChevronRight size={13} className="work-rail-expand-icon" aria-hidden />
           <span className="work-rail-expand-label">Work</span>
           {attentionCount(sessions) > 0 && (
             <span className="work-rail-count">{attentionCount(sessions)}</span>
@@ -51,7 +52,7 @@ export function WorkRail({
             {connected ? "Live" : "Retrying"}
           </span>
         </div>
-        <button className="panel-close" onClick={onToggle} aria-label="Collapse work rail">▸</button>
+        <button className="panel-close" onClick={onToggle} aria-label="Collapse work rail"><PanelRightClose size={14} /></button>
       </div>
 
       <div className="work-rail-filters" role="tablist" aria-label="Work filters">
@@ -337,7 +338,7 @@ export function WorkRailSheet({ open, onClose, children }) {
   return (
     <div className="work-sheet-backdrop" onClick={onClose}>
       <div className="work-sheet" role="dialog" aria-label="Work details" onClick={e => e.stopPropagation()}>
-        <button className="panel-close" onClick={onClose} aria-label="Close work details">×</button>
+        <button className="panel-close" onClick={onClose} aria-label="Close work details"><X size={14} /></button>
         {children}
       </div>
     </div>

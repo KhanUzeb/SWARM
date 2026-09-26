@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import "./components.css";
 import {
   api, apiJson, authHeaders, CACHE_TTL, HISTORY_LIMIT, DEFAULT_MODEL, ALL_TOOLS,
   escapeHtml, fmtBytes, initials, botLabel, slugFromName, statusLabel, renderMath,
   Avatar, Badge, Button, Input, Textarea, Card, Dropdown, Tooltip, ToastContainer, Modal, Skeleton, Spinner, EmptyState, ScrollArea, Divider,
   RichBody, CodeBlock,
 } from "./ui.jsx";
-import { ApprovalCard, AgentMessage, TaskRow, PixelLoader } from "./beautifului.jsx";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { MessageList } from "./components/MessageList";
@@ -19,19 +17,12 @@ import { WorkHome, WorkDetail as WorkRunDetail } from "./components/WorkHome.jsx
 import { ContextDrawer } from "./components/ContextDrawer.jsx";
 import { KnowledgeView } from "./components/KnowledgeView.jsx";
 import { WorkRail, WorkRailSheet, WorkDetail } from "./components/WorkRail.jsx";
+import { Flap, Lamp } from "./components/Flap";
+import { X, MessageSquare } from "lucide-react";
 import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js";
 
-const PANEL_GROUPS = [
-  { id: "places", label: "Places", tabs: [
-    { id: "files", label: "Sandbox" }, { id: "system", label: "System" }, { id: "browser", label: "Browser" },
-  ]},
-  { id: "connect", label: "Connect", tabs: [
-    { id: "ai", label: "AI" }, { id: "apps", label: "Apps" }, { id: "tools", label: "Tools" }, { id: "plugins", label: "Plugins" },
-  ]},
-  { id: "automate", label: "Automate", tabs: [
-    { id: "skills", label: "Skills" }, { id: "routines", label: "Routines" }, { id: "approvals", label: "Approvals" },
-  ]},
-];
+// PANEL_GROUPS is owned by ComputerPanel.jsx. The copy that lived here was
+// dead and had drifted from it.
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -891,7 +882,7 @@ export default function App() {
       {selectedRun && (
         <div className="run-monitor-backdrop" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setSelectedRun(null); }}>
           <section className="run-monitor">
-            <button className="panel-close" onClick={() => setSelectedRun(null)} aria-label="Close run detail">×</button>
+            <button className="panel-close" onClick={() => setSelectedRun(null)} aria-label="Close run detail"><X size={14} /></button>
             <WorkRunDetail run={selectedRun} token={token} onStatusChange={setSelectedRun} />
           </section>
         </div>
@@ -1085,7 +1076,7 @@ function FilesView({ computer }) {
         )}
         {visible.map(f => (
           <div key={f.path || f.name} className="file-row" role="listitem" tabIndex={0}>
-            <span className="file-icon" aria-hidden>{f.is_dir ? "📁" : "📄"}</span>
+            <span className="file-icon" aria-hidden>{f.is_dir ? <Folder size={14} /> : <FileText size={14} />}</span>
             <span className="file-info">
               <span className="file-name">{f.path || f.name}</span>
               {f.size != null && <span className="file-size text-mono-xs text-subtle">{fmtBytes(f.size)}</span>}
@@ -1095,6 +1086,13 @@ function FilesView({ computer }) {
       </ScrollArea>
     </div>
   );
+}
+
+function agentFlap(status) {
+  if (status === "working" || status === "running") return { value: "Work", tone: "amber" };
+  if (status === "needs_approval" || status === "waiting_for_approval") return { value: "Hold", tone: "hold" };
+  if (status === "idle" || status === "online") return { value: "Ready", tone: "go" };
+  return { value: "Off", tone: "unlit" };
 }
 
 function AgentsView({ agents, onOpenChannel }) {
@@ -1108,54 +1106,54 @@ function AgentsView({ agents, onOpenChannel }) {
     <div id="log" className="agents-view">
       <header className="agents-view-head">
         <div>
-          <h2 className="agents-view-title">Agents</h2>
-          <p className="agents-view-sub text-subtle">{agents.length} teammate{agents.length === 1 ? "" : "s"} · open a 1:1 to work</p>
+          <h2 className="agents-view-title">Roster</h2>
+          <p className="agents-view-sub">{agents.length} teammate{agents.length === 1 ? "" : "s"} · open a 1:1 to work</p>
         </div>
         <input
           type="search"
           className="input agents-view-search"
-          placeholder="Filter agents…"
+          placeholder="Filter the roster"
           value={query}
           onChange={e => setQuery(e.target.value)}
-          aria-label="Filter agents"
+          aria-label="Filter teammates"
         />
       </header>
-      <ScrollArea className="agents-grid">
+      <div className="agents-grid scroll-y">
         {filtered.length === 0 && (
           <div className="agents-view-empty">
             <EmptyState
               kind="search"
               title={agents.length === 0 ? "No teammates yet" : "No matches"}
-              message={agents.length === 0 ? "Create your first agent to start collaborating." : `No agents match “${query.trim()}”.`}
+              message={agents.length === 0 ? "Create your first teammate to start working." : `No teammate matches “${query.trim()}”.`}
             />
           </div>
         )}
-        {filtered.map(a => (
-          <Card
-            key={a.name}
-            interactive
-            padded
-            onClick={() => onOpenChannel(a.dm_channel_id)}
-            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenChannel(a.dm_channel_id); } }}
-            tabIndex={0}
-            role="button"
-            aria-label={`Open 1:1 with ${a.display_name || a.name}`}
-          >
-            <div className="agent-card-head">
-              <Avatar name={a.display_name || a.name} kind="agent" size="lg" avatar={a.avatar} />
-              <div className="agent-card-meta">
-                <span className="agent-card-name">{a.display_name || a.name}</span>
-                <span className="agent-card-handle text-mono-xs text-subtle">@{a.name}</span>
+        {filtered.map(a => {
+          const flap = agentFlap(a.status);
+          return (
+            <Card
+              key={a.name}
+              interactive
+              onClick={() => onOpenChannel(a.dm_channel_id)}
+              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenChannel(a.dm_channel_id); } }}
+              tabIndex={0}
+              role="button"
+              aria-label={`Open a 1:1 with ${a.display_name || a.name}`}
+            >
+              <div className="agent-card-head">
+                <Avatar name={a.display_name || a.name} kind="agent" size="sm" avatar={a.avatar} />
+                <div className="agent-card-meta">
+                  <span className="agent-card-name">{a.display_name || a.name}</span>
+                  <span className="agent-card-handle">@{a.name}</span>
+                </div>
+                <Flap value={flap.value} tone={flap.tone} />
               </div>
-              <Badge variant={a.status === "working" ? "success" : a.status === "needs_approval" ? "warning" : "subtle"}>
-                {statusLabel(a.status)}
-              </Badge>
-            </div>
-            <p className="agent-card-job text-sm text-secondary">{a.job}</p>
-            <p className="agent-card-model text-mono-xs text-subtle">{a.model}</p>
-          </Card>
-        ))}
-      </ScrollArea>
+              {a.job && <p className="agent-card-job">{a.job}</p>}
+              {a.model && <p className="agent-card-model">{a.model}</p>}
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1169,14 +1167,14 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
       <div className="panel-header">
         <div className="panel-header-main">
           <span className="panel-icon" aria-hidden>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <MessageSquare size={15} />
           </span>
           <div>
             <h2 className="panel-title">Thread</h2>
             <span className="panel-subtitle">{replies.length} repl{replies.length === 1 ? "y" : "ies"}</span>
           </div>
         </div>
-        <button className="panel-close" onClick={onClose} aria-label="Close thread">×</button>
+        <button className="panel-close" onClick={onClose} aria-label="Close thread"><X size={14} /></button>
       </div>
       <ScrollArea className="thread-body">
         {parent && (
@@ -1278,7 +1276,7 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
             <span className="eyebrow">Create</span>
             <h2>{labels[action]}</h2>
           </div>
-          <button className="panel-close" onClick={onClose} aria-label="Close dialog">×</button>
+          <button className="panel-close" onClick={onClose} aria-label="Close dialog"><X size={14} /></button>
         </header>
         <form className="quick-create-form" onSubmit={submit}>
           {isAgent && templates.length > 0 && (

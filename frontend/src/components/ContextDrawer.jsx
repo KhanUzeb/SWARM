@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 /** Visible, controllable context (plan §29). Stats shape matches
  *  GET /api/channels/{id}/context: chars + counts, not tokens. */
 function fmtChars(n) {
@@ -15,7 +16,7 @@ export function ContextDrawer({ stats, included = [], onRefresh, onClose }) {
         <h3>Context</h3>
         <div className="row">
           {onRefresh && <button className="btn btn-ghost btn-sm" onClick={onRefresh}>Refresh</button>}
-          <button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close context">×</button>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close context"><X size={14} /></button>
         </div>
       </header>
       {!stats && <p className="muted small">No context data yet.</p>}

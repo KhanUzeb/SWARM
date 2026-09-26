@@ -46,7 +46,7 @@ Read [AGENTS.md](AGENTS.md) before touching code. Highlights:
   `backend/ai_support/` and `backend/computer_providers.py`. No new
   provider-specific env vars when the generic connection can express it.
 - Keep tests deterministic and offline by default (Groq is mocked).
-- `SPEC.md` is the contract: if code and `SPEC.md` disagree, file it as a
+- The code is the contract: if code and `AGENTS.md` disagree, file it as a
   bug against whichever is easier to fix correctly.
 
 ## PR checklist
@@ -55,4 +55,4 @@ Read [AGENTS.md](AGENTS.md) before touching code. Highlights:
 - [ ] `pytest -q` green
 - [ ] `bun run build` green (if frontend touched)
 - [ ] No secrets, local paths, or machine-specific data in the diff
-- [ ] Docs updated (`README.md`, `docs/`, or `SPEC.md` as appropriate)
+- [ ] Docs updated (`README.md`, `docs/`, or `AGENTS.md` as appropriate)
