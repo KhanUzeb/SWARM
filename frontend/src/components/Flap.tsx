@@ -90,9 +90,15 @@ export function Flap({
 
   // The two halves are absolutely positioned, so they contribute no width.
   // An in-flow sizer with the same text gives the card its intrinsic width.
+  // The sizer and both halves are hidden from assistive tech — the value is
+  // exposed once, through the sr-only span, so the card's accessible name is
+  // the state and not the state repeated three times.
   return (
     <span className={classes} data-turn={turn} title={title ?? value}>
-      <span className="flap-sizer">{value}</span>
+      <span className="sr-only">{value}</span>
+      <span className="flap-sizer" aria-hidden="true">
+        {value}
+      </span>
       <span className="half half-t" aria-hidden="true">
         <i>{topText}</i>
       </span>

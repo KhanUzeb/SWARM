@@ -9,78 +9,32 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { fmtTime } from "./lib.js";
+import { escapeHtml, fmtTime, initials } from "./lib.js";
 
-// ── API & Utilities (ported from lib.js) ──
-// fmtTime lives in lib.js (single source of truth) and is re-exported
-// below so `import { fmtTime } from "../ui.jsx"` keeps working.
+// ── API & utilities ──
+// lib.js is the single owner of the API client and the shared formatters.
+// This module re-exports them so `import { apiJson } from "../ui.jsx"` keeps
+// working while there is only one implementation of each. Two clients used to
+// live here, with different cache lifetimes for the same data; the one here
+// also ignored the `cacheTtl` its callers passed. See AGENTS.md.
 
-const CACHE_TTL = { list: 60_000, status: 10_000, catalog: 300_000 };
-const HISTORY_LIMIT = 50;
-const DEFAULT_MODEL = "openai/gpt-oss-120b";
-const ALL_TOOLS = [
-  "read_only_shell", "search_channel_history", "remember", "recall",
-  "forget", "knowledge_search", "knowledge_save",
-  "list_workspace", "read_workspace", "write_workspace", "fetch_url",
-  "channel_digest", "save_skill", "request_approval",
-  "computer_run", "computer_open", "computer_screenshot",
-  "browser_navigate", "browser_snapshot", "browser_click",
-  "browser_type", "browser_press", "browser_wait", "browser_screenshot",
-  "exa_search", "tavily_search", "firecrawl_scrape", "browser_use",
-  "cua_desktop", "system_run", "system_ls", "system_read", "system_write",
-];
-
-function api(path, options = {}) {
-  const { token, cacheTtl, method = "GET", body, headers = {} } = options;
-  const h = { "Content-Type": "application/json", "X-Swarm-Client": "web", ...headers };
-  if (token) h["Authorization"] = `Bearer ${token}`;
-  if (cacheTtl) h["Cache-Control"] = `max-age=${Math.floor(cacheTtl / 1000)}`;
-  return fetch(path, { method, headers: h, body: body ? JSON.stringify(body) : undefined });
-}
-
-async function apiJson(path, options = {}) {
-  const res = await api(path, options);
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
-}
-
-function authHeaders(token) {
-  return { Authorization: `Bearer ${token}` };
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function fmtBytes(bytes) {
-  if (!bytes && bytes !== 0) return "";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
-  return `${bytes.toFixed(i ? 1 : 0)} ${units[i]}`;
-}
-
-function initials(name) {
-  return name?.split(/[\s-]+/).map(w => w[0]).join("").toUpperCase().slice(0, 2) || "?";
-}
-
-function botLabel(agent) {
-  return agent.display_name ? `${agent.display_name} (@${agent.name})` : `@${agent.name}`;
-}
-
-function slugFromName(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-}
-
-function statusLabel(s) {
-  const map = { idle: "Idle", working: "Working", needs_approval: "Needs approval" };
-  return map[s] || s;
-}
+export {
+  api,
+  apiJson,
+  authHeaders,
+  bustCache,
+  CACHE_TTL,
+  HISTORY_LIMIT,
+  DEFAULT_MODEL,
+  ALL_TOOLS,
+  escapeHtml,
+  fmtTime,
+  fmtBytes,
+  initials,
+  botLabel,
+  slugFromName,
+  statusLabel,
+} from "./lib.js";
 
 // ── Math Rendering ──
 // KaTeX was dropped from the bundle (258KB, never reached: the tokenizer
@@ -93,7 +47,7 @@ function renderMath(tex, display) {
 
 // ── Rich Text Tokenizer (simplified) ──
 
-function tokenizeBody(body) {
+function tokenizeRichBody(body) {
   if (!body) return [{ type: "text", text: "" }];
   const parts = [];
   const codeRegex = /```(\w*)\r?\n([\s\S]*?)```/g;
@@ -116,7 +70,7 @@ function tokenizeBody(body) {
   return parts.length > 0 ? parts : [{ type: "text", text: body }];
 }
 
-function formatInline(text) {
+function formatRichInline(text) {
   return escapeHtml(text)
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
@@ -126,7 +80,7 @@ function formatInline(text) {
 }
 
 function RichBody({ body }) {
-  const parts = useMemo(() => tokenizeBody(body), [body]);
+  const parts = useMemo(() => tokenizeRichBody(body), [body]);
   return (
     <div className="body rich">
       {parts.map((part, i) => {
@@ -134,7 +88,7 @@ function RichBody({ body }) {
         if (part.type === "math") return (
           <span key={i} className={part.display ? "math-display" : "math-inline"} dangerouslySetInnerHTML={{ __html: renderMath(part.tex, part.display) }} />
         );
-        return <span key={i} dangerouslySetInnerHTML={{ __html: formatInline(part.text) }} />;
+        return <span key={i} dangerouslySetInnerHTML={{ __html: formatRichInline(part.text) }} />;
       })}
     </div>
   );
@@ -404,13 +358,11 @@ function Divider({ className = "", vertical }) {
   return vertical ? <div className={`divider-vertical ${className}`} /> : <hr className={`divider ${className}`} />;
 }
 
-// ── Export everything ──
+// ── Export the local surface ──
+// The API client and the shared formatters are re-exported from lib.js at the
+// top of this file; only what this module actually owns is listed here.
 
 export {
-  // API
-  api, apiJson, authHeaders, CACHE_TTL, HISTORY_LIMIT, DEFAULT_MODEL, ALL_TOOLS,
-  // Utils
-  escapeHtml, fmtTime, fmtBytes, initials, botLabel, slugFromName, statusLabel,
   // Math
   renderMath,
   // Rich text

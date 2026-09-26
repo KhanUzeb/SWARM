@@ -67,7 +67,6 @@ export function KnowledgeView({ token, flash }) {
     <div id="log" className="knowledge-view">
       <div className="knowledge-head">
         <div>
-          <p className="eyebrow">Knowledge base</p>
           <h2 className="knowledge-title">What should agents remember?</h2>
           <p className="knowledge-sub">Saved docs are searchable by you here and by agents through knowledge search.</p>
         </div>
@@ -80,7 +79,7 @@ export function KnowledgeView({ token, flash }) {
 
       <Card padded className="knowledge-form-card">
         <form onSubmit={submit} className="knowledge-form">
-          <span className="eyebrow">{editingId ? "Edit doc" : "New doc"}</span>
+          <span className="reg">{editingId ? "Edit doc" : "New doc"}</span>
           <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="Title — e.g. Deploy runbook" aria-label="Knowledge title" />
           <Textarea value={body} onChange={e => setBody(e.target.value)} placeholder="The durable fact, runbook, or convention…" rows={4} aria-label="Knowledge body" />
           <Input value={tags} onChange={e => setTags(e.target.value)} placeholder="tags (optional, comma separated)" aria-label="Knowledge tags" />

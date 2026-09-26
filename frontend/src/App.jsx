@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// The API client lives in lib.js, which is its only owner.
+import { apiJson, CACHE_TTL, fmtBytes } from "./lib.js";
 import {
-  api, apiJson, authHeaders, CACHE_TTL, HISTORY_LIMIT, DEFAULT_MODEL, ALL_TOOLS,
-  escapeHtml, fmtBytes, initials, botLabel, slugFromName, statusLabel, renderMath,
-  Avatar, Badge, Button, Input, Textarea, Card, Dropdown, Tooltip, ToastContainer, Modal, Skeleton, Spinner, EmptyState, ScrollArea, Divider,
-  RichBody, CodeBlock,
+  Avatar, Button, Input, Textarea, Card, ScrollArea, EmptyState, Divider, CodeBlock,
 } from "./ui.jsx";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
@@ -1273,7 +1272,6 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
       <section className="quick-create">
         <header className="run-monitor-head">
           <div>
-            <span className="eyebrow">Create</span>
             <h2>{labels[action]}</h2>
           </div>
           <button className="panel-close" onClick={onClose} aria-label="Close dialog"><X size={14} /></button>
@@ -1281,7 +1279,7 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
         <form className="quick-create-form" onSubmit={submit}>
           {isAgent && templates.length > 0 && (
             <div className="template-picker">
-              <span className="eyebrow">Start from a template</span>
+              <span className="reg">Start from a template</span>
               <div className="template-grid">
                 {templates.map(t => (
                   <button

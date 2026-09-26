@@ -95,10 +95,14 @@ function toMs(ts) {
 }
 
 export function fmtBytes(n) {
-  const size = Number(n) || 0;
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.round(size / 102.4) / 10} KB`;
-  return `${Math.round(size / 104857.6) / 10} MB`;
+  if (n == null || n === "") return "";
+  const bytes = Number(n);
+  if (!Number.isFinite(bytes)) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = bytes;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
 import { cacheGet, cacheInvalidate, cacheKey, cacheSet } from "./lib/cache.js";
@@ -150,27 +154,6 @@ export function groupedWith(prev, m) {
   );
 }
 
-export function mentionQuery(value, pos) {
-  const before = value.slice(0, pos);
-  const at = before.match(/(^|\s)@([a-zA-Z0-9_\-]*)$/);
-  if (at) return { mode: "at", query: at[2].toLowerCase() };
-  const slash = before.match(/(^|\s)\/([a-zA-Z0-9_\-]*)$/);
-  if (slash) return { mode: "slash", query: slash[2].toLowerCase() };
-  return null;
-}
-
-export function insertMention(value, start, end, name, kind) {
-  const before = value.slice(0, start);
-  const after = value.slice(end);
-  const needle = kind === "slash" ? /(^|\s)\/[a-zA-Z0-9_\-]*$/ : /(^|\s)@[a-zA-Z0-9_\-]*$/;
-  const mark = kind === "slash" ? "/" : "@";
-  const replaced = before.replace(needle, `$1${mark}${name} `);
-  const usedReplace = replaced !== before;
-  const next = usedReplace ? replaced + after : `${before}${mark}${name} ${after}`;
-  const pos = usedReplace ? replaced.length : before.length + name.length + 2;
-  return { value: next, pos };
-}
-
 export async function api(path, { token, method = "GET", body, json = true } = {}) {
   const res = await fetch(path, {
     method,
@@ -219,53 +202,14 @@ export function bustCache(...prefixes) {
   for (const p of prefixes) cacheInvalidate(p);
 }
 
+/** HTML-escape for interpolated text. Quotes and apostrophes are escaped too,
+ *  so the output is safe inside an attribute as well as in text content. */
 export function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-const TOKEN_RE = /```([\w+-]*)[ \t]*\n?([\s\S]*?)```|\$\$([\s\S]+?)\$\$|\$(?!\$)([^$\n]+?)\$/g;
-
-export function tokenizeBody(body) {
-  const text = String(body || "");
-  const parts = [];
-  let last = 0;
-  TOKEN_RE.lastIndex = 0;
-  let match;
-  while ((match = TOKEN_RE.exec(text))) {
-    if (match.index > last) parts.push({ type: "text", text: text.slice(last, match.index) });
-    if (match[2] != null) {
-      parts.push({ type: "code", lang: (match[1] || "").trim() || "text", text: match[2].replace(/\n$/, "") });
-    } else if (match[3] != null) {
-      parts.push({ type: "math", display: true, tex: match[3].trim() });
-    } else {
-      parts.push({ type: "math", display: false, tex: match[4].trim() });
-    }
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) parts.push({ type: "text", text: text.slice(last) });
-  return parts.length ? parts : [{ type: "text", text }];
-}
-
-export function formatInline(text) {
-  return escapeHtml(text)
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\\subsection\*\{([^}]+)\}/g, '<span class="tex-sub">$1</span>')
-    .replace(/\n/g, "<br />");
-}
-
-export function extractPaper(messages) {
-  const code = [];
-  const math = [];
-  for (const m of messages || []) {
-    if (!m?.body || m.author_kind === "system") continue;
-    for (const part of tokenizeBody(m.body)) {
-      if (part.type === "code") code.push({ ...part, author: m.author, id: m.id });
-      if (part.type === "math") math.push({ ...part, author: m.author, id: m.id });
-    }
-  }
-  return { code, math };
-}
