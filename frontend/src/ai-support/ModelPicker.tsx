@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown } from "lucide-react";
 import { Lamp } from "../components/Flap";
+import { placeOverlay, type OverlayPlacement } from "../lib/overlay";
 import { apiJson } from "../lib.js";
 
 export interface ModelOption {
@@ -59,8 +60,10 @@ export default function ModelPicker({
   const [models, setModels] = useState<ModelOption[]>([]);
   const [active, setActive] = useState(0);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [placement, setPlacement] = useState<OverlayPlacement | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const fetchGen = useRef(0);
   const autoSelected = useRef(false);
   const loadedSpec = useRef("");
@@ -136,6 +139,12 @@ export default function ModelPicker({
     return () => document.removeEventListener("mousedown", onDocumentDown);
   }, [open]);
 
+  // An inline picker lives inside a surface someone else already placed.
+  const position = useCallback(() => {
+    if (inline || !rootRef.current || !popRef.current) return;
+    setPlacement(placeOverlay(rootRef.current.getBoundingClientRect(), popRef.current));
+  }, [inline]);
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const list = models.slice();
@@ -148,6 +157,25 @@ export default function ModelPicker({
       return haystack.includes(needle);
     });
   }, [models, query, value]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlacement(null);
+      return undefined;
+    }
+    position();
+    function onReflow() {
+      position();
+    }
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
+    return () => {
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
+    };
+    // The list grows as it loads, and the panel rides the viewport edge,
+    // so the placement is re-measured whenever its height can have changed.
+  }, [open, position, filtered.length]);
 
   useEffect(() => setActive(0), [open, query, filtered.length]);
 
@@ -188,29 +216,41 @@ export default function ModelPicker({
 
   return (
     <div className="model-picker" ref={rootRef}>
-      <button
-        type="button"
-        id={id}
-        className="model-picker-toggle"
-        disabled={disabled || loading}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((wasOpen) => {
-            if (!wasOpen) ensureLoaded();
-            return !wasOpen;
-          });
-        }}
-      >
-        <span className="model-picker-value">{current ? labelOf(current) : value || placeholder}</span>
-        <span className={`model-badge${live ? " is-live" : ""}`}>
-          {live && <Lamp tone="go" />}
-          {badge}
-        </span>
-        <ChevronDown size={12} className="model-picker-chevron" aria-hidden="true" />
-      </button>
+      {/* Inline, the surrounding surface owns the trigger; a second one
+          inside the open panel is a control that opens what is already open. */}
+      {!inline && (
+        <button
+          type="button"
+          id={id}
+          className="model-picker-toggle"
+          disabled={disabled || loading}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => {
+            setOpen((wasOpen) => {
+              if (!wasOpen) ensureLoaded();
+              return !wasOpen;
+            });
+          }}
+        >
+          <span className="model-picker-value">{current ? labelOf(current) : value || placeholder}</span>
+          <span className={`model-badge${live ? " is-live" : ""}`}>
+            {live && <Lamp tone="go" />}
+            {badge}
+          </span>
+          <ChevronDown size={12} className="model-picker-chevron" aria-hidden="true" />
+        </button>
+      )}
       {open && (
-        <div className={`model-picker-pop${inline ? " model-picker-pop-inline" : ""}`}>
+        <div
+          ref={popRef}
+          className={`model-picker-pop${inline ? " model-picker-pop-inline" : ""}`}
+          style={
+            inline || !placement
+              ? undefined
+              : { top: placement.top, left: placement.left, maxHeight: placement.maxHeight }
+          }
+        >
           <input
             ref={inputRef}
             className="model-picker-search"

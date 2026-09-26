@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { placeOverlay, type OverlayPlacement } from "@/lib/overlay";
 
 export interface DropdownMenuItem {
   id?: string;
@@ -30,8 +31,36 @@ export function Dropdown({
   className,
 }: DropdownProps) {
   const [open, setOpen] = React.useState(false);
-  const [placement, setPlacement] = React.useState<"top" | "bottom">("bottom");
+  const [placement, setPlacement] = React.useState<OverlayPlacement | null>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+
+  const position = React.useCallback(() => {
+    if (!containerRef.current || !menuRef.current) return;
+    setPlacement(
+      placeOverlay(containerRef.current.getBoundingClientRect(), menuRef.current, {
+        align,
+        minHeight: 90,
+      }),
+    );
+  }, [align]);
+
+  React.useLayoutEffect(() => {
+    if (!open) {
+      setPlacement(null);
+      return undefined;
+    }
+    position();
+    function onReflow() {
+      position();
+    }
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
+    return () => {
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
+    };
+  }, [open, position]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -43,12 +72,6 @@ export function Dropdown({
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect) {
-      setPlacement(
-        window.innerHeight - rect.bottom < 190 && rect.top > 190 ? "top" : "bottom",
-      );
-    }
     document.addEventListener("mousedown", onClickOutside);
     document.addEventListener("keydown", onKeyDown);
     return () => {
@@ -58,17 +81,22 @@ export function Dropdown({
   }, [open]);
 
   return (
-    <div className={cn("relative inline-block text-left", className)} ref={containerRef}>
+    <div className={cn("inline-block text-left", className)} ref={containerRef}>
       <span onClick={() => setOpen((p) => !p)} className="inline-flex cursor-pointer">
         {trigger}
       </span>
 
       {open && (
         <div
+          ref={menuRef}
           role="menu"
           aria-label={label}
-          style={placement === "top" ? { bottom: "calc(100% + 6px)" } : { top: "calc(100% + 6px)" }}
-          className={cn("dropdown-menu", align === "right" ? "right-0" : "left-0")}
+          style={
+            placement
+              ? { top: placement.top, left: placement.left, maxHeight: placement.maxHeight }
+              : { top: 0, left: 0, visibility: "hidden" }
+          }
+          className="dropdown-menu"
         >
           {items.map((item, i) => {
             if (item === "divider") return <div key={`d${i}`} className="dropdown-divider" />;

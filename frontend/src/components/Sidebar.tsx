@@ -62,6 +62,8 @@ interface SidebarProps {
   workAttentionCount?: number;
   open?: boolean;
   onClose?: () => void;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
 const PRIMARY_NAV = [
@@ -130,9 +132,12 @@ export function Sidebar({
   onViewChange,
   workAttentionCount,
   open = false,
+  collapsed = false,
+  onToggleCollapsed,
 }: SidebarProps) {
   const [search, setSearch] = React.useState("");
-  const [collapsed, setCollapsed] = React.useState(false);
+  // The drawer is never folded: below 900px the roster is a sheet of words.
+  const folded = collapsed && !open;
 
   const q = search.trim().toLowerCase();
   const matchChannel = (c: Channel) => !q || (c.name || "").toLowerCase().includes(q);
@@ -154,12 +159,11 @@ export function Sidebar({
   return (
     <aside
       id="sidebar"
-      className={open ? "open" : ""}
-      style={collapsed && !open ? { width: 56 } : undefined}
+      className={`${open ? "open" : ""} ${folded ? "folded" : ""}`.trim() || undefined}
       aria-label="Roster"
     >
       <div className="sidebar-header">
-        {!collapsed && (
+        {!folded && (
           <div className="brand">
             <span className="brand-mark">Swarm</span>
             <span className="brand-sub">ops desk</span>
@@ -167,18 +171,19 @@ export function Sidebar({
         )}
 
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 2 }}>
-          <Tooltip content={collapsed ? "Expand roster" : "Collapse roster"}>
+          <Tooltip content={folded ? "Expand roster" : "Collapse roster"}>
             <button
               type="button"
               className="btn btn-ghost btn-icon btn-sm"
-              onClick={() => setCollapsed((c) => !c)}
-              aria-label={collapsed ? "Expand roster" : "Collapse roster"}
+              onClick={onToggleCollapsed}
+              aria-label={folded ? "Expand roster" : "Collapse roster"}
+              aria-expanded={!folded}
             >
-              {collapsed ? <PanelLeft size={14} /> : <PanelLeftClose size={14} />}
+              {folded ? <PanelLeft size={14} /> : <PanelLeftClose size={14} />}
             </button>
           </Tooltip>
 
-          {!collapsed && onNewDM && (
+          {!folded && onNewDM && (
             <Tooltip content="New message">
               <button
                 type="button"
@@ -202,14 +207,14 @@ export function Sidebar({
             <button
               key={item.id}
               onClick={() => onViewChange?.(item.id === "chat" ? "talk" : item.id)}
-              title={collapsed ? item.label : undefined}
+              title={folded ? item.label : undefined}
               className={`channel-link ${isActive ? "active" : ""}`}
-              style={collapsed ? { justifyContent: "center", padding: 0 } : undefined}
+              style={folded ? { justifyContent: "center", padding: 0 } : undefined}
               aria-current={isActive ? "page" : undefined}
             >
               <Icon size={14} className="shrink-0" />
-              {!collapsed && <span className="channel-name">{item.label}</span>}
-              {!collapsed && item.id === "work" && (workAttentionCount || 0) > 0 && (
+              {!folded && <span className="channel-name">{item.label}</span>}
+              {!folded && item.id === "work" && (workAttentionCount || 0) > 0 && (
                 <span className="flap flap-hold" style={{ marginLeft: "auto" }}>
                   <span>{workAttentionCount}</span>
                 </span>
@@ -219,7 +224,7 @@ export function Sidebar({
         })}
       </nav>
 
-      {!collapsed && (
+      {!folded && (
         <div className="sidebar-search">
           <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
             <Search
@@ -252,7 +257,7 @@ export function Sidebar({
               <AgentItem
                 key={a.name}
                 agent={a}
-                collapsed={collapsed}
+                collapsed={folded}
                 active={activeChannel === a.dm_channel_id}
                 onClick={() => onSelectChannel(a.dm_channel_id)}
               />
@@ -271,7 +276,7 @@ export function Sidebar({
               <ChannelItem
                 key={c.id}
                 channel={c}
-                collapsed={collapsed}
+                collapsed={folded}
                 active={activeChannel === c.id}
                 onClick={() => onSelectChannel(c.id)}
                 onDelete={onDeleteChannel ? () => onDeleteChannel(c.id) : undefined}
@@ -291,7 +296,7 @@ export function Sidebar({
               <ChannelItem
                 key={c.id}
                 channel={c}
-                collapsed={collapsed}
+                collapsed={folded}
                 active={activeChannel === c.id}
                 onClick={() => onSelectChannel(c.id)}
                 onDelete={onDeleteChannel ? () => onDeleteChannel(c.id) : undefined}
@@ -311,7 +316,7 @@ export function Sidebar({
               <ChannelItem
                 key={c.id}
                 channel={c}
-                collapsed={collapsed}
+                collapsed={folded}
                 dm
                 active={activeChannel === c.id}
                 onClick={() => onSelectChannel(c.id)}
@@ -331,7 +336,7 @@ export function Sidebar({
               <ChannelItem
                 key={t.id}
                 channel={{ id: t.id, name: t.name, kind: "team" }}
-                collapsed={collapsed}
+                collapsed={folded}
                 active={activeChannel === t.id}
                 onClick={() => onSelectChannel(t.id)}
               />

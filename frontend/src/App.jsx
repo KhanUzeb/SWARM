@@ -64,6 +64,9 @@ export default function App() {
   const [showContext, setShowContext] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [rosterFolded, setRosterFolded] = useState(
+    () => localStorage.getItem("swarm_roster_folded") === "1",
+  );
   const [streamingAgents, setStreamingAgents] = useState({});
   const [streamText, setStreamText] = useState({});
   const [outbox, setOutbox] = useState(() => {
@@ -686,7 +689,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app workspace ${threadId ? "thread-open" : ""} ${computerOpen ? "computer-open" : ""} ${workRailOpen ? "work-rail-open" : ""}`}>
+    <div className={`app workspace ${threadId ? "thread-open" : ""} ${computerOpen ? "computer-open" : ""} ${workRailOpen ? "work-rail-open" : ""} ${rosterFolded ? "roster-folded" : ""}`}>
       <Sidebar
         user={user}
         channels={channels}
@@ -702,7 +705,7 @@ export default function App() {
         onNewTeam={() => setQuickAction("team")}
         onNewAgent={() => setQuickAction("agent")}
         onLogout={handleLogout}
-        onOpenSettings={() => setMainView("dashboard")}
+        onOpenSettings={() => { setSidebarOpen(false); setMainView("dashboard"); }}
         onDeleteChannel={onDeleteChannel}
         currentView={mainView}
         onViewChange={(v) => { setSidebarOpen(false); setMainView(
@@ -711,6 +714,11 @@ export default function App() {
         workAttentionCount={workAttention.length}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        collapsed={rosterFolded}
+        onToggleCollapsed={() => setRosterFolded((folded) => {
+          localStorage.setItem("swarm_roster_folded", folded ? "0" : "1");
+          return !folded;
+        })}
       />
       {sidebarOpen && (
         <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden />
