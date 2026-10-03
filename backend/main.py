@@ -1704,7 +1704,7 @@ async def api_computer_system(path: str = "", handle: str = Depends(require_auth
 
 @app.post("/api/computer/system/root")
 async def api_computer_system_root(
-    payload: SystemRootSet, handle: str = Depends(require_auth)
+    payload: SystemRootSet, handle: str = Depends(require_admin)
 ):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
