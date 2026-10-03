@@ -31,7 +31,7 @@
   --color-go: #0a5c3c;
   --color-go-lit: #17a86a;
   --color-hold: #9e1f24;
-  --color-hold-lit: #e6393f;
+  --color-hold-lit: var(--hold-lit);
   --color-pencil: #8a8377;
 
   --font-sans: "Archivo", ui-sans-serif, system-ui, sans-serif;
@@ -62,15 +62,25 @@
   --ink-3: #8a8377;
 
   /* ── Signal enamel: the only two hues in the system ────────── */
+  /* Both hues must be legible as *text*, not just as a 6px lamp.
+  --hold-lit was #e6393f, which cleared 4.5:1 on the slot and
+  nowhere else — 3.83 on --housing-raised, 3.70 on its own wash,
+  3.39 on that wash over raised, 4.19 on --housing. Every one of
+  those is a surface it is actually used on (.chip-hold,
+  .btn-danger, .failure-heading, .channel-link.needs-you).
+  --go-lit cleared 5:1 on all four. Same job, so the hold hue is
+  lifted to match rather than a third hue being invented: hue
+  358.2° and saturation 76.8% are the enamel it already was, at
+  the lightness where the red finally reads as text. */
   --go: #0a5c3c;
   --go-lit: #17a86a;
   --go-wash: rgba(23, 168, 106, 0.13);
   --hold: #9e1f24;
-    --hold-lit: #e6393f;
-    --hold-wash: rgba(230, 57, 63, 0.14);
-    /* Edge tint for a surface that needs your attention. A border, not a fill:
-       a wash behind text is what turns state into a tint. */
-    --hold-edge: rgba(230, 57, 63, 0.4);
+  --hold-lit: #ec6e72;
+  --hold-wash: rgba(236, 110, 114, 0.14);
+  /* Edge tint for a surface that needs your attention. A border, not a fill:
+  a wash behind text is what turns state into a tint. */
+  --hold-edge: rgba(236, 110, 114, 0.4);
   --lamp-hold: #f0b429;
   --lamp-hold-wash: rgba(240, 180, 41, 0.14);
 
@@ -358,8 +368,8 @@ body {
 .btn-ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
 .btn-ghost:hover:not(:disabled) { background: var(--housing-raised); color: var(--ink-on-housing); border-color: transparent; }
 
-.btn-danger { color: var(--hold-lit); border-color: rgba(230, 57, 63, 0.45); background: var(--hold-wash); }
-.btn-danger:hover:not(:disabled) { background: rgba(230, 57, 63, 0.22); border-color: var(--hold-lit); }
+.btn-danger { color: var(--hold-lit); border-color: rgba(236, 110, 114, 0.45); background: var(--hold-wash); }
+.btn-danger:hover:not(:disabled) { background: rgba(236, 110, 114, 0.22); border-color: var(--hold-lit); }
 
 .btn-sm { height: 24px; padding: 0 8px; font-size: var(--t-xs); }
 .btn-icon { width: 30px; padding: 0; }
@@ -384,7 +394,7 @@ body {
   white-space: nowrap;
 }
 .chip-go { color: var(--go-lit); border-color: rgba(23, 168, 106, 0.4); background: var(--go-wash); }
-.chip-hold { color: var(--hold-lit); border-color: rgba(230, 57, 63, 0.4); background: var(--hold-wash); }
+.chip-hold { color: var(--hold-lit); border-color: rgba(236, 110, 114, 0.4); background: var(--hold-wash); }
 .chip-amber { color: var(--lamp-hold); border-color: rgba(240, 180, 41, 0.4); background: var(--lamp-hold-wash); }
 .chip:disabled, .chip[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
 
@@ -883,6 +893,84 @@ select.input { cursor: pointer; }
 .trace-toggle:hover { color: var(--ink-2); }
 .trace-body { margin-top: var(--s2); padding-left: var(--s3); border-left: 1px solid var(--rule-2); }
 
+/* ── A code listing on the roll ─────────────────────────────────
+   Machine output, so it is set in the machine register on a slot
+   background with a machined edge. This is the one surface in a
+   transcript that boxes anything, and it boxes it because a listing
+   is a physical object with an edge. It reads the same in an agent
+   reply and in the Paper view, because it is one rule.             */
+.code-block {
+  margin: 0 0 var(--s3);
+  background: var(--slot);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-key);
+  box-shadow: var(--slot-shadow);
+  overflow: hidden;
+}
+.code-block:last-child { margin-bottom: 0; }
+.code-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: 3px 6px 3px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.code-block-lang {
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.code-block-copy {
+  flex-shrink: 0;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-slot);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.code-block-copy:hover { color: var(--ink-on-housing); border-color: var(--rule-2); }
+.code-block pre {
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow-x: auto;
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  line-height: 1.6;
+  color: var(--ink-on-housing);
+  white-space: pre;
+}
+
+/* @mention: handing the room to a teammate is the product's core
+   verb, so the mark carries the machine register and the lamp hue —
+   the same treatment `.agent-card-handle` already gives a handle
+   elsewhere in the app. It was previously unstyled: the tokenizer
+   in ui.jsx emitted the span and no rule existed for it, so an
+   @name read as an ordinary word. */
+.entry-body .mention {
+  font-family: var(--f-machine);
+  font-size: 0.92em;
+  letter-spacing: 0.02em;
+  color: var(--go-lit);
+  white-space: nowrap;
+}
+
 /* ── Run inspector ───────────────────────────────────────────────
    A run is continuous execution, so it is printed on the roll, not
    boxed per step. Each step is a line with a lamp: the lamp carries
@@ -1009,7 +1097,7 @@ select.input { cursor: pointer; }
   word-break: break-word;
   min-width: 0;
 }
-.inspector-register.is-hold { border-color: rgba(230, 57, 63, 0.4); }
+.inspector-register.is-hold { border-color: rgba(236, 110, 114, 0.4); }
 .inspector-register.is-hold .inspector-register-label { color: var(--hold-lit); }
 .inspector-register.is-hold .inspector-register-value { color: #f0b8b9; }
 
@@ -1097,7 +1185,9 @@ select.input { cursor: pointer; }
 }
 .talk-quickstart:hover { background: var(--housing-high); }
 .talk-quickstart .qs-label { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); }
-.talk-quickstart .qs-hint { font-size: var(--t-xs); color: var(--ink-3); }
+/* 11px on --housing-raised measured 4.27:1, below AA. --ink-2 measures 5.96
+   on the same surface and is still visibly quieter than a --t-sm label. */
+.talk-quickstart .qs-hint { font-size: var(--t-xs); color: var(--ink-2); }
 
 .skeleton { background: var(--housing-raised); border-radius: var(--r-slot); }
 .skeleton-avatar { width: 28px; height: 28px; }
@@ -1112,10 +1202,23 @@ select.input { cursor: pointer; }
 .spinner-sm { width: 11px; height: 11px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* The key rides at the foot of the roll, not over the composer. Sticky
+   against #log's own scrollport, so it clears the composer by construction
+   rather than by a guessed pixel offset — the offset was 96px against a
+   127px composer, and the key landed on the context readout row (and on
+   the composer row itself under 480px, where buttons grow to 32px).
+   .jump-dock is the last child of .log-inner so there is always roll left
+   below the key to stick against. */
+.jump-dock {
+  position: sticky;
+  bottom: var(--s2);
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+.jump-dock > * { pointer-events: auto; }
 .jump-latest {
-  position: fixed;
-  bottom: 96px; right: var(--s5);
-  z-index: var(--z-sticky);
+  box-shadow: var(--lift);
 }
 
 .empty-state {
@@ -1197,7 +1300,7 @@ select.input { cursor: pointer; }
   margin: 0 auto var(--s2);
   padding: 8px 10px;
   background: var(--hold-wash);
-  border: 1px solid rgba(230, 57, 63, 0.4);
+  border: 1px solid rgba(236, 110, 114, 0.4);
   border-radius: var(--r-key);
   font-size: var(--t-sm);
   color: var(--ink-on-housing);
@@ -1317,7 +1420,7 @@ select.input { cursor: pointer; }
   transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .work-card:hover { background: var(--housing-high); border-color: var(--rule-2); }
-.work-card.work-attention { border-color: rgba(230, 57, 63, 0.5); background: linear-gradient(var(--hold-wash), var(--hold-wash)), var(--housing-raised); }
+.work-card.work-attention { border-color: var(--hold-edge); background: var(--housing-raised); }
 .work-card-top { display: flex; align-items: center; gap: var(--s2); }
 .work-card-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .work-objective { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1395,7 +1498,7 @@ select.input { cursor: pointer; }
 .approval-card {
   padding: var(--s3);
   background: var(--hold-wash);
-  border: 1px solid rgba(230, 57, 63, 0.4);
+  border: 1px solid rgba(236, 110, 114, 0.4);
   border-radius: var(--r-panel);
   margin-bottom: var(--s3);
 }
@@ -1501,7 +1604,7 @@ select.input { cursor: pointer; }
 .work-approve { color: var(--flap); background: var(--go); border-color: var(--go-lit); }
 .work-deny, .work-cancel { color: var(--ink-2); }
 
-.failure-card { padding: var(--s3); background: var(--hold-wash); border: 1px solid rgba(230, 57, 63, 0.35); border-radius: var(--r-panel); }
+.failure-card { padding: var(--s3); background: var(--hold-wash); border: 1px solid rgba(236, 110, 114, 0.35); border-radius: var(--r-panel); }
 .failure-heading { font-size: var(--t-sm); font-weight: 600; color: var(--hold-lit); margin-bottom: 4px; }
 .failure-section { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-2); }
 .failure-actions { display: flex; gap: var(--s2); margin-top: var(--s3); }
@@ -1904,7 +2007,7 @@ select.input { cursor: pointer; }
 .toast-content { flex: 1; min-width: 0; }
 .toast-title { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); }
 .toast-message { font-size: var(--t-sm); color: var(--ink-2); margin-top: 1px; }
-.toast.error { border-color: rgba(230, 57, 63, 0.5); }
+.toast.error { border-color: rgba(236, 110, 114, 0.5); }
 .toast.success { border-color: rgba(23, 168, 106, 0.5); }
 .toast-close { width: 22px; height: 22px; display: grid; place-items: center; color: var(--ink-3); background: transparent; border: 0; border-radius: var(--r-slot); cursor: pointer; flex-shrink: 0; }
 .toast-close:hover { color: var(--ink-on-housing); }
@@ -2082,7 +2185,7 @@ select.input { cursor: pointer; }
   color: var(--ink-2);
 }
 .badge-go { color: var(--go-lit); border-color: rgba(23, 168, 106, 0.45); }
-.badge-hold { color: var(--hold-lit); border-color: rgba(230, 57, 63, 0.45); }
+.badge-hold { color: var(--hold-lit); border-color: rgba(236, 110, 114, 0.45); }
 .badge-amber { color: var(--lamp-hold); border-color: rgba(240, 180, 41, 0.45); }
 
 /* ═══ Login ══════════════════════════════════════════════════════ */
@@ -2114,7 +2217,7 @@ select.input { cursor: pointer; }
 .login-head p { font-size: var(--t-sm); color: var(--ink-2); margin: 0; }
 .login-form { display: flex; flex-direction: column; gap: var(--s3); }
 .login-row { display: flex; flex-direction: column; gap: var(--s2); }
-.login-error { padding: 8px 10px; background: var(--hold-wash); border: 1px solid rgba(230, 57, 63, 0.4); border-radius: var(--r-key); font-size: var(--t-sm); color: var(--ink-on-housing); }
+.login-error { padding: 8px 10px; background: var(--hold-wash); border: 1px solid rgba(236, 110, 114, 0.4); border-radius: var(--r-key); font-size: var(--t-sm); color: var(--ink-on-housing); }
 .login-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.08em; color: var(--ink-3); }
 
 /* ═══ Responsive ═════════════════════════════════════════════════ */
