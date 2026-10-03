@@ -1976,9 +1976,13 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
         mentioned = mentioned + [a for a in team_bots if a["name"] not in {x["name"] for x in mentioned}]
         if not mentioned:
             return
-        _track_task(_run_agents_in_order(channel_id, mentioned, depth=depth + 1,
-                                           model_override=model_override),
-                      "agent handoff", channel_id=channel_id)
+        # depth is already the handoff depth: _run_agent incremented it when
+        # it handed off to us (see _run_agent's tail). Incrementing again here
+        # made every hop cost 2, so HANDOFF_DEPTH=3 allowed only 2 hops
+        # (3 bots) instead of the documented 3 hops (4 bots).
+        _track_task(_run_agents_in_order(channel_id, mentioned, depth=depth,
+                                          model_override=model_override),
+                    "agent handoff", channel_id=channel_id)
         return
 
     if kind in ("human", "system") and ch_kind == "group" and not mentioned and not mentioned_teams:
