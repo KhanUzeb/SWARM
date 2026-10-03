@@ -74,6 +74,30 @@ Human posts in #general, a bot 1:1, or a group chat
 Requires [uv](https://docs.astral.sh/uv/) and [bun](https://bun.sh/).
 No API key needed for the demo path.
 
+> **Windows note:** the two shells disagree about the virtualenv layout. In
+> **PowerShell** and **cmd** the interpreter is `.venv\Scripts\python.exe`; in
+> **git-bash / WSL / macOS / Linux** it is `.venv/bin/python`. A `bin/`
+> directory never exists on native Windows, even from git-bash.
+
+### macOS / Linux (bash)
+
+```bash
+git clone https://github.com/KhanUzeb/SWARM.git
+cd SWARM
+uv venv .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+
+cd frontend && bun install && bun run build && cd ..
+
+cp .env.example .env
+# Set GROQ_API_KEY (console.groq.com), or use SWARM_DEMO=1 for mock replies.
+
+python -m uvicorn backend.main:app --reload
+```
+
+### Windows (PowerShell)
+
 ```powershell
 git clone https://github.com/KhanUzeb/SWARM.git
 cd SWARM
@@ -81,12 +105,38 @@ uv venv .venv
 .\.venv\Scripts\Activate.ps1
 uv pip install -r requirements.txt
 
-cd frontend && bun install && bun run build && cd ..
+cd frontend; bun install; bun run build; cd ..
 
 Copy-Item .env.example .env
 # Set GROQ_API_KEY (console.groq.com), or use SWARM_DEMO=1 for mock replies.
 
 python -m uvicorn backend.main:app --reload
+```
+
+### Windows (git-bash)
+
+Use the same steps as PowerShell but keep the Windows paths — `uv venv` on
+native Windows still creates `Scripts/`:
+
+```bash
+git clone https://github.com/KhanUzeb/SWARM.git
+cd SWARM
+uv venv .venv
+source .venv/Scripts/activate   # note: Scripts, not bin
+uv pip install -r requirements.txt
+
+cd frontend && bun install && bun run build && cd ..
+
+cp .env.example .env
+SWARM_DEMO=1 python -m uvicorn backend.main:app --reload
+```
+
+Prefer not to activate at all? Every command works without it — just call
+the interpreter directly:
+
+```bash
+uv pip install --python .venv/bin/python -r requirements.txt   # .venv\Scripts\python.exe on Windows
+.venv/bin/python -m uvicorn backend.main:app --reload
 ```
 
 Open `http://localhost:8000`. Register a handle (first user is admin;
@@ -97,8 +147,12 @@ first bot, and open its 1:1.
 **Docker:**
 
 ```bash
-docker compose up --build -d
+docker compose up -d
 ```
+
+`docker compose up -d` pulls the prebuilt image from
+`ghcr.io/khanuzeb/swarm:latest`. To build locally instead, uncomment the
+`build:` block in `docker-compose.yml`, then `docker compose up --build -d`.
 
 Health: `GET http://localhost:8000/health` → `{"status":"ok",…}`.
 Full guide: [docs/DEPLOY.md](docs/DEPLOY.md).

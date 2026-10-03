@@ -1,6 +1,13 @@
 services:
   swarm:
-    build: .
+    # Default: the prebuilt multi-arch image from GHCR. `docker compose pull`
+    # then `up -d`. CI (.github/workflows/docker.yml) publishes this tag on
+    # every `v*` tag and on `latest`.
+    image: ghcr.io/khanuzeb/swarm:latest
+    # To build the image locally instead (e.g. testing an unpushed change),
+    # comment out the `image:` line above and uncomment the `build:` stanza:
+    #   docker compose build && docker compose up -d
+    # build: .
     ports:
       - "8000:8000"
     env_file:
@@ -9,6 +16,18 @@ services:
     volumes:
       - swarm-data:/app/data
     restart: unless-stopped
+    # The image is python:3.12-slim, so a stdlib one-liner is the probe —
+    # no curl or wget in the image to depend on.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 volumes:
   swarm-data:
