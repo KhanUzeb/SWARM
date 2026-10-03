@@ -66,8 +66,11 @@
   --go-lit: #17a86a;
   --go-wash: rgba(23, 168, 106, 0.13);
   --hold: #9e1f24;
-  --hold-lit: #e6393f;
-  --hold-wash: rgba(230, 57, 63, 0.14);
+    --hold-lit: #e6393f;
+    --hold-wash: rgba(230, 57, 63, 0.14);
+    /* Edge tint for a surface that needs your attention. A border, not a fill:
+       a wash behind text is what turns state into a tint. */
+    --hold-edge: rgba(230, 57, 63, 0.4);
   --lamp-hold: #f0b429;
   --lamp-hold-wash: rgba(240, 180, 41, 0.14);
 
@@ -880,12 +883,138 @@ select.input { cursor: pointer; }
 .trace-toggle:hover { color: var(--ink-2); }
 .trace-body { margin-top: var(--s2); padding-left: var(--s3); border-left: 1px solid var(--rule-2); }
 
-.thinking-step { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: var(--s2); padding: 3px 0; }
-.thinking-step-label { font-size: var(--t-sm); color: var(--ink-2); }
-.thinking-step-detail { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); }
-.thinking-step-status { color: var(--ink-3); }
-.thinking-step-status.done { color: var(--go-lit); }
-.thinking-step-status.failed { color: var(--hold-lit); }
+/* ── Run inspector ───────────────────────────────────────────────
+   A run is continuous execution, so it is printed on the roll, not
+   boxed per step. Each step is a line with a lamp: the lamp carries
+   "running" vs "finished" vs "halted", so no row is ever tinted to
+   signal state. The roll hangs off a single full-measure rule.      */
+
+.inspector { margin-top: var(--s3); }
+
+.inspector-model {
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  color: var(--go-lit);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.inspector-elapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--f-machine);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.inspector-count { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+
+.inspector-body { margin-top: var(--s2); }
+
+.inspector-steps { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+
+.inspector-step { padding: 5px 0; border-bottom: 1px solid var(--rule); }
+.inspector-step:last-child { border-bottom: 0; }
+
+/* Fixed register columns: the detail text starts at the same x on every
+   row, so the roll scans down a straight edge instead of a ragged one. */
+.inspector-step-head {
+  display: grid;
+  grid-template-columns: 26px 8px 116px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--s1) var(--s3);
+  min-width: 0;
+}
+.inspector-seq { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); align-self: center; }
+.inspector-lamp { display: inline-flex; align-self: center; }
+.inspector-step-label {
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-on-housing);
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The label is a fixed register column; the detail reads beside it as
+   ordinary sentence case, so a label and its text never run together. */
+.inspector-step-detail {
+  min-width: 0;
+  font-family: var(--f-ui);
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector-step-ms { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); }
+.inspector-step.is-failure .inspector-step-label { color: var(--hold-lit); }
+
+/* A disclosed call: a machine register line, indented under its step. */
+.inspector-step-more { grid-column: 1 / -1; margin-top: 2px; }
+.inspector-step-more > summary,
+.approval-args > summary,
+.approval-diff > summary,
+.approvals-decided > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  cursor: pointer;
+  list-style: none;
+  padding: 1px 0;
+}
+.inspector-step-more > summary::-webkit-details-marker,
+.approval-args > summary::-webkit-details-marker,
+.approval-diff > summary::-webkit-details-marker,
+.approvals-decided > summary::-webkit-details-marker { display: none; }
+.inspector-step-more > summary:hover,
+.approval-args > summary:hover,
+.approval-diff > summary:hover,
+.approvals-decided > summary:hover { color: var(--ink-2); }
+.inspector-step-more[open] > summary svg,
+.approval-args[open] > summary svg,
+.approval-diff[open] > summary svg,
+.approvals-decided[open] > summary svg { transform: rotate(180deg); }
+.inspector-step-more > summary svg,
+.approval-args > summary svg,
+.approval-diff > summary svg,
+.approvals-decided > summary svg { transition: transform var(--dur-fast) var(--ease-out); }
+
+/* What the machine actually said: register face, slot background. */
+.inspector-register {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: var(--s2);
+  margin-top: 3px;
+  padding: 4px 6px;
+  background: var(--slot);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-slot);
+  box-shadow: var(--slot-shadow);
+}
+.inspector-register-label { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-3); }
+.inspector-register-value {
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  line-height: 1.55;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+.inspector-register.is-hold { border-color: rgba(230, 57, 63, 0.4); }
+.inspector-register.is-hold .inspector-register-label { color: var(--hold-lit); }
+.inspector-register.is-hold .inspector-register-value { color: #f0b8b9; }
+
+.inspector-foot { display: flex; gap: var(--s3); flex-wrap: wrap; margin: var(--s2) 0 0; }
+.inspector-foot-reg { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 
 .streaming-cursor {
   display: inline-block;
@@ -1274,6 +1403,101 @@ select.input { cursor: pointer; }
 .approval-agent { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); }
 .approval-detail { font-size: var(--t-sm); color: var(--ink-2); }
 .approval-actions { display: flex; gap: var(--s2); margin-top: var(--s3); }
+
+/* ── Approvals inbox ─────────────────────────────────────────────
+   A pending approval is a discrete stateful thing, so it is a flap
+   module with a lamp: the face reads HOLD and inverts nothing else.
+   A decided one is no longer stateful — it is a printed record, so
+   it drops to plain register and carries no lamp.                    */
+
+.approvals-view { flex: 1; min-height: 0; overflow-y: auto; }
+
+.approvals-inbox {
+  max-width: var(--measure-app);
+  margin: 0 auto;
+  width: 100%;
+  padding: 0 var(--s5) var(--s8);
+}
+
+.approvals-inbox-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: var(--s4);
+}
+.approvals-inbox-count { font-size: var(--t-sm); color: var(--ink-2); }
+.approvals-inbox-settled {
+  margin-left: auto;
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.approvals-list { display: flex; flex-direction: column; gap: var(--s3); }
+.approvals-empty { font-size: var(--t-sm); color: var(--ink-3); max-width: 52ch; }
+.approvals-error { font-size: var(--t-sm); color: var(--hold-lit); display: flex; align-items: center; gap: var(--s2); }
+
+.approval-card { border: 1px solid var(--rule); border-radius: var(--r-panel); background: var(--housing-raised); box-shadow: inset 0 1px 0 rgba(233, 227, 213, 0.05); padding: var(--s3); }
+.approval-card.is-pending { border-color: var(--hold-edge); background: var(--hold-wash), var(--housing-raised); }
+.approval-card.is-denied { border-color: var(--rule); opacity: 0.72; }
+
+.approval-flap { margin-left: auto; }
+.approval-shape { display: inline-flex; align-items: center; gap: 5px; font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+
+.approval-action { font-size: var(--t-md); font-weight: 600; letter-spacing: -0.015em; color: var(--ink-on-housing); margin: var(--s2) 0 0; }
+.approval-detail { font-size: var(--t-sm); color: var(--ink-2); margin: var(--s1) 0 0; max-width: 62ch; }
+.approval-detail-none { color: var(--hold-lit); }
+
+.approval-diff { margin-top: var(--s3); }
+.approval-diff-body {
+  margin: var(--s2) 0 0;
+  padding: var(--s2) var(--s3);
+  background: var(--slot);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-slot);
+  box-shadow: var(--slot-shadow);
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  line-height: 1.6;
+  color: var(--ink-2);
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.approval-diff-body .is-add { color: var(--go-lit); }
+.approval-diff-body .is-del { color: var(--hold-lit); }
+.approval-diff-body .is-ctx { color: var(--ink-3); }
+
+.approval-args { margin-top: var(--s2); }
+.approval-args-list { margin: var(--s2) 0 0; display: flex; flex-direction: column; gap: 1px; background: var(--slot); border: 1px solid var(--rule); border-radius: var(--r-slot); overflow: hidden; }
+.approval-arg { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: var(--s2); padding: 5px var(--s2); background: var(--housing-raised); }
+.approval-arg dt { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.approval-arg dd { margin: 0; font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-2); white-space: pre-wrap; word-break: break-word; min-width: 0; }
+
+/* Where it came from, grouped by indentation and a rule, never a box. */
+.approval-origin { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); margin-top: var(--s3); padding-top: var(--s2); border-top: 1px solid var(--rule); }
+.approval-origin-item { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
+.approval-origin-item .reg { flex-shrink: 0; }
+.approval-agent, .approval-raised { font-size: var(--t-sm); color: var(--ink-2); }
+.approval-run { font-size: var(--t-sm); color: var(--ink-2); max-width: 320px; }
+/* An unrecorded run is a gap in the record, not a hazard: it reads as
+   absence in the machine register and keeps the hold hue for real holds. */
+.approval-run-none { color: var(--ink-3); }
+
+.approvals-decided { margin-top: var(--s2); }
+.approvals-decided > .approvals-list { margin-top: var(--s3); }
+.sidebar-nav-count {
+  margin-left: auto;
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  letter-spacing: 0.08em;
+  color: var(--hold-lit);
+}
 .work-approve { color: var(--flap); background: var(--go); border-color: var(--go-lit); }
 .work-deny, .work-cancel { color: var(--ink-2); }
 

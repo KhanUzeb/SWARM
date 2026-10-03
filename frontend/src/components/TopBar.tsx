@@ -1,6 +1,5 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
-import { Dropdown } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Flap, Lamp } from "@/components/Flap";
 import {
@@ -29,7 +28,7 @@ interface TopBarProps {
     agent_name?: string;
     action?: string;
   }>;
-  onResolveApproval: (id: string, decision: string) => void;
+
   wsStatus?: string;
   workActive?: unknown[];
   workAttention?: unknown[];
@@ -50,6 +49,7 @@ const VIEW_ALIASES: Record<string, string> = {
   chat: "chat",
   agents: "agents",
   knowledge: "knowledge",
+  approvals: "approvals",
 };
 
 const VIEW_TARGETS: Record<string, string> = {
@@ -58,6 +58,7 @@ const VIEW_TARGETS: Record<string, string> = {
   chat: "talk",
   agents: "agents",
   knowledge: "knowledge",
+  approvals: "approvals",
 };
 
 const VIEWS: Array<[string, string]> = [
@@ -66,6 +67,7 @@ const VIEWS: Array<[string, string]> = [
   ["chat", "Talk"],
   ["agents", "Roster"],
   ["knowledge", "Knowledge"],
+  ["approvals", "Approvals"],
 ];
 
 export function TopBar({
@@ -77,7 +79,6 @@ export function TopBar({
   onViewChange,
   currentView,
   approvals,
-  onResolveApproval,
   wsStatus,
   workActive,
   workAttention,
@@ -89,9 +90,9 @@ export function TopBar({
   const normalizedView = VIEW_ALIASES[currentView] || currentView;
   const go = (v: string) => onViewChange(VIEW_TARGETS[v] || v);
 
-  const pendingApprovals = approvals.filter(
-    (a) => a.status === "pending" && a.channel_id === channel?.id,
-  );
+  // Counted across every channel: an approval raised in another room still
+  // needs a decision, and the inbox is where all of them are reviewed.
+  const pendingApprovals = approvals.filter((a) => a.status === "pending");
   const working = agents.filter((a) => a.status === "working").length;
   const attention = (workAttention || []).length;
   const activeRuns = (workActive || []).length;
@@ -173,21 +174,18 @@ export function TopBar({
           />
         )}
 
+        {/* The counter points at the inbox rather than resolving on click:
+            an approval may only be decided where you can read what it runs. */}
         {pendingApprovals.length > 0 && (
-          <Dropdown
-            label={`${pendingApprovals.length} approvals waiting`}
-            trigger={
-              <button className="chip chip-hold" type="button">
-                <ShieldAlert size={12} />
-                {pendingApprovals.length} to clear
-              </button>
-            }
-            items={pendingApprovals.map((a) => ({
-              id: a.id,
-              label: `${a.agent_name || "Teammate"}: ${a.action || "action"}`,
-              onClick: () => onResolveApproval(a.id, "approved"),
-            }))}
-          />
+          <button
+            type="button"
+            className="chip chip-hold"
+            onClick={() => onViewChange("approvals")}
+            aria-label={`${pendingApprovals.length} approvals waiting — open approvals`}
+          >
+            <ShieldAlert size={12} />
+            {pendingApprovals.length} to clear
+          </button>
         )}
 
         {attention > 0 && (

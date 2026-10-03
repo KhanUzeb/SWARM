@@ -8,6 +8,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from .tools.registry import (
+    RISK_EXEC,
+    RISK_NETWORK,
+    RISK_READ,
+    RISK_WRITE,
+    TOOL_RISK_TIERS,
+    risk_tier,
+)
+
 ALLOW = "allow"
 REVIEW = "review"
 DENY = "deny"
@@ -17,6 +26,17 @@ READ = "read"
 WRITE = "write"
 EXECUTE = "execute"
 EXTERNAL_SIDE_EFFECT = "external_side_effect"
+
+# The registry classifies every known tool explicitly; policy maps those tiers
+# onto its own approval classes. One source of truth for "what can this do",
+# with the prefix heuristic below still covering custom/plugin tool names that
+# the registry has never seen.
+TIER_TO_CLASS: dict[str, str] = {
+    RISK_READ: READ,
+    RISK_WRITE: WRITE,
+    RISK_EXEC: EXECUTE,
+    RISK_NETWORK: EXTERNAL_SIDE_EFFECT,
+}
 
 CLASS_BY_TOOL_PREFIX: dict[str, str] = {
     "search": READ,
@@ -51,7 +71,12 @@ DENY_PATTERNS = ("push_to_main", "deploy_production", "delete_production", "exfi
 
 
 def tool_class(tool_name: str) -> str:
+    """Side-effect class for a tool. Registry tiers win when the tool is
+    known; the prefix heuristic is the fallback for anything else, so an
+    unrecognised name is still classified rather than trusted."""
     name = (tool_name or "").lower()
+    if name in TOOL_RISK_TIERS:
+        return TIER_TO_CLASS.get(risk_tier(name), EXECUTE)
     for prefix, cls in CLASS_BY_TOOL_PREFIX.items():
         if name.startswith(prefix):
             return cls

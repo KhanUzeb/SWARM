@@ -16,6 +16,8 @@ import { WorkHome, WorkDetail as WorkRunDetail } from "./components/WorkHome.jsx
 import { ContextDrawer } from "./components/ContextDrawer.jsx";
 import { KnowledgeView } from "./components/KnowledgeView.jsx";
 import { WorkRail, WorkRailSheet, WorkDetail } from "./components/WorkRail.jsx";
+import { ApprovalsInbox } from "./components/ApprovalsInbox";
+import { pairAuditLines } from "./work/inspectorModel";
 import { Flap, Lamp } from "./components/Flap";
 import { X, MessageSquare } from "lucide-react";
 import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js";
@@ -32,6 +34,8 @@ export default function App() {
   const [allAgents, setAllAgents] = useState([]);
   const [teams, setTeams] = useState([]);
   const [approvals, setApprovals] = useState([]);
+  const [approvalBusyId, setApprovalBusyId] = useState(null);
+  const [approvalError, setApprovalError] = useState(null);
   const [computer, setComputer] = useState(null);
   const [messages, setMessages] = useState({});
   const [order, setOrder] = useState([]);
@@ -102,7 +106,9 @@ export default function App() {
   const groups = channels.filter(c => c.kind === "group");
   const peopleDms = channels.filter(c => c.kind === "people");
   const roots = order.map(id => messages[id]).filter(Boolean);
-  const pendingHere = approvals.filter(a => a.status === "pending" && a.channel_id === channel);
+  // Only pending rows gate anything; resolved rows exist for the inbox.
+  const pendingApprovals = approvals.filter(a => a.status === "pending");
+  const pendingHere = pendingApprovals.filter(a => a.channel_id === channel);
 
   const { sessions: workSessions, eventsByWork, connected: workConnected, error: workError, refresh: refreshWork, ingestWorkEvent } = useWorkSessions(token);
   const activeWork = workSessions.filter(s => WORK_ACTIVE.has(s.status));
@@ -118,6 +124,20 @@ export default function App() {
       if (e.type === "message_linked" && e.payload?.message_id) workByMessage[e.payload.message_id] = s;
     }
   }
+  // Tool arguments are not in work_events; the backend records them once as
+  // an in-channel `system` line ("bot ran: tool(args) -> result"). Parse
+  // those and hand them to the inspector, keyed by the run they belong to.
+  const auditByWork = useMemo(
+    () => pairAuditLines(workSessions, eventsByWork, messages, order, channel),
+    [workSessions, eventsByWork, messages, order, channel],
+  );
+  const approvalRuns = useMemo(
+    () => workSessions.map(s => ({
+      workId: s.id, objective: s.objective, status: s.status,
+      channel_id: s.channel_id, created_at: s.created_at,
+    })),
+    [workSessions],
+  );
   ingestWorkEventRef.current = ingestWorkEvent;
   handleChannelDeletedRef.current = handleChannelDeleted;
 
@@ -242,8 +262,18 @@ export default function App() {
   async function loadApprovals() {
     if (!tokenRef.current) return;
     try {
+      // Pending drives the "N to clear" affordance and the bot status gates;
+      // resolved rows back the approvals inbox so a decision stays readable
+      // after it is made. Both come from the same endpoint, status-filtered.
       const res = await apiJson("/api/approvals?status=pending", { token: tokenRef.current, cacheTtl: 10_000 });
-      setApprovals(res.ok ? res.data : []);
+      const pending = res.ok ? res.data : [];
+      const history = await apiJson("/api/approvals?status=approved", { token: tokenRef.current, cacheTtl: 10_000 });
+      const denied = await apiJson("/api/approvals?status=denied", { token: tokenRef.current, cacheTtl: 10_000 });
+      const byId = new Map();
+      for (const row of [...pending, ...(history.ok ? history.data : []), ...(denied.ok ? denied.data : [])]) {
+        byId.set(row.id, row);
+      }
+      setApprovals([...byId.values()]);
     } catch { setApprovals([]); }
   }
 
@@ -667,9 +697,12 @@ export default function App() {
   }
 
   async function onResolveApproval(id, decision) {
+    setApprovalBusyId(id);
+    setApprovalError(null);
     const res = await apiJson(`/api/approvals/${id}/resolve`, { token: tokenRef.current, method: "POST", body: { status: decision } });
-    if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); }
-    else flash(res.data?.detail || "Approval failed", "error");
+    setApprovalBusyId(null);
+    if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); refreshWork(); }
+    else { setApprovalError(res.data?.detail || "Approval failed"); flash(res.data?.detail || "Approval failed", "error"); }
   }
 
   // ── Command palette commands ──
@@ -715,6 +748,7 @@ export default function App() {
           v === "home" ? "dashboard" : v === "work" ? "work" : v === "chat" ? "talk" : v
         ); }}
         workAttentionCount={workAttention.length}
+        approvalCount={pendingApprovals.length}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         collapsed={rosterFolded}
@@ -738,7 +772,6 @@ export default function App() {
           onViewChange={setMainView}
           currentView={mainView}
           approvals={approvals}
-          onResolveApproval={onResolveApproval}
           wsStatus={wsStatus}
           workActive={activeWorkHere}
           workAttention={workAttention}
@@ -777,6 +810,7 @@ export default function App() {
               streamText={streamText}
               workByMessage={workByMessage}
               eventsByWork={eventsByWork}
+              auditByWork={auditByWork}
               canModerate={meRole === "admin"}
               onLoadMore={async () => {
                 if (loadingLog || order.length === 0) return;
@@ -806,6 +840,31 @@ export default function App() {
           {mainView === "files" && <FilesView computer={computer} />}
           {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => { setChannel(id); setMainView("talk"); }} />}
           {mainView === "knowledge" && <KnowledgeView token={token} flash={flash} />}
+          {mainView === "approvals" && (
+            <div id="log" className="approvals-view">
+              <header className="page-header">
+                <div>
+                  <h1>Approvals</h1>
+                  <p>
+                    Every pause a bot raised for you, and what you decided. Each one
+                    shows the action as it was recorded, the bot that asked, and the run
+                    it belongs to.
+                  </p>
+                </div>
+              </header>
+              <ApprovalsInbox
+                approvals={approvals}
+                eventsByWork={eventsByWork}
+                auditByWork={auditByWork}
+                runs={approvalRuns}
+                agents={allAgents}
+                onResolve={onResolveApproval}
+                busyId={approvalBusyId}
+                error={approvalError}
+                onRetry={() => { setApprovalError(null); loadApprovals(); }}
+              />
+            </div>
+          )}
         </main>
 
         {mainView === "talk" && (

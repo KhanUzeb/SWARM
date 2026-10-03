@@ -1,17 +1,16 @@
 import * as React from "react";
 import { Avatar } from "@/components/ui/avatar";
-import { Flap, Lamp } from "@/components/Flap";
+import { Flap } from "@/components/Flap";
+import { RunInspector } from "@/components/RunInspector";
 import { RichBody } from "../ui.jsx";
 import { fmtTime, isAgentError, isResumable, shortModel, EMOJI } from "@/lib";
 import {
   Activity,
   ArrowDown,
-  ChevronDown,
   CornerDownRight,
   MessageSquare,
   RotateCcw,
   Smile,
-  Terminal,
   Trash2,
 } from "lucide-react";
 
@@ -42,6 +41,8 @@ interface WorkEvent {
     error?: string;
   };
 }
+
+type AuditLine = { tool: string; args: string; result: string };
 
 interface WorkSession {
   id: string;
@@ -82,6 +83,8 @@ interface MessageListProps {
   streamText?: Record<string, string>;
   workByMessage?: Record<string | number, WorkSession>;
   eventsByWork?: Record<string, WorkEvent[]>;
+  /** Tool arguments per work session, parsed from the backend's audit lines. */
+  auditByWork?: Record<string, AuditLine[]>;
   canModerate?: boolean;
   onQuickStart?: (text: string) => void;
   channelName?: string;
@@ -91,6 +94,7 @@ interface MessageListProps {
 // render and defeat MessageRow memoization for every row.
 const EMPTY_REACTIONS: Reaction[] = [];
 const EMPTY_WORK_EVENTS: WorkEvent[] = [];
+const EMPTY_WORK_AUDIT: AuditLine[] = [];
 
 // Latest-ref wrapper: parents (App) pass fresh closures every render.
 function useLatest<T>(value: T) {
@@ -142,6 +146,7 @@ export function MessageList({
   streamText = {},
   workByMessage = {},
   eventsByWork = {},
+  auditByWork = {},
   canModerate,
   onQuickStart,
   channelName,
@@ -328,6 +333,7 @@ export function MessageList({
                   (workByMessage?.[m.id] && eventsByWork?.[workByMessage[m.id].id]) ||
                   EMPTY_WORK_EVENTS
                 }
+                workAudit={auditByWork?.[workByMessage?.[m.id]?.id] || EMPTY_WORK_AUDIT}
                 canDelete={m.author === user?.handle || !!canModerate}
               />
             </React.Fragment>
@@ -390,6 +396,7 @@ const MessageRow = React.memo(function MessageRow({
   streaming,
   work,
   workEvents,
+  workAudit,
   canDelete,
 }: {
   m: Message;
@@ -409,6 +416,7 @@ const MessageRow = React.memo(function MessageRow({
   streaming?: boolean;
   work?: WorkSession;
   workEvents: WorkEvent[];
+  workAudit: AuditLine[];
   canDelete?: boolean;
 }) {
   const [pickOpen, setPickOpen] = React.useState(false);
@@ -504,7 +512,14 @@ const MessageRow = React.memo(function MessageRow({
           <RichBody body={m.body || ""} />
         </div>
 
-        {workEvents.length > 0 && <AgentTrace events={workEvents} />}
+        {workEvents.length > 0 && (
+          <RunInspector
+            session={work}
+            events={workEvents}
+            audit={workAudit}
+            model={m.model}
+          />
+        )}
 
         {resumable && onRetry && (
           <div className="entry-foot">
@@ -568,57 +583,6 @@ const MessageRow = React.memo(function MessageRow({
           )}
         </div>
       </div>
-    </div>
-  );
-});
-
-const AgentTrace = React.memo(function AgentTrace({ events }: { events: WorkEvent[] }) {
-  const [open, setOpen] = React.useState(false);
-  const tools: string[] = [];
-  const seen = new Set<string>();
-
-  for (const e of events) {
-    const t = e.payload?.tool || (e.type.startsWith("tool_") ? e.step_id : null);
-    if (t && !seen.has(t)) {
-      seen.add(t);
-      tools.push(t);
-    }
-  }
-
-  if (tools.length === 0 && events.length === 0) return null;
-
-  return (
-    <div className="trace">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="trace-toggle"
-      >
-        <Terminal size={12} className="shrink-0" />
-        <span>
-          {tools.length > 0 ? tools.slice(0, 3).join(" · ") : "Execution trace"}
-          {tools.length > 3 && ` +${tools.length - 3}`}
-        </span>
-        <span style={{ opacity: 0.6 }}>
-          {events.length} step{events.length === 1 ? "" : "s"}
-        </span>
-        <ChevronDown
-          size={12}
-          style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 110ms" }}
-        />
-      </button>
-
-      {open && (
-        <div className="trace-body">
-          {events.map((e) => (
-            <div className="thinking-step" key={e.seq}>
-              <span className="node-index">{String(e.seq).padStart(3, "0")}</span>
-              <span className="thinking-step-detail">{traceLabel(e)}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 });
@@ -746,22 +710,4 @@ function buildQuickStarts(roomAgents: Agent[], allAgents: Agent[], channelName?:
     });
   }
   return items.slice(0, 4);
-}
-
-function traceLabel(e: WorkEvent): string {
-  const map: Record<string, string> = {
-    work_queued: "Queued",
-    work_started: "Started",
-    agent_started: `${e.payload?.agent || "Teammate"} working`,
-    tool_started: `${e.payload?.tool || e.step_id || "tool"} started`,
-    tool_finished: `${e.payload?.tool || e.step_id || "tool"} finished`,
-    approval_requested: "Approval requested — action needed",
-    approval_resolved: `Approval ${e.payload?.decision || "resolved"}`,
-    message_linked: "Reply posted",
-    artifact_created: "Artifact created",
-    work_completed: "Completed",
-    work_failed: `Failed${e.payload?.error ? `: ${e.payload.error.slice(0, 120)}` : ""}`,
-    work_cancelled: "Cancelled",
-  };
-  return map[e.type] || e.type;
 }

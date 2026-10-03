@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   Settings,
+  ShieldAlert,
   SquarePen,
   Users,
   X,
@@ -60,6 +61,7 @@ interface SidebarProps {
   currentView?: string;
   onViewChange?: (view: string) => void;
   workAttentionCount?: number;
+  approvalCount?: number;
   open?: boolean;
   onClose?: () => void;
   collapsed?: boolean;
@@ -72,6 +74,7 @@ const PRIMARY_NAV = [
   { id: "chat", label: "Talk", icon: MessageSquare },
   { id: "agents", label: "Roster", icon: Bot },
   { id: "knowledge", label: "Knowledge", icon: BookOpen },
+  { id: "approvals", label: "Approvals", icon: ShieldAlert, countKey: true },
 ];
 
 /**
@@ -131,6 +134,7 @@ export function Sidebar({
   currentView,
   onViewChange,
   workAttentionCount,
+  approvalCount,
   open = false,
   collapsed = false,
   onToggleCollapsed,
@@ -218,6 +222,9 @@ export function Sidebar({
                 <span className="flap flap-hold" style={{ marginLeft: "auto" }}>
                   <span>{workAttentionCount}</span>
                 </span>
+              )}
+              {!folded && item.countKey && (approvalCount || 0) > 0 && (
+                <span className="sidebar-nav-count">{approvalCount}</span>
               )}
             </button>
           );
