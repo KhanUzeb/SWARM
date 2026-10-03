@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // The API client lives in lib.js, which is its only owner.
-import { apiJson, CACHE_TTL, fmtBytes } from "./lib.js";
+import { apiJson, CACHE_TTL, HISTORY_LIMIT, fmtBytes } from "./lib.js";
 import {
   Avatar, Button, Input, Textarea, Card, ScrollArea, EmptyState, Divider, CodeBlock,
 } from "./ui.jsx";
@@ -275,7 +275,10 @@ export default function App() {
   }
 
   async function loadHistory(channelId, beforeId) {
-    if (!tokenRef.current) throw new Error("auth");
+    // 401-shaped throw: loadChannelMessages branches on e.status, so a missing
+    // token has to carry one or the user sees "Failed to load messages" for
+    // what is actually an expired session.
+    if (!tokenRef.current) throw authError("history", 401);
     const params = new URLSearchParams({ limit: String(HISTORY_LIMIT) });
     if (beforeId) params.set("before_id", String(beforeId));
     const res = await apiJson(`/api/channels/${channelId}/messages?${params}`, { token: tokenRef.current });
@@ -283,7 +286,7 @@ export default function App() {
     return res.data;
   }
 
-  function applyHistory(history, prepend = false) {
+  function applyHistory(channelId, history, prepend = false) {
     setHasMore(history.length === HISTORY_LIMIT);
     const nextMsgs = {}, nextReact = {}, counts = {};
     for (const m of history) {
@@ -314,7 +317,7 @@ export default function App() {
     try {
       const history = await loadHistory(channelId);
       if (!fresh()) return; // channel switched mid-flight — drop stale data
-      applyHistory(history);
+      applyHistory(channelId, history);
       await Promise.all([loadAgents(channelId), loadComputer(), loadApprovals()]);
       if (!fresh()) return;
       loadContextStats(channelId);
@@ -780,7 +783,7 @@ export default function App() {
                 setLoadingLog(true);
                 try {
                   const history = await loadHistory(channelRef.current, order[0]);
-                  applyHistory(history, true);
+                  applyHistory(channelRef.current, history, true);
                 } catch { flash("Failed to load earlier messages", "error"); }
                 finally { setLoadingLog(false); }
               }}
