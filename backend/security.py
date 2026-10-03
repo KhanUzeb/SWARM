@@ -15,7 +15,12 @@ SWARM_CLIENT_HEADER = "web"
 def allowed_origins() -> set[str]:
     raw = (os.environ.get("SWARM_ALLOWED_ORIGINS") or "").strip()
     if raw:
-        return {o.strip() for o in raw.split(",") if o.strip()}
+        # Never let a bare "*" reach CORSMiddleware: it is paired with
+        # allow_credentials=True, which would reflect any origin onto
+        # credentialed responses. origin_allowed() treats "*" as a literal
+        # string that never matches, so dropping it keeps both layers
+        # consistent instead of silently opening one of them.
+        return {o.strip() for o in raw.split(",") if o.strip() and o.strip() != "*"}
     return {
         "http://localhost:8000",
         "http://127.0.0.1:8000",
