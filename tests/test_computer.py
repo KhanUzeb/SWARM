@@ -174,7 +174,11 @@ def test_system_listing_scopes_and_hides(tmp_path, monkeypatch):
 def test_browser_status_and_disabled(client, auth, monkeypatch):
     flags = client.get("/api/status").json()
     assert flags["browser"] is True
-    assert flags["system"] is True
+    # Host-system tools are opt-in: default off, on only via SWARM_SYSTEM=1.
+    assert flags["system"] is False
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    assert client.get("/api/status").json()["system"] is True
+    monkeypatch.delenv("SWARM_SYSTEM", raising=False)
     monkeypatch.setenv("SWARM_BROWSER", "0")
     res = client.get("/api/browser/status", headers=auth)
     assert res.status_code == 200

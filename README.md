@@ -128,8 +128,8 @@ come from each provider's API with catalog defaults as fallback.
   `private/<agent>` inside the team home. Keep work-in-progress here
   before sharing it.
 - **Host tools** — optional `system_run` / `system_read` / `system_write`
-  on this machine, bound to `SWARM_SYSTEM_ROOT`. Set `SWARM_SYSTEM=0`
-  to disable on untrusted networks.
+  on this machine, bound to `SWARM_SYSTEM_ROOT`. Off by default; set
+  `SWARM_SYSTEM=1` to enable.
 - **Provider select** — `SWARM_COMPUTER_PROVIDER=local` (default),
   `none` (boot without a computer host), or `fake` (tests only).
 

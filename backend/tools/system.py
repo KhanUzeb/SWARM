@@ -2,17 +2,25 @@
 
 Bound to the current system folder (default: the swarm repo). Not a cloud VM.
 The UI can rebind that folder so Bots can work in Home, Desktop, or any other
-directory. Set SWARM_SYSTEM=0 to disable. Destructive commands and path
+directory. Set SWARM_SYSTEM=1 to enable. Destructive commands and path
 escapes are blocked. Filesystem root is refused unless SWARM_SYSTEM_UNRESTRICTED=1.
+
+Default is OFF. Host-system tools run commands on the machine that runs the
+backend, so an opt-in is the only sane default for something self-hosted and
+frequently exposed to a LAN or the internet. Callers that want them set
+SWARM_SYSTEM=1 explicitly.
 """
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from .computer import OUTPUT_CAP, _DANGEROUS
+
+_logger = logging.getLogger("swarm.system")
 
 SHELL_TIMEOUT = 60
 READ_CAP = 200_000
@@ -34,11 +42,41 @@ _FILE_ATTRIBUTE_SYSTEM = 0x4
 _FILE_ATTRIBUTE_REPARSE = 0x400
 
 _active_root: Path | None = None
+_warned = False
 
 
 def enabled() -> bool:
-    raw = (os.environ.get("SWARM_SYSTEM") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+    raw = (os.environ.get("SWARM_SYSTEM") or "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def warn_if_exposed(logger: Any = None) -> str | None:
+    """Loud warning when host tools are on and the server is not loopback-only.
+
+    Host-system tools execute commands on the host. Serving them over anything
+    wider than loopback means anyone who can reach the port can run code on
+    that machine. Returns the warning text (for tests), or None when the
+    combination is safe or host tools are off.
+    """
+    if not enabled():
+        return None
+    host = (os.environ.get("SWARM_HOST") or "").strip().lower()
+    bind = (os.environ.get("SWARM_BIND") or "").strip().lower()
+    # uvicorn's own default is 127.0.0.1, so an unset host is loopback-only.
+    candidates = {c for c in (host, bind) if c}
+    if not candidates or candidates <= {"127.0.0.1", "localhost", "::1"}:
+        return None
+    root = str(system_root())
+    message = (
+        "SWARM SECURITY: host-system tools are ENABLED (SWARM_SYSTEM=1) while the "
+        f"server is bound to a non-loopback address ({', '.join(sorted(candidates))}). "
+        "Anyone who can reach this port can run commands on this machine, bounded "
+        f"only by SWARM_SYSTEM_ROOT={root}. Set SWARM_SYSTEM=0, or bind to "
+        "127.0.0.1 and put authentication plus TLS in front, unless you accept "
+        "that risk."
+    )
+    (logger or _logger).warning(message)
+    return message
 
 
 def unrestricted() -> bool:
@@ -48,8 +86,9 @@ def unrestricted() -> bool:
 
 def reset_runtime() -> None:
     """Clear in-memory root so tests and restarts pick env/meta again."""
-    global _active_root
+    global _active_root, _warned
     _active_root = None
+    _warned = False
 
 
 def _repo_root() -> Path:
@@ -258,6 +297,11 @@ def _dir_entries(listed: Path) -> list[dict[str, Any]]:
 async def hydrate_root() -> Path:
     """Apply a persisted UI root if one is stored; otherwise env/repo."""
     global _active_root
+    global _warned
+    if not _warned:
+        # Startup passes through here; warn once per process, not per call.
+        _warned = True
+        warn_if_exposed()
     if _active_root is not None:
         return _active_root
     from .. import db

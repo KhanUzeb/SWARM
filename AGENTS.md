@@ -120,8 +120,9 @@ Rules (Rakazo-shaped, enforced in review):
   legacy `workspace`/`files` keys (backward compatible — do not remove
   legacy keys without a migration note).
 - The sandbox is cwd + timeout, **not** container or network isolation.
-  Host-system tools are bound to `SWARM_SYSTEM_ROOT`. Never claim
-  otherwise in code, UI copy, or docs.
+  Host-system tools are bound to `SWARM_SYSTEM_ROOT` and are **off by
+  default** — enabling them requires an explicit `SWARM_SYSTEM=1`. Never
+  claim otherwise in code, UI copy, or docs.
 
 ## 6. Agent contract (essentials)
 

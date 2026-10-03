@@ -4,6 +4,7 @@ This file maps the feature layers to the commits that introduced them. Use it wh
 
 | Commit (search log) | Scope | Revert effect |
 |---------------------|-------|---------------|
+| Default host-system tools to off | `backend/tools/system.py` (`enabled()`, `warn_if_exposed()`), `.env.example`, `README.md`, `AGENTS.md` §5 | `SWARM_SYSTEM` reads as unset → enabled again; host commands run on the backend machine on any non-loopback bind with only a log warning |
 | Place every floating surface; fold the roster to a rail | `lib/overlay.ts` (one placement rule), `ui/dropdown-menu`, `ModelPicker` (inline variant loses its own panel), `Sidebar`/`App` fold state + `styles.css` `--roster` track | Reverts to overlays with no coordinates (menus and model panels render off-screen) and to a 56px hole inside a 260px roster column |
 | Station board visual world | `styles.css` (rewritten, `components.css` deleted), `components/Flap.tsx`, roster/transcript/composer/topbar/login/palette, all `components/ui/*`, `AGENTS.md` §8a | Reverts the whole look to the midnight-indigo identity; `components.css` is gone and is not restored by reverting alone |
 | Add central tool registry, plugins, and custom tools | `backend/tools/`, `plugins/`, tool API routes | Removes extensible tools; agents use builtins only |
