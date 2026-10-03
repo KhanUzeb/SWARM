@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import guard
+
 SHELL_TIMEOUT = 30
 OUTPUT_CAP = 8000
 _DANGEROUS = re.compile(
@@ -31,6 +33,9 @@ def computer_run(command: str) -> str:
     cmd = (command or "").strip()
     if not cmd:
         return "(need a command)"
+    match = guard.is_dangerous(cmd)
+    if match:
+        return guard.refusal_reason(cmd, match)
     if _DANGEROUS.search(cmd):
         return "(blocked — that command is too destructive for the shared computer)"
     cwd = sandbox_dir()

@@ -42,7 +42,12 @@ def test_runners_echo_and_block(client, auth, tmp_path, monkeypatch):
     monkeypatch.setattr("backend.agent.SANDBOX_DIR", str(tmp_path))
     out = computer.computer_run("echo swarm-computer")
     assert "swarm-computer" in out
-    assert "blocked" in computer.computer_run("rm -rf /")
+    assert "Blocked" in computer.computer_run("rm -rf /")
+    # The refusal has to say what happened and what to do instead, so it is
+    # readable in-thread later rather than being a silent no-op.
+    refusal = computer.computer_run("rm -rf /")
+    assert "was not executed" in refusal
+    assert "specific path" in refusal
     monkeypatch.setenv("SWARM_BROWSER", "1")
     assert "browser_navigate" in computer.computer_open("https://example.com")
 
