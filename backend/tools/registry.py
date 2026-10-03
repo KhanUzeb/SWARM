@@ -14,6 +14,78 @@ from typing import Any, Awaitable, Callable
 
 ToolHandler = Callable[..., Awaitable[str] | str]
 
+# ---------------------------------------------------------------- risk tiers
+# How much damage a tool can do if it — or something it returned — goes wrong.
+# This is data, not a framework: the catalog surfaces it and the agent loop
+# uses it to decide how carefully to treat the result. Nothing here gates
+# execution; approval for consequential actions stays with request_approval
+# (AGENTS.md §6).
+RISK_READ = "read"
+RISK_WRITE = "write"
+RISK_EXEC = "exec"
+RISK_NETWORK = "network"
+RISK_TIERS = (RISK_READ, RISK_WRITE, RISK_EXEC, RISK_NETWORK)
+
+TOOL_RISK_TIERS: dict[str, str] = {
+    # read: observe, change nothing
+    "search_channel_history": RISK_READ,
+    "recall": RISK_READ,
+    "knowledge_search": RISK_READ,
+    "list_workspace": RISK_READ,
+    "read_workspace": RISK_READ,
+    "channel_digest": RISK_READ,
+    "system_ls": RISK_READ,
+    "system_read": RISK_READ,
+    "computer_open": RISK_READ,
+    "computer_screenshot": RISK_READ,
+    "browser_snapshot": RISK_READ,
+    "browser_wait": RISK_READ,
+    # write: mutate local state, reversible by the human
+    "remember": RISK_WRITE,
+    "forget": RISK_WRITE,
+    "knowledge_save": RISK_WRITE,
+    "save_skill": RISK_WRITE,
+    "write_workspace": RISK_WRITE,
+    "system_write": RISK_WRITE,
+    "browser_screenshot": RISK_WRITE,  # persists a PNG under screenshots/
+    "request_approval": RISK_WRITE,     # creates a pending approval row
+    "create_agent": RISK_WRITE,        # creates a bot + its DM channel
+    # exec: run code or drive a machine
+    "read_only_shell": RISK_EXEC,
+    "computer_run": RISK_EXEC,
+    "system_run": RISK_EXEC,
+    "browser_click": RISK_EXEC,
+    "browser_type": RISK_EXEC,
+    "browser_press": RISK_EXEC,
+    "cua_desktop": RISK_EXEC,
+    "browser_use": RISK_EXEC,
+    "delegate_task": RISK_EXEC,
+    # network: the untrusted-input surface — remote content can carry
+    # prompt-injection payloads, so results are always wrapped as data
+    "fetch_url": RISK_NETWORK,
+    "browser_navigate": RISK_NETWORK,
+    "exa_search": RISK_NETWORK,
+    "tavily_search": RISK_NETWORK,
+    "firecrawl_scrape": RISK_NETWORK,
+}
+# Anything unlisted (custom tools, plugins) is treated as untrusted by default:
+# a plugin tool talks to a third-party service, and an unclassified custom tool
+# could do arbitrary work.
+DEFAULT_TOOL_RISK = RISK_EXEC
+PLUGIN_TOOL_RISK = RISK_NETWORK
+
+
+def risk_tier(name: str) -> str:
+    """Risk tier for one tool name. Unknown names fall back to a safe tier,
+    never to `read` — an unclassified tool is assumed capable."""
+    tier = TOOL_RISK_TIERS.get(name or "")
+    if tier:
+        return tier
+    if (name or "").startswith("plugin:"):
+        return PLUGIN_TOOL_RISK
+    return DEFAULT_TOOL_RISK
+
+
 BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
     "read_only_shell": {
         "type": "function",
@@ -596,13 +668,16 @@ class ToolRegistry:
     def list_catalog(self) -> list[dict[str, Any]]:
         out = []
         for name in BUILTIN_TOOL_NAMES:
-            out.append({"name": name, "kind": "builtin", "description": BUILTIN_SCHEMAS[name]["function"]["description"]})
+            out.append({"name": name, "kind": "builtin", "risk": risk_tier(name),
+                        "description": BUILTIN_SCHEMAS[name]["function"]["description"]})
         for name, row in sorted(self._custom.items()):
-            out.append({"name": name, "kind": "custom", "description": row.get("description", ""), "id": row["id"]})
+            out.append({"name": name, "kind": "custom", "risk": risk_tier(name),
+                        "description": row.get("description", ""), "id": row["id"]})
         for name, row in sorted(self._plugin_tools.items()):
             out.append({
                 "name": name,
                 "kind": "plugin",
+                "risk": risk_tier(name),
                 "plugin_id": row["plugin_id"],
                 "tool_name": row["tool_name"],
                 "description": row.get("description", ""),
@@ -661,6 +736,7 @@ class ToolRegistry:
         shell_runner: Callable[[str], str],
         workspace_helpers: dict[str, Callable[..., Any]],
         delegate_depth: int = 0,
+        delegate_chain: tuple[str, ...] = (),
     ) -> str:
         if name not in allowed:
             return f"(tool {name} is disabled for this agent)"
@@ -670,6 +746,7 @@ class ToolRegistry:
                 sandbox_dir=sandbox_dir, shell_runner=shell_runner,
                 workspace_helpers=workspace_helpers,
                 delegate_depth=delegate_depth,
+                delegate_chain=delegate_chain,
             )
         if name in self._custom:
             return await self._exec_custom(self._custom[name], args)
@@ -693,6 +770,7 @@ class ToolRegistry:
         shell_runner: Callable[[str], str],
         workspace_helpers: dict[str, Callable[..., Any]],
         delegate_depth: int = 0,
+        delegate_chain: tuple[str, ...] = (),
     ) -> str:
         if name == "read_only_shell":
             return shell_runner(args.get("command", ""))
@@ -788,6 +866,7 @@ class ToolRegistry:
             return await agent_mod.generate_delegate_reply(
                 args.get("agent", ""), args.get("task", ""), channel_id,
                 parent_name=agent_name, depth=delegate_depth,
+                chain=delegate_chain,
             )
         if name == "computer_run":
             from . import computer

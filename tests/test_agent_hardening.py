@@ -137,11 +137,14 @@ def test_malformed_tool_arguments_do_not_execute(monkeypatch):
     assert result["reply"] == "done"
     assert len(result["tool_events"]) == 1
     assert "malformed" in result["tool_events"][0]["result"]
-    # The follow-up tool message still carries a valid tool_call_id.
-    assert messages[-1] == {
-        "role": "tool", "tool_call_id": "1",
-        "content": result["tool_events"][0]["result"],
-    }
+    # The follow-up tool message still carries a valid tool_call_id, and its
+    # content is the untrusted-data envelope (never bare tool output).
+    assert messages[-1]["role"] == "tool"
+    assert messages[-1]["tool_call_id"] == "1"
+    assert messages[-1]["content"] == agent.wrap_untrusted(
+        "read", result["tool_events"][0]["result"])
+    assert agent._strip_untrusted(messages[-1]["content"]) == (
+        result["tool_events"][0]["result"])
 
 
 def test_custom_http_get_bad_template_returns_error_not_raise():

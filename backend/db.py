@@ -3,21 +3,33 @@ swarm.db — thin async wrapper over SQLite.
 
 No ORM. If this needs to outgrow SQLite, that's a good problem to have
 and a different file. Schema growth past CREATE TABLE IF NOT EXISTS
-goes through ensure_schema() (PRAGMA + ALTER TABLE).
+goes through ensure_schema() (PRAGMA + ALTER TABLE) plus the versioned
+runner in ``migrations.py``.
+
+Connections are opened through ``open_db()`` rather than
+``aiosqlite.connect`` directly, so every one of them gets the same
+pragmas. WAL in particular is what stops the routine scheduler from
+colliding with a chat write: under the default rollback journal, a
+reader blocks the writer for the length of the read. foreign_keys is
+also per-connection (SQLite defaults it OFF for compatibility), so a
+bare connect would silently drop every REFERENCES clause in SCHEMA.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import aiosqlite
 
+from . import migrations
 from .models import (
     ALLOWED_TOOLS,
     DEFAULT_GROQ_MODEL,
@@ -31,6 +43,210 @@ from .models import (
 )
 
 DB_PATH = Path(os.environ.get("SWARM_DB_PATH", str(Path(__file__).parent / "swarm.db")))
+
+_logger = logging.getLogger("swarm.db")
+
+# How long a blocked writer waits for the lock before SQLite raises
+# "database is locked". The old default was an immediate error, which on
+# a busy local machine meant a 500 from whichever unlucky request lost
+# the race — with WAL the reader/writer collision is mostly gone, so
+# this is just the backstop for the remaining writer-writer case.
+_DEFAULT_BUSY_TIMEOUT_MS = 5000
+
+
+def busy_timeout_ms() -> int:
+    """SWARM_SQLITE_BUSY_TIMEOUT_MS, or 5000. Never negative."""
+    raw = (os.environ.get("SWARM_SQLITE_BUSY_TIMEOUT_MS") or "").strip()
+    try:
+        value = int(raw) if raw else _DEFAULT_BUSY_TIMEOUT_MS
+    except ValueError:
+        return _DEFAULT_BUSY_TIMEOUT_MS
+    return max(0, value)
+
+
+async def apply_pragmas(db: aiosqlite.Connection) -> dict[str, Any]:
+    """Set the connection pragmas and return what SQLite actually reports.
+
+    Returns the observed values rather than the requested ones because
+    the point of the WAL read-back is verification: journal_mode can
+    legitimately fail to change (a network filesystem that cannot do
+    shared memory, an old WAL left behind by a killed process), and a
+    caller that assumed success would be lying.
+    """
+    await db.execute("PRAGMA journal_mode = WAL")
+    cur = await db.execute("PRAGMA journal_mode")
+    journal_mode = (await cur.fetchone())[0]
+    await db.execute("PRAGMA foreign_keys = ON")
+    cur = await db.execute("PRAGMA foreign_keys")
+    foreign_keys = int((await cur.fetchone())[0])
+    timeout = busy_timeout_ms()
+    await db.execute(f"PRAGMA busy_timeout = {int(timeout)}")
+    cur = await db.execute("PRAGMA busy_timeout")
+    observed_timeout = int((await cur.fetchone())[0])
+    return {
+        "journal_mode": journal_mode,
+        "foreign_keys": foreign_keys,
+        "busy_timeout_ms": observed_timeout,
+        "wal": str(journal_mode).lower() == "wal",
+    }
+
+
+@asynccontextmanager
+async def open_db() -> AsyncIterator[aiosqlite.Connection]:
+    """Open a connection to DB_PATH with the pragmas this module relies on.
+
+    Every read and write in db.py goes through here rather than
+    aiosqlite.connect directly, because two of the three pragmas are
+    connection-local and a bare connect would silently drop them:
+    foreign_keys defaults OFF in SQLite for backward compatibility (so
+    every REFERENCES clause in SCHEMA would be inert), and busy_timeout
+    defaults to no waiting at all. journal_mode=WAL is persisted in the
+    database file rather than per connection, but setting it here means a
+    brand-new file gets WAL on first write without waiting for init_db().
+
+    Usage is unchanged from aiosqlite.connect:
+        async with open_db() as db:
+            ...
+    """
+    db = aiosqlite.connect(DB_PATH)
+    try:
+        # aiosqlite only starts its worker thread (and therefore only opens
+        # the file) when the connection is awaited — `async with
+        # aiosqlite.connect(...)` did that via __aenter__. Await it here so
+        # the pragmas below run against a real connection instead of
+        # raising "no active connection".
+        await db
+        await apply_pragmas(db)
+        yield db
+    finally:
+        await db.close()
+
+
+async def pragma_report() -> dict[str, Any]:
+    """Live pragmas for the current database file. Never raises."""
+    try:
+        async with open_db() as db:
+            return await apply_pragmas(db)
+    except Exception as exc:  # noqa: BLE001 — introspection must not 500
+        return {"error": str(exc)}
+
+
+# ------------------------------------------------------------- retention ---
+
+# Retention is OFF by default and stays off until someone sets an env var.
+# Deleting a human's own transcript is not a decision software should make
+# by surprise, and this is a local-first tool: the maintainer keeps the
+# record. The sweep runs at startup only, and only when a day count is
+# explicitly configured.
+#
+# Each entry is (table, timestamp column, whether to clear referencing
+# rows first). The third field matters: foreign_keys is now ON on every
+# connection (see open_db), so deleting a message whose reactions still
+# point at it, or that is itself some reply's parent, raises
+# IntegrityError instead of silently orphaning. Messages are therefore
+# swept oldest-first in batches, with their reactions removed in the same
+# statement, and replies are un-parented rather than left dangling.
+#
+# Approvals are deliberately NOT swept: a denied approval is a decision
+# record, and approvals carry no created_at sweep guarantee.
+_RETENTION_TARGETS: tuple[tuple[str, str], ...] = (
+    ("messages", "created_at"),
+    ("agent_memory", "created_at"),
+    ("routine_runs", "started_at"),
+)
+
+_RETENTION_BATCH = 500
+
+
+def retention_days() -> int | None:
+    """SWARM_RETENTION_DAYS as a positive int, or None when unset/invalid.
+
+    Unset, empty, non-numeric, zero and negative all mean "keep
+    everything" — the same lenient parse gc.py uses for its own limits,
+    because a typo in a retention setting should never mean "delete my
+    transcript".
+    """
+    raw = (os.environ.get("SWARM_RETENTION_DAYS") or "").strip()
+    if not raw:
+        return None
+    try:
+        days = int(float(raw))
+    except ValueError:
+        return None
+    return days if days > 0 else None
+
+
+async def apply_retention(now: float | None = None) -> dict[str, Any]:
+    """Delete rows older than SWARM_RETENTION_DAYS. No-op when unset.
+
+    Returns a stats payload shaped like gc.gc_sweep()'s so a caller logs
+    retention the same way it logs sandbox GC. Batch-delet oldest first,
+    so a dormant database with years of history does not hold one giant
+    write transaction against the WAL.
+    """
+    days = retention_days()
+    if days is None:
+        return {"enabled": False, "deleted": 0, "retention_days": None}
+    cutoff = (now if now is not None else time.time()) - days * 86400
+    deleted = 0
+    per_table: dict[str, int] = {}
+    try:
+        async with open_db() as db:
+            for table, ts_col in _RETENTION_TARGETS:
+                removed = 0
+                while True:
+                    if table == "messages":
+                        batch = await _sweep_messages_batch(db, cutoff)
+                    else:
+                        cur = await db.execute(
+                            f"DELETE FROM {table} WHERE id IN ("
+                            f"SELECT id FROM {table} WHERE {ts_col} < ? "
+                            f"ORDER BY {ts_col} LIMIT ?)",
+                            (cutoff, _RETENTION_BATCH),
+                        )
+                        batch = max(0, cur.rowcount)
+                    removed += batch
+                    await db.commit()
+                    if batch < _RETENTION_BATCH:
+                        break
+                if removed:
+                    per_table[table] = removed
+                deleted += removed
+    except Exception as exc:  # noqa: BLE001 — retention must never block boot
+        _logger.warning("retention sweep failed: %s", exc)
+        return {"enabled": True, "deleted": deleted, "error": str(exc),
+                "retention_days": days}
+    if deleted:
+        _logger.info("retention: deleted %d rows older than %d days (%s)",
+                     deleted, days, per_table)
+    return {"enabled": True, "deleted": deleted, "retention_days": days,
+            "tables": per_table}
+
+
+async def _sweep_messages_batch(db: aiosqlite.Connection, cutoff: float) -> int:
+    """Delete up to _RETENTION_BATCH old messages and their reactions.
+
+    Reactions go first in the same transaction because they carry a
+    REFERENCES to messages and foreign_keys is on. Replies are not
+    cascaded — a reply newer than the cutoff is legitimate history, so
+    its parent_id is nulled instead of the reply being deleted.
+    """
+    cur = await db.execute(
+        "SELECT id FROM messages WHERE created_at < ? "
+        "ORDER BY created_at LIMIT ?",
+        (cutoff, _RETENTION_BATCH),
+    )
+    ids = [int(row[0]) for row in await cur.fetchall()]
+    if not ids:
+        return 0
+    marks = ",".join("?" for _ in ids)
+    await db.execute(f"DELETE FROM reactions WHERE message_id IN ({marks})", ids)
+    await db.execute(
+        f"UPDATE messages SET parent_id = NULL WHERE parent_id IN ({marks})", ids
+    )
+    cur = await db.execute(f"DELETE FROM messages WHERE id IN ({marks})", ids)
+    return max(0, cur.rowcount)
+
 
 _DEFAULT_TOOLS_JSON = json.dumps(DEFAULT_TOOLS)
 _LEDGER_TOOLS_JSON = json.dumps(LEDGER_TOOLS)
@@ -553,8 +769,8 @@ async def _grant_computer_use_tools(db: aiosqlite.Connection) -> None:
 
 
 async def init_db() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("PRAGMA foreign_keys = ON")
+    async with open_db() as db:
+        # open_db() already set journal_mode/foreign_keys/busy_timeout.
         await db.executescript(SCHEMA)
         await _ensure_schema(db)
         await db.commit()
@@ -582,8 +798,23 @@ async def init_db() -> None:
             await _ensure_schema(db)
         await db.commit()
 
+        # Versioned migrations run last, on a clean transaction boundary.
+        # They are additive on top of the hand-written path above, not a
+        # replacement for it: a database that predates this runner has no
+        # schema_migrations table, gets one created here, and every
+        # migration applies in order on its first boot.
+        applied = await migrations.apply_migrations(db)
+        if applied:
+            _logger.info(
+                "applied schema migrations %s (now at v%s)",
+                applied, migrations.LATEST_VERSION,
+            )
+        await db.commit()
+
     if _demo_mode():
         await seed_demo_thread()
+
+    await apply_retention()
 
 
 _DEMO_SEED = [
@@ -661,7 +892,7 @@ async def seed_demo_thread() -> None:
         await _seed_demo_approval()
         return
     now = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         for i, (author, kind, body) in enumerate(_DEMO_SEED):
             await db.execute(
                 "INSERT INTO messages (channel_id, parent_id, author, author_kind, body, created_at) "
@@ -678,7 +909,7 @@ async def _seed_demo_approval() -> None:
         return
     if not await channel_exists("general"):
         return
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT COUNT(*) FROM approvals WHERE channel_id = ? AND status = 'pending'",
             ("general",),
@@ -696,7 +927,7 @@ async def _seed_demo_approval() -> None:
 
 
 async def _count_messages(channel_id: str) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT COUNT(*) FROM messages WHERE channel_id = ?", (channel_id,)
         )
@@ -751,7 +982,7 @@ def people_dm_id(a: str, b: str) -> str:
 
 
 async def list_channel_members(channel_id: str) -> list[str]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT agent_name FROM channel_members WHERE channel_id = ? "
             "ORDER BY sort_order, agent_name",
@@ -765,7 +996,7 @@ async def set_channel_members(channel_id: str, names: list[str]) -> list[str]:
     for name in names:
         if name and name not in unique:
             unique.append(name)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("DELETE FROM channel_members WHERE channel_id = ?", (channel_id,))
         for i, name in enumerate(unique):
             await db.execute(
@@ -777,7 +1008,7 @@ async def set_channel_members(channel_id: str, names: list[str]) -> list[str]:
 
 
 async def list_channels(viewer: str | None = None) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM channels ORDER BY created_at")
         rows = await cur.fetchall()
@@ -801,7 +1032,7 @@ async def create_channel(
     owner_agent: str | None = None,
     members: list[str] | None = None,
 ) -> dict[str, Any]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO channels (id, name, topic, created_at, kind, owner_agent) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -824,7 +1055,7 @@ async def create_channel(
 
 
 async def get_channel(channel_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM channels WHERE id = ?", (channel_id,))
         row = await cur.fetchone()
@@ -845,7 +1076,7 @@ async def get_channel(channel_id: str) -> dict[str, Any] | None:
 
 
 async def channel_exists(channel_id: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT 1 FROM channels WHERE id = ?", (channel_id,))
         return await cur.fetchone() is not None
 
@@ -861,7 +1092,7 @@ async def add_message(
     model: str | None = None,
 ) -> dict[str, Any]:
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         try:
             cur = await db.execute(
                 "INSERT INTO messages (channel_id, parent_id, author, author_kind, body, created_at, model) "
@@ -892,7 +1123,7 @@ async def add_message(
 async def get_history(
     channel_id: str, limit: int = 50, before_id: int | None = None
 ) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         if before_id is None:
             cur = await db.execute(
@@ -913,7 +1144,7 @@ async def get_history(
 async def get_history_after(
     channel_id: str, after_id: int, limit: int = 200,
 ) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM messages WHERE channel_id = ? AND id > ? "
@@ -925,7 +1156,7 @@ async def get_history_after(
 
 
 async def get_message(message_id: int) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
         row = await cur.fetchone()
@@ -933,7 +1164,7 @@ async def get_message(message_id: int) -> dict[str, Any] | None:
 
 
 async def get_replies(parent_id: int) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM messages WHERE parent_id = ? ORDER BY id ASC",
@@ -944,7 +1175,7 @@ async def get_replies(parent_id: int) -> list[dict[str, Any]]:
 
 
 async def channel_of_message(message_id: int) -> str | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT channel_id FROM messages WHERE id = ?", (message_id,))
         row = await cur.fetchone()
         return row[0] if row else None
@@ -964,7 +1195,7 @@ def _like_escape(needle: str) -> str:
 async def search_history(channel_id: str, query: str, limit: int = 10) -> list[dict[str, Any]]:
     """Naive substring search. Phase 6 (vector search) replaces this
     implementation only — the tool signature in agent.py stays the same."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM messages WHERE channel_id = ? AND body LIKE ? ESCAPE '\\' "
@@ -976,14 +1207,14 @@ async def search_history(channel_id: str, query: str, limit: int = 10) -> list[d
 
 
 async def message_exists(message_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT 1 FROM messages WHERE id = ?", (message_id,))
         return await cur.fetchone() is not None
 
 
 async def message_in_channel(message_id: int, channel_id: str) -> bool:
     """Whether a message can be used as a parent in the given channel."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT 1 FROM messages WHERE id = ? AND channel_id = ?",
             (message_id, channel_id),
@@ -993,7 +1224,7 @@ async def message_in_channel(message_id: int, channel_id: str) -> bool:
 
 async def delete_message(message_id: int) -> list[int]:
     """Delete a message and its direct replies. Returns removed ids."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT id FROM messages WHERE id = ?", (message_id,))
         if await cur.fetchone() is None:
             return []
@@ -1009,7 +1240,7 @@ async def delete_message(message_id: int) -> list[int]:
 
 async def delete_channel(channel_id: str) -> bool:
     """Remove a room and its messages. DMs are refused by the API layer."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT kind FROM channels WHERE id = ?", (channel_id,))
         row = await cur.fetchone()
         if row is None:
@@ -1033,7 +1264,7 @@ async def delete_channel(channel_id: str) -> bool:
 async def add_reaction(message_id: int, author: str, emoji: str) -> bool:
     """Idempotent. Returns True if a new row was inserted, False if it
     already existed (caller treats both as success)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         try:
             await db.execute(
                 "INSERT INTO reactions (message_id, author, emoji, created_at) VALUES (?, ?, ?, ?)",
@@ -1047,7 +1278,7 @@ async def add_reaction(message_id: int, author: str, emoji: str) -> bool:
 
 async def remove_reaction(message_id: int, author: str, emoji: str) -> bool:
     """Delete one user's emoji reaction. Returns True if a row was removed."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "DELETE FROM reactions WHERE message_id = ? AND author = ? AND emoji = ?",
             (message_id, author, emoji),
@@ -1066,7 +1297,7 @@ async def get_reactions_many(message_ids: list[int]) -> dict[int, list[dict[str,
     out: dict[int, list[dict[str, Any]]] = {m: [] for m in ids}
     if not ids:
         return out
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT message_id, author, emoji, created_at FROM reactions "
@@ -1085,7 +1316,7 @@ async def get_reactions_many(message_ids: list[int]) -> dict[int, list[dict[str,
 async def create_user(
     handle: str, token: str, role: str | None = None, password: str | None = None,
 ) -> dict[str, Any]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT COUNT(*) FROM users")
         (count,) = await cur.fetchone()
         if role not in USER_ROLES:
@@ -1101,14 +1332,14 @@ async def create_user(
 
 
 async def user_count() -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT COUNT(*) FROM users")
         (count,) = await cur.fetchone()
         return int(count)
 
 
 async def user_has_password(handle: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT password_hash FROM users WHERE handle = ?", (handle,),
         )
@@ -1117,7 +1348,7 @@ async def user_has_password(handle: str) -> bool:
 
 
 async def admin_password_ok(handle: str, password: str | None) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT password_hash FROM users WHERE handle = ? AND role = 'admin'",
             (handle,),
@@ -1129,7 +1360,7 @@ async def admin_password_ok(handle: str, password: str | None) -> bool:
 
 
 async def list_admin_handles() -> list[str]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT handle FROM users WHERE role = 'admin' ORDER BY created_at"
         )
@@ -1137,7 +1368,7 @@ async def list_admin_handles() -> list[str]:
 
 
 async def get_workspace_meta(key: str) -> str | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT value FROM workspace_meta WHERE key = ?", (key,),
         )
@@ -1146,7 +1377,7 @@ async def get_workspace_meta(key: str) -> str | None:
 
 
 async def set_workspace_meta(key: str, value: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO workspace_meta (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1164,13 +1395,13 @@ async def mark_workspace_onboarded() -> None:
 
 
 async def user_exists(handle: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT 1 FROM users WHERE handle = ?", (handle,))
         return await cur.fetchone() is not None
 
 
 async def verify_token(handle: str, token: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT token_hash FROM users WHERE handle = ?", (handle,))
         row = await cur.fetchone()
         if row is None:
@@ -1185,7 +1416,7 @@ def generate_token() -> str:
 async def rotate_user_token(
     handle: str, token: str, *, role: str | None = None,
 ) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         if role in USER_ROLES:
             cur = await db.execute(
@@ -1212,7 +1443,7 @@ async def rotate_user_token(
 async def list_agents(
     channel_id: str | None = None, *, include_archived: bool = False,
 ) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM agents ORDER BY created_at")
         rows = await cur.fetchall()
@@ -1225,7 +1456,7 @@ async def list_agents(
 
 
 async def fetch_agent(name: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM agents WHERE name = ?", (name,))
         row = await cur.fetchone()
@@ -1260,7 +1491,7 @@ async def create_agent(
     model = resolve_groq_model(model)
     label = (display_name or "").strip() or pretty_name(name)
     pfp = (avatar or "").strip()[:500]
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO agents (name, system_prompt, model, channel_scope, "
             "created_at, history_window, max_tool_calls, tools, job, status, display_name, avatar, tools_locked) "
@@ -1314,7 +1545,7 @@ async def update_agent(name: str, fields: dict[str, Any]) -> dict[str, Any] | No
     if not sets:
         return await get_agent(name)
     values.append(name)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             f"UPDATE agents SET {', '.join(sets)} WHERE name = ?",
             values,
@@ -1324,7 +1555,7 @@ async def update_agent(name: str, fields: dict[str, Any]) -> dict[str, Any] | No
 
 
 async def agent_exists(name: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("SELECT 1 FROM agents WHERE name = ?", (name,))
         return await cur.fetchone() is not None
 
@@ -1339,7 +1570,7 @@ async def add_memory(
     kind: str = "note",
 ) -> dict[str, Any]:
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "INSERT INTO agent_memory (agent_name, channel_id, kind, body, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -1360,7 +1591,7 @@ async def add_memory(
 
 async def replace_summary(agent_name: str, channel_id: str, body: str) -> dict[str, Any]:
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "DELETE FROM agent_memory WHERE agent_name = ? AND channel_id = ? AND kind = 'summary'",
             (agent_name, channel_id),
@@ -1385,7 +1616,7 @@ async def replace_summary(agent_name: str, channel_id: str, body: str) -> dict[s
 
 async def get_summary(agent_name: str, channel_id: str) -> dict[str, Any] | None:
     """Latest channel summary for one agent, if any."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM agent_memory WHERE agent_name = ? AND channel_id = ? "
@@ -1423,7 +1654,7 @@ async def append_summary(
 
 
 async def list_memories(agent_name: str, limit: int = 20) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM agent_memory WHERE agent_name = ? "
@@ -1437,7 +1668,7 @@ async def list_memories(agent_name: str, limit: int = 20) -> list[dict[str, Any]
 async def get_context_memories(
     agent_name: str, channel_id: str, limit: int = 12
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
@@ -1459,7 +1690,7 @@ async def get_context_memories(
 async def search_memory(
     agent_name: str, query: str, channel_id: str | None = None, limit: int = 10
 ) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         like = f"%{_like_escape(query)}%"
         scope, params = (
@@ -1478,7 +1709,7 @@ async def search_memory(
 
 async def delete_memory(memory_id: int, agent_name: str) -> bool:
     """Delete one memory note by id. Returns True when a row was removed."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "DELETE FROM agent_memory WHERE id = ? AND agent_name = ? AND kind = 'note'",
             (memory_id, agent_name),
@@ -1500,7 +1731,7 @@ async def forget_memory_by_query(
         if channel_id else
         ("", (agent_name, like))
     )
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "DELETE FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
             f"{scope}AND body LIKE ? ESCAPE '\\'",
@@ -1516,7 +1747,7 @@ async def count_memories(agent_name: str, channel_id: str | None = None) -> dict
         if channel_id else
         ("", (agent_name,))
     )
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT COUNT(*) FROM agent_memory WHERE agent_name = ? AND kind = 'note' "
             f"{scope}".rstrip(),
@@ -1535,13 +1766,13 @@ async def count_memories(agent_name: str, channel_id: str | None = None) -> dict
 
 
 async def set_agent_status(name: str, status: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("UPDATE agents SET status = ? WHERE name = ?", (status, name))
         await db.commit()
 
 
 async def get_recent_system_messages(limit: int = 20) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM messages WHERE author_kind = 'system' "
@@ -1554,14 +1785,14 @@ async def get_recent_system_messages(limit: int = 20) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------- skills --
 
 async def list_skills() -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM skills ORDER BY name")
         return [dict(r) for r in await cur.fetchall()]
 
 
 async def get_skill(name: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM skills WHERE name = ?", (name,))
         row = await cur.fetchone()
@@ -1569,7 +1800,7 @@ async def get_skill(name: str) -> dict[str, Any] | None:
 
 
 async def get_skill_by_id(skill_id: int) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM skills WHERE id = ?", (skill_id,))
         row = await cur.fetchone()
@@ -1579,7 +1810,7 @@ async def get_skill_by_id(skill_id: int) -> dict[str, Any] | None:
 async def upsert_skill(name: str, body: str) -> dict[str, Any]:
     ts = time.time()
     existing = await get_skill(name)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         if existing:
             await db.execute(
                 "UPDATE skills SET body = ?, updated_at = ? WHERE name = ?",
@@ -1605,7 +1836,7 @@ async def update_skill(skill_id: int, fields: dict[str, Any]) -> dict[str, Any] 
     name = fields.get("name", row["name"])
     body = fields.get("body", row["body"])
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         try:
             await db.execute(
                 "UPDATE skills SET name = ?, body = ?, updated_at = ? WHERE id = ?",
@@ -1618,7 +1849,7 @@ async def update_skill(skill_id: int, fields: dict[str, Any]) -> dict[str, Any] 
 
 
 async def delete_skill(skill_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
         await db.commit()
         return cur.rowcount > 0
@@ -1633,7 +1864,7 @@ def _routine_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 async def list_routines(agent_name: str | None = None) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         if agent_name:
             cur = await db.execute(
@@ -1646,7 +1877,7 @@ async def list_routines(agent_name: str | None = None) -> list[dict[str, Any]]:
 
 
 async def count_routines(agent_name: str) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "SELECT COUNT(*) FROM routines WHERE agent_name = ?", (agent_name,)
         )
@@ -1655,7 +1886,7 @@ async def count_routines(agent_name: str) -> int:
 
 
 async def get_routine(routine_id: int) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM routines WHERE id = ?", (routine_id,))
         row = await cur.fetchone()
@@ -1671,7 +1902,7 @@ async def create_routine(
 ) -> dict[str, Any]:
     ts = time.time()
     next_run = ts + interval_minutes * 60
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "INSERT INTO routines (agent_name, title, instructions, interval_minutes, "
             "enabled, last_run_at, next_run_at, created_at) "
@@ -1700,7 +1931,7 @@ async def update_routine(routine_id: int, fields: dict[str, Any]) -> dict[str, A
     if not sets:
         return row
     values.append(routine_id)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             f"UPDATE routines SET {', '.join(sets)} WHERE id = ?",
             values,
@@ -1710,7 +1941,7 @@ async def update_routine(routine_id: int, fields: dict[str, Any]) -> dict[str, A
 
 
 async def delete_routine(routine_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("DELETE FROM routine_runs WHERE routine_id = ?", (routine_id,))
         cur = await db.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
         await db.commit()
@@ -1719,7 +1950,7 @@ async def delete_routine(routine_id: int) -> bool:
 
 async def due_routines(now: float | None = None) -> list[dict[str, Any]]:
     ts = now if now is not None else time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM routines WHERE enabled = 1 AND next_run_at <= ? "
@@ -1735,7 +1966,7 @@ async def mark_routine_run(
 ) -> None:
     ts = time.time()
     next_run = ts + interval_minutes * 60
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO routine_runs (routine_id, started_at, finished_at, status, excerpt) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -1750,7 +1981,7 @@ async def mark_routine_run(
 
 
 async def list_routine_runs(routine_id: int, limit: int = 20) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM routine_runs WHERE routine_id = ? ORDER BY id DESC LIMIT ?",
@@ -1765,7 +1996,7 @@ async def create_approval(
     agent_name: str, channel_id: str, action: str, detail: str = ""
 ) -> dict[str, Any]:
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "INSERT INTO approvals (agent_name, channel_id, action, detail, status, created_at) "
             "VALUES (?, ?, ?, ?, 'pending', ?)",
@@ -1781,7 +2012,7 @@ async def create_approval(
 
 
 async def get_approval(approval_id: int) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
         row = await cur.fetchone()
@@ -1791,7 +2022,7 @@ async def get_approval(approval_id: int) -> dict[str, Any] | None:
 async def list_approvals(
     *, channel_id: str | None = None, status: str | None = "pending", limit: int = 50
 ) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         clauses = []
         args: list[Any] = []
@@ -1813,7 +2044,7 @@ async def resolve_approval(approval_id: int, status: str) -> dict[str, Any] | No
     if status not in {"approved", "denied"}:
         raise ValueError("invalid approval status")
     ts = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "UPDATE approvals SET status = ?, resolved_at = ? "
@@ -1853,7 +2084,7 @@ def _public_custom_tool(row: dict[str, Any]) -> dict[str, Any]:
 
 
 async def list_custom_tools(*, enabled_only: bool = False) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         q = "SELECT * FROM custom_tools"
         if enabled_only:
@@ -1875,7 +2106,7 @@ async def create_custom_tool(
     ts = time.time()
     params = json.dumps(parameters or {"type": "object", "properties": {}})
     config = json.dumps(handler_config or {})
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "INSERT INTO custom_tools (name, description, parameters, handler_type, "
             "handler_config, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1892,7 +2123,7 @@ async def create_custom_tool(
 
 
 async def update_custom_tool(tool_id: int, fields: dict[str, Any]) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM custom_tools WHERE id = ?", (tool_id,))
         row = await cur.fetchone()
@@ -1933,7 +2164,7 @@ async def update_custom_tool(tool_id: int, fields: dict[str, Any]) -> dict[str, 
 
 
 async def delete_custom_tool(tool_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute("DELETE FROM custom_tools WHERE id = ?", (tool_id,))
         await db.commit()
         return cur.rowcount > 0
@@ -1946,7 +2177,7 @@ async def upsert_ai_provider(
 ) -> dict[str, Any]:
     ts = time.time()
     hint = f"…{secret[-4:]}" if len(secret) > 4 else "****"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO ai_providers (provider_id, secret, key_hint, model, connected_at) "
             "VALUES (?, ?, ?, ?, ?) "
@@ -1966,7 +2197,7 @@ async def update_ai_provider_oauth(
 ) -> dict[str, Any]:
     ts = time.time()
     hint = f"…{secret[-4:]}" if len(secret) > 4 else "****"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO ai_providers (provider_id, secret, key_hint, model, connected_at, auth_method, refresh_secret, expires_at) VALUES (?, ?, ?, ?, ?, 'oauth', ?, ?) "
             "ON CONFLICT(provider_id) DO UPDATE SET secret=excluded.secret, key_hint=excluded.key_hint, model=COALESCE(excluded.model, ai_providers.model), connected_at=excluded.connected_at, auth_method='oauth', refresh_secret=excluded.refresh_secret, expires_at=excluded.expires_at",
@@ -1977,14 +2208,14 @@ async def update_ai_provider_oauth(
 
 
 async def list_ai_providers() -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM ai_providers ORDER BY provider_id")
         return [dict(r) for r in await cur.fetchall()]
 
 
 async def get_ai_provider(provider_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM ai_providers WHERE provider_id = ?", (provider_id,)
@@ -1994,7 +2225,7 @@ async def get_ai_provider(provider_id: str) -> dict[str, Any] | None:
 
 
 async def delete_ai_provider(provider_id: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         cur = await db.execute(
             "DELETE FROM ai_providers WHERE provider_id = ?", (provider_id,)
         )
@@ -2003,7 +2234,7 @@ async def delete_ai_provider(provider_id: str) -> bool:
 
 
 async def update_ai_provider_model(provider_id: str, model: str | None) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "UPDATE ai_providers SET model = ? WHERE provider_id = ?",
@@ -2022,7 +2253,7 @@ async def update_ai_provider_model(provider_id: str, model: str | None) -> dict[
 # ------------------------------------------------------------------ people -
 
 async def get_user(handle: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT handle, role, created_at FROM users WHERE handle = ?", (handle,)
@@ -2037,7 +2268,7 @@ async def get_user_role(handle: str) -> str:
 
 
 async def list_people() -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT handle, role, created_at FROM users ORDER BY created_at"
@@ -2058,7 +2289,7 @@ async def ensure_people_dm(me: str, other: str) -> dict[str, Any]:
         return existing
     handles = sorted([left, right], key=str.lower)
     topic = f"1:1 · {handles[0]} and {handles[1]}"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO channels (id, name, topic, created_at, kind, owner_agent) "
             "VALUES (?, ?, ?, ?, 'people', NULL)",
@@ -2081,7 +2312,7 @@ async def archive_agent(name: str) -> dict[str, Any] | None:
         return None
     if row.get("archived"):
         return row
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "UPDATE agents SET archived_at = ?, status = 'idle' WHERE name = ?",
             (time.time(), name),
@@ -2103,7 +2334,7 @@ def _public_team(row: dict[str, Any], members: list[str] | None = None) -> dict[
 
 
 async def list_teams() -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM agent_teams ORDER BY created_at")
         rows = [dict(r) for r in await cur.fetchall()]
@@ -2118,7 +2349,7 @@ async def list_teams() -> list[dict[str, Any]]:
 
 
 async def get_team(team_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM agent_teams WHERE id = ?", (team_id,))
         row = await cur.fetchone()
@@ -2136,7 +2367,7 @@ async def get_team(team_id: str) -> dict[str, Any] | None:
 async def create_team(
     team_id: str, name: str, members: list[str], description: str = "",
 ) -> dict[str, Any]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute(
             "INSERT INTO agent_teams (id, name, description, created_at) VALUES (?, ?, ?, ?)",
             (team_id, name, description or "", time.time()),
@@ -2161,7 +2392,7 @@ async def update_team(team_id: str, fields: dict[str, Any]) -> dict[str, Any] | 
     current = await get_team(team_id)
     if current is None:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         sets: list[str] = []
         args: list[Any] = []
         if "name" in fields and fields["name"] is not None:
@@ -2193,7 +2424,7 @@ async def update_team(team_id: str, fields: dict[str, Any]) -> dict[str, Any] | 
 
 
 async def delete_team(team_id: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         await db.execute("DELETE FROM agent_team_members WHERE team_id = ?", (team_id,))
         cur = await db.execute("DELETE FROM agent_teams WHERE id = ?", (team_id,))
         await db.commit()
@@ -2203,7 +2434,7 @@ async def delete_team(team_id: str) -> bool:
 # ---------------------------------------------------------- search/export -
 
 async def export_messages(channel_id: str) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at, id",
@@ -2219,7 +2450,7 @@ async def search_workspace(
     if len(needle) < 2:
         return []
     like = f"%{needle}%"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT m.id, m.channel_id, m.author, m.author_kind, m.body, m.created_at, "
