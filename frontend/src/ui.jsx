@@ -94,17 +94,22 @@ function RichBody({ body }) {
   );
 }
 
+/**
+ * A code listing on the roll. This is machine output, so it is set in the
+ * machine register on a slot background — the same treatment `.entry-body pre`
+ * already declares in styles.css. It used to bring Tailwind `zinc` utilities
+ * and a soft shadow with it, which made every agent reply containing code
+ * switch to a second, foreign visual language mid-transcript.
+ */
 function CodeBlock({ lang, text }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="my-2.5 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/90 shadow-sm text-xs font-mono">
-      <div className="flex items-center justify-between border-b border-zinc-850 px-3.5 py-1.5 bg-zinc-900/60 select-none">
-        <span className="text-[11px] font-medium text-zinc-400 font-mono lowercase">
-          {lang || "code"}
-        </span>
+    <div className="code-block">
+      <div className="code-block-head">
+        <span className="code-block-lang">{lang || "code"}</span>
         <button
           type="button"
-          className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-100 transition-colors py-0.5 px-1.5 rounded hover:bg-zinc-800"
+          className="code-block-copy"
           onClick={async () => {
             try {
               await navigator.clipboard.writeText(text);
@@ -112,12 +117,11 @@ function CodeBlock({ lang, text }) {
               setTimeout(() => setCopied(false), 1400);
             } catch { /* ignore */ }
           }}
-          aria-live="polite"
         >
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre className="p-3.5 overflow-x-auto text-[12px] leading-relaxed text-zinc-200">
+      <pre>
         {/* React escapes text nodes itself — never pre-escape here. */}
         <code>{text}</code>
       </pre>

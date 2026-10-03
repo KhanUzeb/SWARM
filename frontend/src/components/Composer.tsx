@@ -543,32 +543,6 @@ export function Composer({
           </button>
         )}
       </div>
-
-      {/* Quick hand-offs. */}
-      {agents.length > 0 && (
-        <div className="composer-hints" style={{ marginTop: 6 }}>
-          <span className="reg">Hand to</span>
-          {agents.slice(0, 4).map((agent) => (
-            <button
-              key={agent.name}
-              type="button"
-              onClick={() => {
-                const tag = `@${agent.name} `;
-                if (!draft.includes(tag)) {
-                  setDraft((d) => (d ? `${d} ${tag}` : tag));
-                }
-                inputRef.current?.focus();
-              }}
-              className="chip"
-            >
-              {agent.display_name || agent.name}
-            </button>
-          ))}
-          <span className="reg" style={{ marginLeft: "auto" }}>
-            Enter sends · Shift+Enter newline
-          </span>
-        </div>
-      )}
     </div>
   );
 }

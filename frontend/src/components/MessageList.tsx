@@ -254,18 +254,6 @@ export function MessageList({
 
   return (
     <div id="log" ref={logRef} onScroll={handleScroll}>
-      {!pinned && roots.length > 0 && (
-        <button
-          type="button"
-          onClick={jumpToLatest}
-          aria-label="Jump to the newest line"
-          className="btn btn-sm jump-latest"
-        >
-          <ArrowDown size={13} />
-          Newest
-        </button>
-      )}
-
       <div className="log-inner">
         {hasMore && (
           <div style={{ display: "grid", placeItems: "center", paddingBottom: 8 }}>
@@ -371,6 +359,22 @@ export function MessageList({
             </div>
           </div>
         )}
+
+        {/* The jump key is the last thing on the roll: sticky against #log's
+            own scrollport, so it can never land on the composer. */}
+        <div className="jump-dock">
+          {!pinned && roots.length > 0 && (
+            <button
+              type="button"
+              onClick={jumpToLatest}
+              aria-label="Jump to the newest line"
+              className="btn btn-sm jump-latest"
+            >
+              <ArrowDown size={13} />
+              Newest
+            </button>
+          )}
+        </div>
 
         <div ref={endRef} />
       </div>
