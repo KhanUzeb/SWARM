@@ -151,6 +151,10 @@ async def list_provider_models(
         "provider_id": provider_id,
         "name": spec.get("name") or provider_id,
         "live": False,
+        # Explicit, because `note` is also set when a connected provider is
+        # merely unreachable - inferring connection from it reported a working
+        # provider as disconnected.
+        "connected": auth is not None,
         "models": catalog,
         "default_model": (auth.default_model if auth else None) or spec.get("default_model"),
     }
@@ -177,11 +181,12 @@ async def list_provider_models(
 
 async def list_all_models() -> dict[str, Any]:
     groups: list[dict[str, Any]] = []
+    # list_provider_models already resolves auth internally and now reports it
+    # on the row. Resolving it a second time here doubled the SQLite reads for
+    # every provider on every page load - two queries per provider, sixteen
+    # providers, sequential - for an answer the row already carries.
     for spec in providers_by_priority():
-        row = await list_provider_models(spec["id"])
-        auth = await resolve_runtime_auth(spec["id"])
-        row["connected"] = auth is not None
-        groups.append(row)
+        groups.append(await list_provider_models(spec["id"]))
     models: list[dict[str, Any]] = []
     seen: set[str] = set()
     for group in groups:
