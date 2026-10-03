@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from typing import Callable
+from urllib.parse import urlsplit
 
 from fastapi import Depends, Header, HTTPException, Request
 from starlette.responses import JSONResponse
@@ -29,10 +30,31 @@ def allowed_origins() -> set[str]:
     }
 
 
-def origin_allowed(origin: str | None) -> bool:
+def origin_allowed(origin: str | None, request_host: str | None = None) -> bool:
+    """Allow configured origins, plus the host the request was actually sent to.
+
+    Same-host is not cross-origin: the browser is reporting that the page came
+    from the same server now answering it. A self-hoster on http://my-box.lan:8000
+    otherwise has to invent an env var for their own machine's name, which is
+    the most common reason a local install looks broken. Anything else still
+    has to be in SWARM_ALLOWED_ORIGINS.
+    """
     if not origin:
         return True
-    return origin.rstrip("/") in {o.rstrip("/") for o in allowed_origins()}
+    normalized = origin.rstrip("/")
+    if normalized in {o.rstrip("/") for o in allowed_origins()}:
+        return True
+    if not request_host:
+        return False
+    try:
+        origin_host = urlsplit(normalized).netloc
+    except ValueError:
+        return False
+    if not origin_host:
+        return False
+    # Compare host:port exactly. localhost and 127.0.0.1 are different origins
+    # to a browser, so they do not match each other here.
+    return origin_host.lower() == request_host.lower()
 
 
 def parse_token(raw: str) -> tuple[str, str] | None:
@@ -86,8 +108,24 @@ def install_api_guard(app) -> None:
             return await call_next(request)
 
         origin = request.headers.get("origin")
-        if origin and not origin_allowed(origin):
-            return JSONResponse({"detail": "origin not allowed"}, status_code=403)
+        request_host = request.headers.get("host")
+        if origin and not origin_allowed(origin, request_host):
+            # Say what to do, or the next two hours go into guessing. The guard
+            # stays strict - only the error message changes.
+            return JSONResponse(
+                {
+                    "detail": (
+                        f"origin not allowed: {origin}. Add it to "
+                        "SWARM_ALLOWED_ORIGINS (comma-separated) and restart, e.g. "
+                        "SWARM_ALLOWED_ORIGINS=http://localhost:8000,"
+                        "http://127.0.0.1:8000,http://localhost:5173,"
+                        "http://127.0.0.1:5173"
+                    ),
+                    "origin": origin,
+                    "allowed": sorted(allowed_origins()),
+                },
+                status_code=403,
+            )
 
         # Browser cross-origin calls must identify as the swarm web app.
         if origin and request.headers.get("x-swarm-client") != SWARM_CLIENT_HEADER:
