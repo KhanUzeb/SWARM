@@ -32,6 +32,8 @@ frontend/dist/
 
 # local agent handoff context
 context.md
+# personal plain-language guide to this codebase (mine, not the repo's)
+GUIDE.md
 .scratch/
 frontend/dist.zip
 # agent tooling installed locally. The bundled product skills in skills/*.md
