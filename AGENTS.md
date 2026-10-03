@@ -27,7 +27,7 @@
 | LLM | Groq (primary) + 14 more via `backend/ai_support/` + Custom OpenAI-compatible (Ollama/LM Studio/vLLM) |
 | Frontend | React 19 + Vite 8, built with `bun`; FastAPI serves `frontend/dist` |
 | Tracing | Langfuse (no-op when unconfigured) |
-| Deploy | Docker Compose, SQLite on a named volume, `GET /health` probe |
+| Deploy | Docker Compose, SQLite on a named volume, `GET /health` probe, `swarm doctor` |
 
 ```powershell
 # backend (from repo root)
@@ -58,6 +58,8 @@ backend/computer_providers.py  computer abstraction: local|none|fake
 backend/tools/         central tool registry (builtins, custom, plugins)
 backend/v2.py          durable workflows/runs, OAuth state/PKCE, recovery
 backend/db.py          schema + ensure_schema() additive migrations
+backend/settings.py    the one SWARM_* parse; validated at startup
+backend/doctor.py      `swarm doctor` — why won't it start?
 cli/swarm_cli.py       JSON in/out CLI for scripts and other agents
 ```
 
@@ -75,6 +77,11 @@ Rules (Rakazo-shaped, enforced in review):
 - **One source of truth.** Reuse existing primitives; remove duplication
   and speculative abstractions. Add an interface only to protect a real
   external/platform boundary.
+- **One settings object.** Every `SWARM_*` variable is read through
+  `backend/settings.py`, and every boolean through `truthy()` — `on` means on
+  for all of them. A value the old code would have accepted still is; a value
+  only the four strict flags reject stops the boot naming itself. New flags go
+  in `Settings`, not in a fresh `os.environ.get`.
 
 ## 3. Auth model
 

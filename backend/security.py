@@ -1,7 +1,6 @@
 """Browser-facing API guards: origin allowlist and optional session auth."""
 from __future__ import annotations
 
-import os
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -9,25 +8,36 @@ from fastapi import Depends, Header, HTTPException, Request
 from starlette.responses import JSONResponse
 
 from . import db
+from .settings import get_settings
 
 SWARM_CLIENT_HEADER = "web"
 
+DEFAULT_ALLOWED_ORIGINS = frozenset({
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+})
+
 
 def allowed_origins() -> set[str]:
-    raw = (os.environ.get("SWARM_ALLOWED_ORIGINS") or "").strip()
-    if raw:
-        # Never let a bare "*" reach CORSMiddleware: it is paired with
-        # allow_credentials=True, which would reflect any origin onto
-        # credentialed responses. origin_allowed() treats "*" as a literal
-        # string that never matches, so dropping it keeps both layers
-        # consistent instead of silently opening one of them.
-        return {o.strip() for o in raw.split(",") if o.strip() and o.strip() != "*"}
-    return {
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    }
+    """Configured origins, or the localhost defaults when unset.
+
+    Parsed by backend.settings so this guard and CORSMiddleware read the same
+    list from the same parse. A bare "*" is dropped on the way out: it is
+    paired with allow_credentials=True, which would reflect any origin onto
+    credentialed responses, while origin_allowed() treats "*" as a literal
+    string that never matches — so keeping it would leave one layer open and
+    the other shut.
+    """
+    configured = get_settings().origin_list()
+    if configured:
+        return set(configured)
+    if (get_settings().allowed_origins or "").strip():
+        # Only bare "*" was set, so the operator named a wildcard and nothing
+        # else. Same-host still works via origin_allowed(); cross-origin does not.
+        return set()
+    return set(DEFAULT_ALLOWED_ORIGINS)
 
 
 def origin_allowed(origin: str | None, request_host: str | None = None) -> bool:

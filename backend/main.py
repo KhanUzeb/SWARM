@@ -25,6 +25,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, W
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import agent, context, db, evals, knowledge, memory_graph, policy, routing, v2, work, work_state
@@ -36,7 +37,8 @@ from .jobs import JOB_TEMPLATES
 from .profiles import list_profiles, load_job_profile
 from .models import (
     AgentCreate, AgentPatch, AiModelsPreview, AiProviderConnect, AiProviderModel,
-    ApprovalResolve, ChannelCreate, ComposioToolkitConnect, CustomToolCreate,
+    ApprovalOut, ApprovalResolve, ApprovalResolvedOut, ChannelCreate,
+    ComposioToolkitConnect, CustomToolCreate,
     CustomToolPatch, DirectMessageCreate, MessageCreate, ReactionCreate,
     RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate, SkillPatch,
     SystemRootSet, TeamCreate, TeamPatch, RunCreate, WorkflowCreate, WorkflowPatch,
@@ -46,6 +48,7 @@ from .security import (
     allowed_origins, install_api_guard, is_loopback, optional_auth, parse_token,
     require_admin, require_auth,
 )
+from .settings import get_settings, validate_settings
 from .tools.registry import get_registry, reload_registry
 
 app = FastAPI(title="swarm")
@@ -57,6 +60,26 @@ async def _http_exception_json(request: Request, exc: StarletteHTTPException) ->
     # Keep the default {"detail": ...} shape (tests + UI read it) and add
     # ok:false so clients can branch without sniffing status codes.
     return JSONResponse(status_code=exc.status_code, content={"ok": False, "detail": exc.detail})
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_json(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Give a rejected body the same shape as every other /api failure.
+
+    FastAPI's built-in 422 was the one /api response that did not carry
+    `ok: false`, so a client reading `ok` to branch (lib.js returns
+    `{ok, status, data}` and App.jsx falls back to `res.data?.detail`) had a
+    fifth error shape to handle. The message is rendered as one readable
+    sentence instead of Pydantic's `loc/msg/type` triple, because the UI shows
+    it verbatim in a flash.
+    """
+    parts = []
+    for err in exc.errors():
+        field = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+        message = err.get("msg", "invalid value")
+        parts.append(f"{field}: {message}" if field else message)
+    detail = "; ".join(parts) or "invalid request body"
+    return JSONResponse(status_code=422, content={"ok": False, "detail": detail})
 
 
 @app.exception_handler(Exception)
@@ -78,10 +101,35 @@ DIST_DIR = FRONTEND_DIR / "dist"  # Vite production output
 
 RATE_LIMIT_SECONDS = 0.5
 HISTORY_LIMIT_MAX = 100
+# The write limiter is keyed by the caller's handle, and registering is open,
+# so an attacker can mint unlimited distinct handles. Without a cap this dict
+# grows for the life of the process (docs/SECURITY-REVIEW.md finding 9), so
+# both a time bound and a size cap apply. Evicting an entry older than
+# RATE_LIMIT_SECONDS is invisible: the next write for that handle is allowed
+# anyway, because the window has already passed.
+_LAST_WRITE_TTL_SECONDS = 60.0
+_LAST_WRITE_MAX_ENTRIES = 4096
 _last_write: dict[str, float] = {}
 _background_tasks: set[asyncio.Task] = set()
 _active_routines: set[int] = set()
 _logger = logging.getLogger("swarm.backend")
+
+
+def _prune_last_write(now: float) -> None:
+    """Drop limiter entries that can no longer throttle anything.
+
+    Two bounds, cheapest first. The time sweep removes the overwhelming
+    majority: an entry older than the TTL cannot throttle anyone. The size cap
+    then handles the other shape — a burst of fresh handles inside one TTL —
+    by dropping the oldest, which is exactly who has waited longest.
+    """
+    expired = [h for h, seen in _last_write.items() if now - seen > _LAST_WRITE_TTL_SECONDS]
+    for handle in expired:
+        _last_write.pop(handle, None)
+    overflow = len(_last_write) - _LAST_WRITE_MAX_ENTRIES
+    if overflow > 0:
+        for handle, _ in sorted(_last_write.items(), key=lambda kv: kv[1])[:overflow]:
+            _last_write.pop(handle, None)
 
 
 def _rate_limited(handle: str) -> bool:
@@ -89,7 +137,13 @@ def _rate_limited(handle: str) -> bool:
     last = _last_write.get(handle, 0.0)
     if now - last < RATE_LIMIT_SECONDS:
         return True
+    _prune_last_write(now)
     _last_write[handle] = now
+    # Prune before the insert so the cap is enforced against the entries that
+    # were already there; this second pass closes the one-slot overshoot that
+    # lets a steady stream of new handles sit at cap + 1 forever.
+    if len(_last_write) > _LAST_WRITE_MAX_ENTRIES:
+        _prune_last_write(now)
     return False
 
 
@@ -153,6 +207,11 @@ HANDOFF_DEPTH = 3
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail the boot on an unusable SWARM_* value, naming the variable. A typo
+    # that used to become a silent default is exactly what a self-hoster
+    # cannot debug from the outside, and this is the one place where stopping
+    # loudly beats continuing wrongly.
+    validate_settings()
     global _routine_task
     global _gc_task
     await db.init_db()
@@ -1482,7 +1541,7 @@ async def api_routine_runs(routine_id: int, handle: str = Depends(require_auth))
     return await db.list_routine_runs(routine_id)
 
 
-@app.get("/api/approvals")
+@app.get("/api/approvals", response_model=list[ApprovalOut])
 async def api_list_approvals(
     channel_id: str | None = None,
     status: str | None = "pending",
@@ -1500,7 +1559,7 @@ async def api_list_approvals(
     return visible
 
 
-@app.post("/api/approvals/{approval_id}/resolve")
+@app.post("/api/approvals/{approval_id}/resolve", response_model=ApprovalResolvedOut)
 async def api_resolve_approval(
     approval_id: int, payload: ApprovalResolve, handle: str = Depends(require_auth)
 ):
@@ -1539,7 +1598,10 @@ async def api_resolve_approval(
                 candidate.get("active_step"))
             break
     await _maybe_trigger_agents(row["channel_id"], msg)
-    return updated
+    # The two echoed fields are additive: every key the UI already read
+    # (id, agent_name, channel_id, action, detail, status, created_at,
+    # resolved_at) is unchanged, so the inbox needs no migration.
+    return {**updated, "decision": payload.status, "resolved_by": handle}
 
 
 # --------------------------------------------------------------- memory ---

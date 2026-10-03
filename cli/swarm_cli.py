@@ -15,6 +15,11 @@ Usage:
                  [--window N] [--tools a,b,c] [--job JOB]
     swarm_cli.py patch-agent <name> [--prompt TEXT] [--model M] [--scope ID]
                  [--unscoped] [--window N] [--tools a,b,c] [--job JOB]
+    swarm_cli.py doctor [--connectivity] [--json]
+
+`doctor` is the odd one out: it runs against the local checkout instead of a
+relay, because what it diagnoses is the install you are standing in. Every
+other subcommand needs SWARM_URL and a token; doctor needs neither.
 
 Env:
     SWARM_URL     base URL of the relay (default http://localhost:8000)
@@ -30,6 +35,10 @@ import urllib.error
 import urllib.request
 
 BASE_URL = os.environ.get("SWARM_URL", "http://localhost:8000")
+
+# Where the repo root is, so `doctor` can import backend.settings whether the
+# CLI is run from the repo or from a cron job or another directory.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _request(method: str, path: str, payload: dict | None = None, auth: bool = False) -> dict | None:
@@ -156,6 +165,30 @@ def cmd_patch_agent(args) -> None:
     ))
 
 
+def cmd_doctor(args) -> None:
+    """Local health report. JSON in, JSON out, like every other subcommand.
+
+    `--connectivity` is off by default so the report works on a laptop with no
+    network; without it the connectivity row says "skipped" rather than
+    guessing. Exit code is 0 when the install is usable and 1 when something
+    is actually broken — warnings (demo mode on, host tools on) are
+    legitimate local choices and do not fail the run.
+    """
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    from backend import doctor as doctor_mod
+
+    report = doctor_mod.run_doctor(connectivity=args.connectivity)
+    # JSON in, JSON out is the CLI contract, but a text report escaped into a
+    # single quoted line is unreadable, so the default rendering prints raw and
+    # --json is the machine-readable escape hatch for agents.
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(doctor_mod.format_report(report))
+    sys.exit(0 if report["ok"] else 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="swarm-cli", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -216,6 +249,20 @@ def main() -> None:
     p_patch.add_argument("--tools", default=None)
     p_patch.add_argument("--job", default="")
     p_patch.set_defaults(func=cmd_patch_agent)
+
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="check this install: python, keys, paths, risky settings",
+    )
+    p_doctor.add_argument(
+        "--connectivity", action="store_true",
+        help="also probe the provider host (one TCP request)",
+    )
+    p_doctor.add_argument(
+        "--json", action="store_true",
+        help="emit the raw report instead of the human-readable rendering",
+    )
+    p_doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args()
     args.func(args)

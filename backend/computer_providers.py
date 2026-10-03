@@ -25,17 +25,22 @@ import os
 import re
 from pathlib import Path
 
-VALID_PROVIDERS = ("local", "none", "fake")
+from .settings import STRICT_ENUM_FIELDS, get_settings
+
+VALID_PROVIDERS = STRICT_ENUM_FIELDS["computer_provider"]
 
 _AGENT_SEGMENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
 def get_provider() -> str:
-    """Return the configured computer provider (default ``local``)."""
-    raw = (os.environ.get("SWARM_COMPUTER_PROVIDER") or "local").strip().lower()
-    if raw in VALID_PROVIDERS:
-        return raw
-    return "local"
+    """Return the configured computer provider (default ``local``).
+
+    Reads through backend.settings so the vocabulary is one list rather than
+    one per module. An unrecognised value still falls back to ``local`` — the
+    widest option — so a typo cannot silently boot the product without a
+    computer host; ``swarm doctor`` is what reports it.
+    """
+    return get_settings().computer()
 
 
 def provider_configured() -> bool:

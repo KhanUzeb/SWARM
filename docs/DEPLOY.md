@@ -75,6 +75,40 @@ If a Bot reply fails (provider down, rate limit, timeout), use **Retry**
 on the error bubble. If your own message fails to send, use the banner
 above the composer.
 
+## When it won't start: `swarm doctor`
+
+The backend validates its `SWARM_*` variables at startup and **refuses to
+boot** on an unusable one, naming the variable and what it expected:
+
+```
+invalid configuration: 1 variable(s) cannot be used: SWARM_SYSTEM
+  SWARM_SYSTEM='enabled' — not a boolean — use 1/0, true/false, yes/no, on/off
+```
+
+To ask the install what is wrong without reading logs, run the doctor. It
+checks the interpreter, the package imports, every `SWARM_*` value, whether
+provider keys resolve, whether the database path and sandbox directory are
+writable, and which risky settings are on.
+
+```bash
+# inside the container
+docker compose exec api python -m backend.doctor
+
+# from a checkout, no server needed
+python -m backend.doctor
+python cli/swarm_cli.py doctor --json     # same report, machine-readable
+```
+
+Exit code is 0 when the install is usable and 1 when something is actually
+broken. Warnings (demo mode on, host tools on a public bind, `SWARM_SECRET`
+unset) are legitimate local choices and do **not** fail the run — they are
+listed under the relevant check so you can decide. It makes no network call
+unless you pass `--connectivity`, so it works offline.
+
+Boolean flags accept one vocabulary everywhere: `1`/`true`/`t`/`yes`/`y`/`on`
+and `0`/`false`/`f`/`no`/`n`/`off`. `SWARM_BROWSER` is the one exception and
+keeps its inverted contract — unset means on.
+
 ## Where the data lives
 
 The SQLite file lives at `/app/data/swarm.db` inside the container,
@@ -115,6 +149,12 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 | `OPENCODE_API_KEY` | no | OpenCode |
 | `ZEN_API_KEY` | no | Zen |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | no | tracing degrades silently if unset |
+
+An unusable value in `SWARM_SYSTEM`, `SWARM_DEMO`, `SWARM_SYSTEM_UNRESTRICTED`
+or `SWARM_COMPUTER_PROVIDER` stops the boot with the variable named; run
+`python -m backend.doctor` to see them all at once. The rest fall back to
+their documented defaults — in particular a nonsense `SWARM_RETENTION_DAYS`
+means "keep everything", never "delete everything".
 
 ### Host-system tools
 

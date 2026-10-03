@@ -20,25 +20,21 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .settings import get_settings
+
 _DEFAULT_MAX_AGE_HOURS = 72.0
 _DEFAULT_MAX_MB = 512.0
 _SWEEP_BATCH = 512  # files per pass; keeps a sweep short
 
 
 def _max_age_hours() -> float:
-    raw = (os.environ.get("SWARM_GC_MAX_AGE_HOURS") or "").strip()
-    try:
-        return float(raw) if raw else _DEFAULT_MAX_AGE_HOURS
-    except ValueError:
-        return _DEFAULT_MAX_AGE_HOURS
+    """SWARM_GC_MAX_AGE_HOURS, default 72. An unusable value keeps the default."""
+    return get_settings().effective_gc_max_age_hours()
 
 
 def _max_bytes() -> int:
-    raw = (os.environ.get("SWARM_GC_MAX_MB") or "").strip()
-    try:
-        return int(float(raw) * 1024 * 1024) if raw else int(_DEFAULT_MAX_MB * 1024 * 1024)
-    except ValueError:
-        return int(_DEFAULT_MAX_MB * 1024 * 1024)
+    """SWARM_GC_MAX_MB as bytes, default 512MB. Same lenient fallback."""
+    return int(get_settings().effective_gc_max_mb() * 1024 * 1024)
 
 
 def _sandbox_root() -> Path:

@@ -270,6 +270,63 @@ class ApprovalResolve(BaseModel):
     status: str = Field(pattern=r"^(approved|denied)$")
 
 
+# ---------------------------------------------------- approval responses --
+# The first modelled slice of the API. Approvals were picked because the
+# approvals inbox is the one surface a human reads all day, and it is built
+# entirely from these rows — so a shape that drifts here is a UI bug, not a
+# contract nobody notices.
+#
+# Wire compatibility is the constraint. These mirror the `approvals` table
+# column for column, in the order the UI already reads, with the same JSON
+# types (REAL timestamps stay numbers). `list_approvals` is a `SELECT *`, so a
+# future column addition would be silently dropped by the response model
+# rather than leaking through — that is the intended direction to fail.
+
+APPROVAL_STATUSES = ("pending", "approved", "denied")
+
+
+class ApprovalOut(BaseModel):
+    """One approvals row as `GET /api/approvals` and the resolve route return it."""
+
+    id: int
+    agent_name: str
+    channel_id: str
+    action: str
+    detail: str = ""
+    status: str = Field(pattern=r"^(pending|approved|denied)$")
+    created_at: float
+    resolved_at: float | None = None
+
+    model_config = {"extra": "ignore"}
+
+
+class ApprovalResolvedOut(ApprovalOut):
+    """The body of `POST /api/approvals/{id}/resolve`.
+
+    Same row, plus the decision echoed back so a caller that raced a double
+    click can tell which decision actually landed. Additive only: a client
+    reading `status` and `resolved_at` sees exactly what it saw before.
+    """
+
+    decision: str = Field(pattern=r"^(approved|denied)$")
+    resolved_by: str = Field(min_length=1, max_length=64)
+
+
+class ApiError(BaseModel):
+    """The one error shape every `/api/*` failure uses.
+
+    `install_api_guard` and the Starlette exception handler already emit
+    `{"ok": false, "detail": ...}` for origin rejections, HTTPException and
+    unhandled faults alike. This model exists to *pin* that shape so a future
+    route cannot invent a fourth one, and to give clients a typed thing to
+    parse instead of guessing. It is documentation with a test behind it,
+    not a behaviour change.
+    """
+
+    ok: bool = False
+    detail: str
+
+
 class ComposioToolkitConnect(BaseModel):
     toolkit: str = Field(min_length=1, max_length=64)
 

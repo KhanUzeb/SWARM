@@ -30,6 +30,7 @@ from typing import Any, AsyncIterator
 import aiosqlite
 
 from . import migrations
+from .settings import get_settings
 from .models import (
     ALLOWED_TOOLS,
     DEFAULT_GROQ_MODEL,
@@ -49,19 +50,20 @@ _logger = logging.getLogger("swarm.db")
 # How long a blocked writer waits for the lock before SQLite raises
 # "database is locked". The old default was an immediate error, which on
 # a busy local machine meant a 500 from whichever unlucky request lost
-# the race — with WAL the reader/writer collision is mostly gone, so
-# this is just the backstop for the remaining writer-writer case.
+# the race — with WAL the reader/writer collision is mostly gone, so this
+# is just the backstop for the remaining writer-writer case.
 _DEFAULT_BUSY_TIMEOUT_MS = 5000
 
 
 def busy_timeout_ms() -> int:
-    """SWARM_SQLITE_BUSY_TIMEOUT_MS, or 5000. Never negative."""
-    raw = (os.environ.get("SWARM_SQLITE_BUSY_TIMEOUT_MS") or "").strip()
-    try:
-        value = int(raw) if raw else _DEFAULT_BUSY_TIMEOUT_MS
-    except ValueError:
-        return _DEFAULT_BUSY_TIMEOUT_MS
-    return max(0, value)
+    """SWARM_SQLITE_BUSY_TIMEOUT_MS, or 5000. Never negative.
+
+    Reads through backend.settings so the value is parsed by the same lenient
+    helper every other numeric setting uses. The fallback is deliberately the
+    safe reading: an unparseable value waits the default rather than failing
+    a request, and a negative one means "do not wait at all".
+    """
+    return get_settings().busy_timeout_ms()
 
 
 async def apply_pragmas(db: aiosqlite.Connection) -> dict[str, Any]:
@@ -164,16 +166,10 @@ def retention_days() -> int | None:
     Unset, empty, non-numeric, zero and negative all mean "keep
     everything" — the same lenient parse gc.py uses for its own limits,
     because a typo in a retention setting should never mean "delete my
-    transcript".
+    transcript". The value itself is parsed by backend.settings so there is
+    one numeric parser, but the decision to keep everything stays here.
     """
-    raw = (os.environ.get("SWARM_RETENTION_DAYS") or "").strip()
-    if not raw:
-        return None
-    try:
-        days = int(float(raw))
-    except ValueError:
-        return None
-    return days if days > 0 else None
+    return get_settings().effective_retention_days()
 
 
 async def apply_retention(now: float | None = None) -> dict[str, Any]:
@@ -866,7 +862,15 @@ _DEMO_SEED = [
 
 
 def _demo_mode() -> bool:
-    return (os.environ.get("SWARM_DEMO") or "").strip().lower() in ("1", "true", "yes")
+    """SWARM_DEMO, parsed by the one shared boolean helper.
+
+    The vocabulary is the union of what this used to accept (1/true/yes) and
+    what SWARM_SYSTEM accepted (plus on, t, y). A single flag that reads
+    differently in two files was the bug, so both halves now go through
+    backend.settings.truthy and the demo scene is seeded for the same values
+    the rest of the app treats as on.
+    """
+    return get_settings().demo_mode()
 
 
 async def seed_demo_thread() -> None:
