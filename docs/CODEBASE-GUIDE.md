@@ -60,7 +60,7 @@ From source: `uv venv .venv`, install requirements, `cd frontend && bun install
 | Backend | ~12,250 lines Python | `backend/` |
 | Frontend | ~11,400 lines incl. CSS | `frontend/src/` |
 | Database tables | 27 | `backend/db.py`, `v2.py`, `work.py`, `knowledge.py`, `memory_graph.py` |
-| Tests | ~230 | `tests/` |
+| Tests | 276 across 28 files | `tests/` |
 
 ### The files that matter
 
@@ -75,6 +75,8 @@ Read these in this order. It is about 2,000 lines and covers the whole system.
 | `backend/v2.py` | ~530 | Durable workflows, run recovery, the v2 approval path |
 | `frontend/src/App.jsx` | ~1,390 | App shell, channel state, WebSocket lifecycle. **Read this before touching any UI** |
 | `frontend/src/components/MessageList.tsx` | ~715 | The transcript — the product's main surface |
+| `frontend/src/components/RunInspector.tsx` | new | Per-reply run timeline: steps, tool calls, approvals, handoffs |
+| `frontend/src/components/ApprovalsInbox.tsx` | new | Pending and past approval decisions |
 | `frontend/src/styles.css` | — | The entire visual system. See §5 |
 
 ### The directories nobody expects
@@ -275,7 +277,7 @@ Read `docs/DEPLOY.md` for the full table. These are the ones with teeth:
 # backend
 uv venv .venv                      # .venv\Scripts on Windows
 uv pip install -r requirements.txt -r requirements-dev.txt
-./.venv/Scripts/python.exe -m pytest -q        # ~230 tests, ~90s
+./.venv/Scripts/python.exe -m pytest -q        # 276 tests, ~2min
 
 # frontend
 cd frontend && bun install && bun run build    # must stay green
