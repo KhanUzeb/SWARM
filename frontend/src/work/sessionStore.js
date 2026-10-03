@@ -37,7 +37,7 @@ export async function cancelWork(token, workId) {
  * `{"type":"work","event"}` frames arriving on the existing chat socket.
  * Event cursors are monotonic per work_id and replay-safe after reconnects.
  */
-export function useWorkSessions(token, { pollMs = 4000 } = {}) {
+export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000 } = {}) {
   const [sessions, setSessions] = useState([]);
   const [eventsByWork, setEventsByWork] = useState({});
   const [connected, setConnected] = useState(false);
@@ -85,12 +85,31 @@ export function useWorkSessions(token, { pollMs = 4000 } = {}) {
     }
   }, []);
 
+  // The socket already pushes work events, so polling is only a safety net for
+  // a dropped connection - not the primary way data arrives. Poll fast while
+  // disconnected, and back off to a slow confirmation sweep once the socket is
+  // healthy, so an always-open tab is not re-fetching every few seconds all
+  // day. `refresh` stays exposed for the manual retry paths that call it.
+  // Read through a ref: putting `connected` in the deps would tear down and
+  // rebuild the timer every time the socket state flipped, which is exactly
+  // when the fast interval matters most.
+  const connectedRef = useRef(connected);
+  connectedRef.current = connected;
+
   useEffect(() => {
     if (!token) return;
     refresh();
-    const timer = setInterval(refresh, pollMs);
-    return () => clearInterval(timer);
-  }, [token, pollMs, refresh]);
+    let timer = setInterval(refresh, pollMs);
+    const settle = setInterval(() => {
+      const next = connectedRef.current ? healthyMs : pollMs;
+      clearInterval(timer);
+      timer = setInterval(refresh, next);
+    }, 2000);
+    return () => {
+      clearInterval(timer);
+      clearInterval(settle);
+    };
+  }, [token, pollMs, healthyMs, refresh]);
 
   return { sessions, eventsByWork, connected, error, refresh, ingestWorkEvent };
 }
