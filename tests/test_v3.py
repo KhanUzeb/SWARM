@@ -31,6 +31,6 @@ def test_demo_seed_general_thread(client, auth, monkeypatch):
     asyncio.run(reinit())
     msgs = client.get("/api/channels/general/messages", headers=auth).json()
     assert len(msgs) >= 4
-    assert msgs[0]["body"] == "What's blocking the release?"
+    assert msgs[0]["body"] == "Morning. What's blocking the release?"
     assert msgs[0]["author_kind"] == "human"
     assert any(m["author_kind"] == "agent" for m in msgs)

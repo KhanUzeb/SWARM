@@ -590,26 +590,46 @@ _DEMO_SEED = [
     (
         "demo",
         "human",
-        "What's blocking the release?",
+        "Morning. What's blocking the release?",
     ),
     (
         "swarm",
         "agent",
-        "[demo] Three items: migration script still running in staging, "
-        "one flaky integration test on auth refresh, and the changelog "
-        "hasn't been reviewed. Highest risk is the migration — I'd verify "
-        "rollback before calling ship.",
+        "[demo] Three items: the migration script is still running in staging, "
+        "one integration test on auth refresh is flaky, and the changelog hasn't "
+        "been reviewed. Highest risk is the migration — I'd verify rollback before "
+        "we call it shipped.",
     ),
     (
         "demo",
         "human",
-        "@swarm draft a one-liner for the team",
+        "@swarm get the changelog and review notes sorted.",
     ),
     (
         "swarm",
         "agent",
-        "[demo] Ship candidate: auth refresh fix is merged; migration finishes "
-        "tonight; we'll go green once staging is clean and changelog is approved.",
+        "[demo] That's a code-and-docs job. @coder — can you pull the diff since "
+        "the last tag and tell me what's actually in it?",
+    ),
+    (
+        "coder",
+        "agent",
+        "[demo] Nine commits behind the tag: two auth fixes, one migration, the "
+        "rest docs and deps. The auth fixes are the ones the flaky test is "
+        "fighting — they landed after the test was written.",
+    ),
+    (
+        "demo",
+        "human",
+        "@swarm can you post the release note to the status page?",
+    ),
+    (
+        "swarm",
+        "agent",
+        "[demo] That's outward-facing and I don't post to external places without "
+        "a human saying yes. I've raised an approval — check the approvals panel. "
+        "Once you approve it, I'll draft the note and show you the text before it "
+        "goes anywhere.",
     ),
 ]
 
@@ -619,13 +639,26 @@ def _demo_mode() -> bool:
 
 
 async def seed_demo_thread() -> None:
-    """Sample thread in #general when SWARM_DEMO=1 and the channel is empty."""
+    """Seed the README 5-minute demo scene when SWARM_DEMO=1.
+
+    Deterministic and offline: no provider call, no network. The scene has to
+    show the three things the product is actually about — a bot answering in a
+    channel, work handed between bots, and an approval a visitor can click:
+
+      1. the release-blocker question and a real answer in #general
+      2. a handoff chain (swarm -> coder) with both sides visible in-thread
+      3. one PENDING approval on an outward-facing action
+
+    Idempotent: seeding is skipped unless #general is empty and no pending
+    demo approval exists, so a visitor's own replies are never overwritten.
+    """
     if not _demo_mode():
         return
     if not await channel_exists("general"):
         return
     cur_count = await _count_messages("general")
     if cur_count > 0:
+        await _seed_demo_approval()
         return
     now = time.time()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -636,6 +669,30 @@ async def seed_demo_thread() -> None:
                 ("general", author, kind, body, now + i * 0.01),
             )
         await db.commit()
+    await _seed_demo_approval()
+
+
+async def _seed_demo_approval() -> None:
+    """One pending approval so a first-time visitor has something to click."""
+    if not _demo_mode():
+        return
+    if not await channel_exists("general"):
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM approvals WHERE channel_id = ? AND status = 'pending'",
+            ("general",),
+        )
+        (pending,) = await cur.fetchone()
+    if int(pending) > 0:
+        return
+    await create_approval(
+        "swarm",
+        "general",
+        "post the v0.1.0 release note to the public status page",
+        "Draft the note from the nine commits since the last tag, then show the "
+        "text here before anything is published.",
+    )
 
 
 async def _count_messages(channel_id: str) -> int:

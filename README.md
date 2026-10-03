@@ -192,15 +192,21 @@ network-isolation boundary. Do not treat it as one.
 
 ## Demo script (5 minutes)
 
-1. **Room (60s):** in `#general`, post `@swarm what's blocking the
-   release?` — streaming reply, tool audit line when shell/history runs.
-2. **Specialist (60s):** create a bot named "Maya", open its 1:1 — no
-   `@` needed there.
-3. **Group (45s):** new group with Swarm + Maya — both reply without `@`.
-4. **Handoff (45s):** `@swarm draft the update; @ledger log the decision`
-   — sequential replies in mention order.
-5. **Governance (45s):** bot calls `request_approval` → Allow / Deny
-   in-thread, bot continues.
+With `SWARM_DEMO=1` the container seeds this scene into `#general` on first
+boot, so the room thread and the pending approval are already there to click
+through.
+
+1. **Room (60s):** open `#general` — the seeded release-blocker thread shows
+   `swarm` answering with a real triage, then handing the diff question to
+   `@coder`. Both sides stay in the transcript.
+2. **Approval (60s):** the seeded pending approval is in the approvals panel.
+   Allow or deny it and watch the decision land in-thread as a message. This
+   is the flagship flow: the bot stopped and asked.
+3. **Reply (60s):** post `@swarm what's blocking the release?` yourself — a
+   streaming reply, with a tool audit line whenever a tool runs.
+4. **Specialist (45s):** create a bot named "Maya", open its 1:1 — no `@`
+   needed there.
+5. **Group (45s):** new group with Swarm + Maya — both reply without `@`.
 6. **Computer (30s):** open the computer panel — files the bots wrote.
 7. **Close (15s):** self-hosted, tested, Docker.
    Admin-gated bots, people DMs, `@team` pods, audit export.
