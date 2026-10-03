@@ -126,12 +126,14 @@ and point `SWARM_SYSTEM_ROOT` at the directory Bots may touch (it defaults
 to the app directory). Leave it off on anything reachable from a LAN or
 the internet — see SECURITY.md.
 
-> **Container caveat.** The current `Dockerfile` still sets
-> `ENV SWARM_SYSTEM=1`, and `.env.example` ships `SWARM_SYSTEM=1`. Inside
-> the published image the env var is set explicitly, so the backend's
-> `0` default does **not** apply and host tools come up **on**. To run
-> host tools off in Docker, set `SWARM_SYSTEM=0` explicitly — in
-> `docker-compose.yml` (which overrides the image default) or in `.env`.
+The image agrees with that default: the `Dockerfile` sets
+`ENV SWARM_SYSTEM=0`, so a plain `docker compose up` comes up with
+host tools off. Compose's `env_file` overrides image `ENV`, so setting
+`SWARM_SYSTEM=1` in `.env` is all it takes to turn them on.
+
+When host tools are enabled *and* the server binds to anything other than
+loopback, startup logs a warning naming the bind address and the effective
+`SWARM_SYSTEM_ROOT`. That is a reminder, not a control.
 
 ## Updating
 

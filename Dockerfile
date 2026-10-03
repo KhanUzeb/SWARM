@@ -25,7 +25,10 @@ RUN useradd --create-home --shell /bin/false swarm \
 USER swarm
 
 ENV SWARM_SANDBOX_DIR=/tmp/swarm-sandbox
-ENV SWARM_SYSTEM=1
+# Host-system tools are opt-in. Compose publishes port 8000, so leaving these
+# on would make host command execution the default for every container deploy.
+# Set SWARM_SYSTEM=1 in .env (compose's env_file overrides image ENV).
+ENV SWARM_SYSTEM=0
 ENV SWARM_SYSTEM_ROOT=/app
 ENV SWARM_DB_PATH=/app/data/swarm.db
 
