@@ -477,8 +477,7 @@ select.input { cursor: pointer; }
   grid-template-areas: "roster main";
 }
 .app.work-rail-open { grid-template-columns: var(--roster) minmax(0, 1fr) var(--col-rail); grid-template-areas: "roster main work"; }
-.app.computer-open:not(.work-rail-open) { grid-template-columns: var(--roster) minmax(0, 1fr) var(--col-panel); grid-template-areas: "roster main panel"; }
-.app.thread-open:not(.work-rail-open):not(.computer-open) { grid-template-columns: var(--roster) minmax(0, 1fr) var(--col-panel); grid-template-areas: "roster main thread"; }
+.app.thread-open:not(.work-rail-open) { grid-template-columns: var(--roster) minmax(0, 1fr) var(--col-panel); grid-template-areas: "roster main thread"; }
 /* Folded, the roster is a rail of marks. The track folds with it: the app
    never opens a 56px hole in a 260px column. */
 .app.roster-folded { --roster: var(--col-roster-folded); }
@@ -544,6 +543,10 @@ select.input { cursor: pointer; }
 .sidebar-nav { display: flex; flex-direction: column; }
 
 .sidebar-section { margin-bottom: var(--s1); }
+/* The machine room is its own band in the roster, not two more rows
+   pretending to be rooms. The hairline does the grouping; there is no
+   label because the names say it. */
+.sidebar-nav-workspace { margin: var(--s2) 0 var(--s1); padding-top: var(--s2); border-top: 1px solid var(--rule); }
 .section-header {
   display: flex;
   align-items: center;
@@ -676,7 +679,7 @@ select.input { cursor: pointer; }
 }
 .topbar-left { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--s2); }
 .topbar-right { display: flex; align-items: center; gap: var(--s2); flex-shrink: 0; }
-.topbar-center { display: flex; align-items: center; }
+.topbar-center { display: flex; align-items: center; min-width: 0; }
 
 .channel-title-row { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .channel-avatar {
@@ -693,7 +696,10 @@ select.input { cursor: pointer; }
 .channel-name { font-size: var(--t-md); font-weight: 600; letter-spacing: -0.02em; color: var(--ink-on-housing); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-topic { font-size: var(--t-sm); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.view-tabs { display: flex; gap: 1px; padding: 2px; background: var(--slot); border-radius: var(--r-key); box-shadow: var(--slot-shadow); }
+/* Eight destinations, one rail: below full width the strip keeps every
+   destination reachable by scrolling rather than by hiding any. */
+.view-tabs { display: flex; gap: 1px; padding: 2px; background: var(--slot); border-radius: var(--r-key); box-shadow: var(--slot-shadow); max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.view-tabs::-webkit-scrollbar { height: 0; }
 .view-tab {
   height: 24px; padding: 0 10px;
   color: var(--ink-3);
@@ -1728,9 +1734,9 @@ select.input { cursor: pointer; }
 .workflow-editor { max-width: 640px; }
 .workflow-editor-actions { display: flex; justify-content: flex-end; gap: var(--s2); padding-top: var(--s3); }
 
-/* ═══ Panels (computer / context / thread) ═══════════════════════ */
+/* Panels (context / thread) ═══════════════════════════════════════ */
 
-#computer-panel, .context-drawer, #thread-panel {
+.context-drawer, #thread-panel {
   grid-area: panel;
   display: flex;
   flex-direction: column;
@@ -1740,11 +1746,16 @@ select.input { cursor: pointer; }
 }
 #thread-panel { grid-area: thread; }
 .context-drawer { grid-area: main; grid-row: 2; border-left: 0; border-top: 1px solid var(--rule); max-height: 40dvh; }
+/* A destination fills the main column: the same tab chrome as the panel,
+   laid out as the page instead of a slide-over. */
+.computer-embedded { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .panel-header-main { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .panel-icon { color: var(--go-lit); flex-shrink: 0; }
 .panel-header-actions { display: flex; align-items: center; gap: var(--s1); }
-.panel-group-tabs, .panel-tabs { display: flex; gap: 1px; padding: var(--s2) var(--s3); overflow-x: auto; flex-shrink: 0; }
-.panel-group-tab, .panel-tab {
+/* The tab strip lines up with the header title above it, so the destination
+   reads as one object rather than a strip bolted under a heading. */
+.panel-tabs { display: flex; gap: 1px; padding: var(--s2) var(--s4) var(--s3); overflow-x: auto; flex-shrink: 0; }
+.panel-tab {
   height: 24px; padding: 0 9px;
   font-size: var(--t-xs); font-weight: 600;
   color: var(--ink-3);
@@ -1752,8 +1763,8 @@ select.input { cursor: pointer; }
   cursor: pointer; white-space: nowrap;
   transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
-.panel-group-tab:hover, .panel-tab:hover { color: var(--ink-on-housing); }
-.panel-group-tab.active, .panel-tab.active { color: var(--ink-on-housing); background: var(--housing-raised); }
+.panel-tab:hover { color: var(--ink-on-housing); }
+.panel-tab.active { color: var(--ink-on-housing); background: var(--housing-raised); }
 .panel-body-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .panel-section { padding: var(--s3) var(--s3) var(--s4); }
 .panel-section-head { margin-bottom: var(--s2); }
@@ -2232,7 +2243,7 @@ select.input { cursor: pointer; }
 
 /* One column. The roster becomes a drawer, the right column a sheet. */
 @media (max-width: 900px) {
-  .app, .app.work-rail-open, .app.computer-open, .app.thread-open {
+  .app, .app.work-rail-open, .app.thread-open {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "main";
   }
@@ -2282,7 +2293,7 @@ select.input { cursor: pointer; }
   }
   #work-rail.collapsed { inset: auto var(--s3) 132px auto; }
   #work-rail.collapsed .work-rail-expand { width: auto; }
-  #computer-panel, #thread-panel {
+  #thread-panel {
     position: fixed;
     inset: auto 0 0 0;
     max-height: 82dvh;

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
+import { X, FileText } from "lucide-react";
 import { apiJson, Button, EmptyState, ScrollArea, Tooltip } from "../ui.jsx";
 import { fmtBytes } from "../lib.js";
 import SystemPanel from "../ai-support/SystemPanel.jsx";
@@ -8,7 +9,12 @@ import AppsPanel from "../ai-support/AppsPanel.jsx";
 import ProviderPanel from "../ai-support/ProviderPanel.jsx";
 import PluginsPanel from "../ai-support/PluginsPanel.jsx";
 
-const PANEL_GROUPS = [
+// PANEL_GROUPS owns the Places/Connect destination list, and nothing keeps a
+// second copy. A group *is* a destination: the user arrives at "Places" or
+// "Connect" from the sidebar, the view strip or the palette, and the tabs of
+// that group are the surfaces inside it. There is deliberately no group tab
+// strip here — it would compete with the navigation that chose the group.
+export const PANEL_GROUPS = [
   { id: "places", label: "Places", tabs: [
     { id: "files", label: "Sandbox" },
     { id: "system", label: "System" },
@@ -22,19 +28,9 @@ const PANEL_GROUPS = [
   ]},
 ];
 
-export function ComputerPanel({ computer, token, user, meRole, onClose, onRefresh, flash }) {
-  const [activeGroup, setActiveGroup] = useState("places");
-  const [activeTab, setActiveTab] = useState("files");
-
-  const tabs = useMemo(
-    () => PANEL_GROUPS.find(g => g.id === activeGroup)?.tabs || PANEL_GROUPS[0].tabs,
-    [activeGroup],
-  );
-
-  function selectTab(groupId, tabId) {
-    setActiveGroup(groupId);
-    setActiveTab(tabId);
-  }
+export function ComputerPanel({ computer, token, meRole, onRefresh, flash, group = "places", initialTab }) {
+  const destination = PANEL_GROUPS.find(g => g.id === group) || PANEL_GROUPS[0];
+  const [activeTab, setActiveTab] = useState(initialTab || destination.tabs[0].id);
 
   const panelFlash = useCallback((message, error) => {
     flash?.(message, error ? "error" : "success");
@@ -42,47 +38,36 @@ export function ComputerPanel({ computer, token, user, meRole, onClose, onRefres
 
   if (!computer && activeTab === "files") {
     return (
-      <aside id="computer-panel">
-        <PanelChrome activeGroup={activeGroup} activeTab={activeTab} onSelectTab={selectTab} onClose={onClose} onRefresh={onRefresh} subtitle="Workspace offline" />
+      <section className="computer-embedded" aria-label={destination.label}>
+        <PanelChrome
+          title={destination.label}
+          subtitle="Shared workspace offline"
+          onRefresh={onRefresh}
+        />
         <EmptyState kind="sandbox" title="Sandbox offline" message="Could not load workspace data. Agents can still use tools when configured." />
-      </aside>
+      </section>
     );
   }
 
   return (
-    <aside id="computer-panel">
+    <section className="computer-embedded" aria-label={destination.label}>
       <PanelChrome
-        activeGroup={activeGroup}
-        activeTab={activeTab}
-        onSelectTab={selectTab}
-        onClose={onClose}
-        onRefresh={onRefresh}
+        title={destination.label}
         subtitle={[
           computer?.provider?.provider && `Computer: ${computer.provider.provider}`,
           computer?.workspace || computer?.note?.slice(0, 48) || "Shared workspace",
         ].filter(Boolean).join(" · ")}
+        onRefresh={onRefresh}
       />
 
-      <div className="panel-group-tabs">
-        {PANEL_GROUPS.map(group => (
-          <button
-            key={group.id}
-            type="button"
-            className={`panel-group-tab${activeGroup === group.id ? " active" : ""}`}
-            onClick={() => selectTab(group.id, group.tabs[0].id)}
-          >
-            {group.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="panel-tabs">
-        {tabs.map(t => (
+      <div className="panel-tabs" role="group" aria-label={`${destination.label} tabs`}>
+        {destination.tabs.map(t => (
           <button
             key={t.id}
             type="button"
             className={`panel-tab${activeTab === t.id ? " active" : ""}`}
             onClick={() => setActiveTab(t.id)}
+            aria-current={activeTab === t.id ? "true" : undefined}
           >
             {t.label}
           </button>
@@ -98,11 +83,11 @@ export function ComputerPanel({ computer, token, user, meRole, onClose, onRefres
         {activeTab === "tools" && <ToolsPanel token={token} flash={panelFlash} />}
         {activeTab === "plugins" && <PluginsPanel token={token} flash={panelFlash} meRole={meRole} />}
       </ScrollArea>
-    </aside>
+    </section>
   );
 }
 
-function PanelChrome({ activeGroup, activeTab, onSelectTab, onClose, onRefresh, subtitle }) {
+function PanelChrome({ title, subtitle, onRefresh }) {
   return (
     <div className="panel-header">
       <div className="panel-header-main">
@@ -110,7 +95,7 @@ function PanelChrome({ activeGroup, activeTab, onSelectTab, onClose, onRefresh, 
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         </span>
         <div>
-          <h2 className="panel-title">Workspace</h2>
+          <h2 className="panel-title">{title}</h2>
           <span className="panel-subtitle">{subtitle}</span>
         </div>
       </div>
@@ -120,7 +105,6 @@ function PanelChrome({ activeGroup, activeTab, onSelectTab, onClose, onRefresh, 
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           </button>
         </Tooltip>
-        <button className="panel-close" onClick={onClose} aria-label="Close"><X size={14} /></button>
       </div>
     </div>
   );
@@ -170,7 +154,7 @@ function SandboxView({ computer, token, flash }) {
         <div className="file-preview">
           <div className="preview-head">
             <strong>{previewPath}</strong>
-            <button type="button" className="btn ghost btn-sm" onClick={() => { setPreview(""); setPreviewPath(""); }}>Close</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setPreview(""); setPreviewPath(""); }}><X size={12} aria-hidden /> Close</button>
           </div>
           <pre className="file-preview-body">{preview}</pre>
         </div>

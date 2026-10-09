@@ -3,15 +3,18 @@ import { Avatar } from "@/components/ui/avatar";
 import { Dropdown } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Flap, Lamp } from "@/components/Flap";
+import { PANEL_GROUPS } from "./ComputerPanel.jsx";
 import {
   Activity,
   Bot,
   BookOpen,
+  Folder,
   Home,
   LogOut,
   MessageSquare,
   PanelLeft,
   PanelLeftClose,
+  Plug,
   Plus,
   Search,
   Settings,
@@ -68,7 +71,14 @@ interface SidebarProps {
   onToggleCollapsed?: () => void;
 }
 
-const PRIMARY_NAV = [
+type NavItem = {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  countKey?: boolean;
+};
+
+const PRIMARY_NAV: NavItem[] = [
   { id: "home", label: "Board", icon: Home },
   { id: "work", label: "Work", icon: Activity },
   { id: "chat", label: "Talk", icon: MessageSquare },
@@ -76,6 +86,21 @@ const PRIMARY_NAV = [
   { id: "knowledge", label: "Knowledge", icon: BookOpen },
   { id: "approvals", label: "Approvals", icon: ShieldAlert, countKey: true },
 ];
+
+// The machine room sits beside the conversation destinations rather than
+// inside them: two rows, one hop each, nothing behind a disclosure. The
+// names and ids come from PANEL_GROUPS, so the destination the roster
+// offers and the module it opens can never drift apart.
+const WORKSPACE_NAV_ICONS: Record<string, NavItem["icon"]> = {
+  places: Folder,
+  connect: Plug,
+};
+
+const WORKSPACE_NAV: NavItem[] = PANEL_GROUPS.map((g) => ({
+  id: g.id,
+  label: g.label,
+  icon: WORKSPACE_NAV_ICONS[g.id],
+}));
 
 /**
  * A teammate's state, as a flap face. The board's whole promise is that
@@ -202,33 +227,30 @@ export function Sidebar({
         </div>
       </div>
 
-      <nav className="sidebar-section" style={{ padding: "8px 8px 4px" }} aria-label="Destinations">
-        {PRIMARY_NAV.map((item) => {
-          const Icon = item.icon;
-          const isActive =
-            currentView === item.id || (item.id === "chat" && currentView === "talk");
-          return (
-            <button
-              key={item.id}
-              onClick={() => onViewChange?.(item.id === "chat" ? "talk" : item.id)}
-              title={folded ? item.label : undefined}
-              className={`channel-link ${isActive ? "active" : ""}`}
-              style={folded ? { justifyContent: "center", padding: 0 } : undefined}
-              aria-current={isActive ? "page" : undefined}
-            >
-              <Icon size={14} className="shrink-0" />
-              {!folded && <span className="channel-name">{item.label}</span>}
-              {!folded && item.id === "work" && (workAttentionCount || 0) > 0 && (
-                <span className="flap flap-hold" style={{ marginLeft: "auto" }}>
-                  <span>{workAttentionCount}</span>
-                </span>
-              )}
-              {!folded && item.countKey && (approvalCount || 0) > 0 && (
-                <span className="sidebar-nav-count">{approvalCount}</span>
-              )}
-            </button>
-          );
-        })}
+      <nav className="sidebar-section" aria-label="Destinations">
+        {PRIMARY_NAV.map((item) => (
+          <NavRow
+            key={item.id}
+            item={item}
+            folded={folded}
+            active={currentView === item.id || (item.id === "chat" && currentView === "talk")}
+            onActivate={() => onViewChange?.(item.id === "chat" ? "talk" : item.id)}
+            count={item.id === "work" ? workAttentionCount : item.countKey ? approvalCount : 0}
+            countTone={item.id === "work" ? "flap" : "count"}
+          />
+        ))}
+      </nav>
+
+      <nav className="sidebar-section sidebar-nav-workspace" aria-label="Workspace">
+        {WORKSPACE_NAV.map((item) => (
+          <NavRow
+            key={item.id}
+            item={item}
+            folded={folded}
+            active={currentView === item.id}
+            onActivate={() => onViewChange?.(item.id)}
+          />
+        ))}
       </nav>
 
       {!folded && (
@@ -390,6 +412,46 @@ export function Sidebar({
         />
       </div>
     </aside>
+  );
+}
+
+/**
+ * A roster row is a destination, so it carries the same lamp the rest of the
+ * board carries: the flap face inverts and a green rule lights behind it.
+ */
+function NavRow({
+  item,
+  active,
+  folded,
+  onActivate,
+  count = 0,
+  countTone = "count",
+}: {
+  item: NavItem;
+  active?: boolean;
+  folded?: boolean;
+  onActivate: () => void;
+  count?: number;
+  countTone?: "count" | "flap";
+}) {
+  const Icon = item.icon;
+  return (
+    <button
+      onClick={onActivate}
+      title={folded ? `${item.label}${count > 0 ? ` — ${count}` : ""}` : undefined}
+      className={`channel-link ${active ? "active" : ""}`}
+      aria-current={active ? "page" : undefined}
+    >
+      <Icon size={14} className="shrink-0" />
+      {!folded && <span className="channel-name">{item.label}</span>}
+      {!folded && count > 0 && (countTone === "flap" ? (
+        <span className="flap flap-hold">
+          <span>{count}</span>
+        </span>
+      ) : (
+        <span className="sidebar-nav-count">{count}</span>
+      ))}
+    </button>
   );
 }
 

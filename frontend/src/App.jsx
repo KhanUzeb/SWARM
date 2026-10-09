@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // The API client lives in lib.js, which is its only owner.
-import { apiJson, CACHE_TTL, HISTORY_LIMIT, fmtBytes } from "./lib.js";
+import { apiJson, CACHE_TTL, HISTORY_LIMIT, fmtBytes, quickCreatePayload } from "./lib.js";
+import {
+  WS_MESSAGE_FRAME_TYPES,
+  WS_DELTA_FRAME_TYPES,
+  WS_APPROVAL_FRAME_TYPES,
+  WS_ROSTER_FRAME_TYPES,
+  shouldFlushOutbox,
+} from "./lib/wsFrames.js";
 import {
   Avatar, Button, Input, Textarea, Card, ScrollArea, EmptyState, Divider, CodeBlock,
 } from "./ui.jsx";
@@ -19,7 +26,7 @@ import { WorkRail, WorkRailSheet, WorkDetail } from "./components/WorkRail.jsx";
 import { ApprovalsInbox } from "./components/ApprovalsInbox";
 import { pairAuditLines } from "./work/inspectorModel";
 import { Flap, Lamp } from "./components/Flap";
-import { X, MessageSquare } from "lucide-react";
+import { X, MessageSquare, Folder, FileText } from "lucide-react";
 import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js";
 
 // PANEL_GROUPS is owned by ComputerPanel.jsx. The copy that lived here was
@@ -51,8 +58,6 @@ export default function App() {
   const [loginErr, setLoginErr] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
-  const [computerOpen, setComputerOpen] = useState(false);
-  const [panelTab, setPanelTab] = useState("files");
   const [mainView, setMainView] = useState("talk");
   const [cmdOpen, setCmdOpen] = useState(false);
   const [typing, setTyping] = useState("");
@@ -94,6 +99,11 @@ export default function App() {
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef(null);
   const intentionalClose = useRef(false);
+  const outboxRef = useRef(outbox);
+  outboxRef.current = outbox;
+  const wsStatusRef = useRef(wsStatus);
+  wsStatusRef.current = wsStatus;
+  const flushChain = useRef(Promise.resolve());
   const tokenRef = useRef(token);
   const channelRef = useRef(channel);
   tokenRef.current = token; channelRef.current = channel;
@@ -383,13 +393,18 @@ export default function App() {
     ws.onmessage = (ev) => {
       if (gen !== wsGen.current) return; // stale socket from a previous channel
       let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-      if (msg.type === "message" || msg.type === "live") ingestLive(msg.message || msg.data || msg);
-      else if (msg.type === "message_deleted" || msg.type === "reaction") ingestLive(msg);
+      if (WS_MESSAGE_FRAME_TYPES.has(msg.type)) ingestLive(msg.message || msg.data || msg);
+      else if (WS_DELTA_FRAME_TYPES.has(msg.type)) ingestLive(msg);
       else if (msg.type === "channel_deleted" && msg.channel_id) handleChannelDeletedRef.current?.(msg.channel_id);
       else if (msg.type === "typing") setTyping(msg.author);
-      else if (msg.type === "agents_changed") {
-        loadChannels(); loadAllAgents(); loadTeams();
-        flash("New bot is ready — check the sidebar", "success");
+      else if (WS_APPROVAL_FRAME_TYPES.has(msg.type)) { loadApprovals(); refreshWork(); }
+      else if (WS_ROSTER_FRAME_TYPES.has(msg.type)) {
+        loadAllAgents();
+        if (msg.type === "bot_archived") loadChannels();
+        if (msg.type === "agents_changed") {
+          loadChannels(); loadTeams();
+          flash("New bot is ready — check the sidebar", "success");
+        }
       }
       else if (msg.type === "work" && msg.event) ingestWorkEventRef.current?.(msg.event);
       else if (msg.type === "agent_stream_start" && msg.author) {
@@ -498,8 +513,10 @@ export default function App() {
   // ── Keyboard shortcuts ──
   useEffect(() => {
     function onKey(e) {
+      // Ctrl/Cmd+C is deliberately unbound: Places and Connect are
+      // destinations in the navigation now, and this combination is the
+      // browser's copy on every platform.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdOpen(true); }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c" && user) { e.preventDefault(); setComputerOpen(o => !o); }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "w" && user) {
         e.preventDefault();
         setWorkRailOpen(o => { localStorage.setItem("swarm_work_rail", o ? "0" : "1"); return !o; });
@@ -562,39 +579,45 @@ export default function App() {
     }
   }
 
-  // Flush the offline outbox whenever the socket reconnects.
+  // Flush the offline outbox over a live socket. The queue can grow while
+  // already connected (HTTP outage with the socket up), so this watches the
+  // queue itself — not just reconnects. Drains are chained on one promise so
+  // overlapping effect runs can never POST the same entry twice; each drain
+  // snapshots its channel's queue and a later drain picks up leftovers.
   useEffect(() => {
-    if (wsStatus !== "connected" || !tokenRef.current) return;
-    const pending = outbox[channelRef.current] || [];
-    if (!pending.length) return;
-    let cancelled = false;
-    (async () => {
+    if (!tokenRef.current) return;
+    if (!shouldFlushOutbox(wsStatusRef.current, (outboxRef.current[channelRef.current] || []).length)) return;
+    flushChain.current = flushChain.current.then(async () => {
+      if (wsStatusRef.current !== "connected" || !tokenRef.current) return;
+      const channelId = channelRef.current;
+      const pending = [...(outboxRef.current[channelId] || [])];
       for (const entry of pending) {
-        if (cancelled) return;
         const body = { author: entry.author, body: entry.text, author_kind: "human", parent_id: entry.parentId };
         if (entry.model) body.model = entry.model;
+        let res;
         try {
-          const res = await apiJson(`/api/channels/${channelRef.current}/messages`, {
+          res = await apiJson(`/api/channels/${channelId}/messages`, {
             token: tokenRef.current, method: "POST", body,
           });
-          if (!res.ok) return; // keep the rest queued; try again next reconnect
-          if (res.data) remember(res.data);
         } catch {
-          return;
+          return; // offline again — keep the rest queued
         }
+        if (!res.ok) return; // e.g. rate-limited — keep the rest queued
+        if (res.data) remember(res.data);
         persistOutbox(prev => {
-          const rest = (prev[channelRef.current] || []).slice(1);
+          const list = prev[channelId] || [];
+          const at = list.indexOf(entry);
+          const rest = at === -1 ? list : [...list.slice(0, at), ...list.slice(at + 1)];
           const next = { ...prev };
-          if (rest.length) next[channelRef.current] = rest;
-          else delete next[channelRef.current];
+          if (rest.length) next[channelId] = rest;
+          else delete next[channelId];
           return next;
         });
       }
-      loadContextStats(channelRef.current);
-    })();
-    return () => { cancelled = true; };
+      loadContextStats(channelId);
+    }).catch(() => { /* one drain must never break the chain */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsStatus]);
+  }, [wsStatus, outbox, channel]);
 
   async function stopChat() {
     try {
@@ -711,7 +734,8 @@ export default function App() {
     { id: "cmd-new-agent", group: "Create", label: "New agent", hint: "bot", keywords: ["agent", "bot", "teammate"], action: () => setQuickAction("agent") },
     { id: "cmd-new-group", group: "Create", label: "New group", hint: "pod", keywords: ["group", "team", "pod"], action: () => setQuickAction("group") },
     { id: "cmd-new-dm", group: "Create", label: "New direct message", hint: "person", keywords: ["dm", "message", "person"], action: () => setQuickAction("dm") },
-    { id: "cmd-toggle-computer", group: "View", label: "Toggle computer panel", keywords: ["computer", "sandbox", "screen"], action: () => setComputerOpen(o => !o) },
+    { id: "cmd-view-places", group: "View", label: "Go to Places", hint: "sandbox", keywords: ["places", "sandbox", "system", "browser", "files"], action: () => setMainView("places") },
+    { id: "cmd-view-connect", group: "View", label: "Go to Connect", hint: "providers", keywords: ["connect", "ai", "providers", "apps", "tools", "plugins"], action: () => setMainView("connect") },
     { id: "cmd-view-talk", group: "View", label: "Go to Talk", keywords: ["chat", "message"], action: () => setMainView("talk") },
     { id: "cmd-view-paper", group: "View", label: "Go to Paper", keywords: ["paper", "latex", "doc"], action: () => setMainView("paper") },
     { id: "cmd-view-files", group: "View", label: "Go to Files", keywords: ["files", "sandbox"], action: () => setMainView("files") },
@@ -725,7 +749,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app workspace ${threadId ? "thread-open" : ""} ${computerOpen ? "computer-open" : ""} ${workRailOpen ? "work-rail-open" : ""} ${rosterFolded ? "roster-folded" : ""}`}>
+    <div className={`app workspace ${threadId ? "thread-open" : ""} ${workRailOpen ? "work-rail-open" : ""} ${rosterFolded ? "roster-folded" : ""}`}>
       <Sidebar
         user={user}
         channels={channels}
@@ -765,8 +789,6 @@ export default function App() {
         <TopBar
           channel={current}
           agents={agents}
-          onToggleComputer={() => setComputerOpen(o => !o)}
-          computerOpen={computerOpen}
           onOpenCommandPalette={() => setCmdOpen(true)}
           onOpenSidebar={() => setSidebarOpen(true)}
           onViewChange={setMainView}
@@ -785,7 +807,7 @@ export default function App() {
         />
 
         <main id="main">
-          {["dashboard", "home"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} />}
+          {["dashboard", "home"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} onOpenConnect={() => setMainView("connect")} />}
           {["work", "workflows", "runs"].includes(mainView) && <WorkHome token={token} onOpenRun={setSelectedRun} />}
           {mainView === "talk" && (
             <MessageList
@@ -836,6 +858,17 @@ export default function App() {
             />
           )}
 
+          {["places", "connect"].includes(mainView) && (
+            <ComputerPanel
+              key={mainView}
+              group={mainView}
+              computer={computer}
+              token={token}
+              meRole={meRole}
+              onRefresh={loadComputer}
+              flash={flash}
+            />
+          )}
           {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
           {mainView === "files" && <FilesView computer={computer} />}
           {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => { setChannel(id); setMainView("talk"); }} />}
@@ -985,19 +1018,7 @@ export default function App() {
           </WorkRailSheet>
         );
       })()}
-      {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) { setChannel(id); setMainView("talk"); } flash("Created", "success"); }} />}
-
-      {computerOpen && (
-        <ComputerPanel
-          computer={computer}
-          token={token}
-          user={user}
-          meRole={meRole}
-          onClose={() => setComputerOpen(false)}
-          onRefresh={loadComputer}
-          flash={flash}
-        />
-      )}
+      {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} flash={flash} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) { setChannel(id); setMainView("talk"); } flash("Created", "success"); }} />}
 
       {threadId && (
         <ThreadPanel
@@ -1270,12 +1291,13 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
   );
 }
 
-function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
+function QuickCreateModal({ action, token, agents, flash, onClose, onCreated }) {
   const [name, setName] = useState("");
   const [detail, setDetail] = useState("");
   const [avatar, setAvatar] = useState("");
   const [members, setMembers] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const [templates, setTemplates] = useState([]);
   const [templatesLoaded, setTemplatesLoaded] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
@@ -1300,27 +1322,29 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
 
   async function submit(event) {
     event.preventDefault();
-    if (!name.trim() || (needsMembers && !members.length)) return;
+    // The payload builder re-validates: the disabled submit button is a
+    // courtesy, this is what actually refuses an incomplete form.
+    const built = quickCreatePayload(action, { name, detail, members, avatar, templates, selectedTemplate });
+    if (built.error) { setError(built.error); return; }
     setBusy(true);
-    let path = "/api/channels";
-    let body = { name: name.trim() };
-    if (action === "dm") { path = "/api/dms"; body = { handle: name.trim() }; }
-    if (action === "group") { body = { name: name.trim(), topic: detail.trim(), kind: "group", members }; }
-    if (action === "team") { path = "/api/teams"; body = { name: name.trim(), description: detail.trim(), members }; }
-    if (action === "agent") {
-      const tpl = templates.find(t => t.id === selectedTemplate);
-      path = "/api/agents";
-      body = {
-        name: name.trim(),
-        display_name: name.trim(),
-        avatar: avatar.trim().slice(0, 500),
-        system_prompt: detail.trim() || `You are ${name.trim()}, a helpful specialist teammate.`,
-        job: tpl ? tpl.job : "Teammate",
-      };
+    setError("");
+    try {
+      const response = await apiJson(built.path, { token, method: "POST", body: built.body });
+      if (response.ok) onCreated(response.data?.id || response.data?.dm_channel_id);
+      else {
+        // A failed create used to vanish silently — the dialog stayed open
+        // with no word about what happened. Say it here and as a toast.
+        const failure = response.data?.detail || "Could not create it — try again.";
+        setError(failure);
+        flash?.(failure, "error");
+      }
+    } catch (e) {
+      const failure = e?.message || "Could not create it — check your connection.";
+      setError(failure);
+      flash?.(failure, "error");
+    } finally {
+      setBusy(false);
     }
-    const response = await apiJson(path, { token, method: "POST", body });
-    setBusy(false);
-    if (response.ok) onCreated(response.data?.id || response.data?.dm_channel_id);
   }
 
   useEffect(() => {
@@ -1347,6 +1371,7 @@ function QuickCreateModal({ action, token, agents, onClose, onCreated }) {
           <button className="panel-close" onClick={onClose} aria-label="Close dialog"><X size={14} /></button>
         </header>
         <form className="quick-create-form" onSubmit={submit}>
+          {error && <p className="error-text" role="alert">{error}</p>}
           {isAgent && templates.length > 0 && (
             <div className="template-picker">
               <span className="reg">Start from a template</span>

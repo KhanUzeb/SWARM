@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiJson, Card, Button, Input, Textarea, Badge, EmptyState } from "../ui.jsx";
-import ProviderPanel from "../ai-support/ProviderPanel.jsx";
 import ModelPicker from "../ai-support/ModelPicker";
-import { ChevronRight, Workflow, X, ChevronDown } from "lucide-react";
+import { ChevronRight, Workflow, X } from "lucide-react";
 import { Lamp } from "./Flap";
 
 const starterGraph = {
@@ -18,7 +17,7 @@ function firstConnectedProvider(providers) {
   return providers.find(p => p.connected && p.via === "stored") || providers.find(p => p.connected) || null;
 }
 
-export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
+export function CommandCenter({ token, flash, onOpenRun, onOpenConnect, agents = [] }) {
   const [workflows, setWorkflows] = useState([]);
   const [runs, setRuns] = useState([]);
   const [providers, setProviders] = useState([]);
@@ -35,9 +34,11 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
   const [editNodes, setEditNodes] = useState([]);
   const [agentName, setAgentName] = useState("swarm");
   const [agentModel, setAgentModel] = useState("");
-  const [providersCollapsed, setProvidersCollapsed] = useState(() => {
-    try { return localStorage.getItem("swarm.providersCollapsed") === "1"; } catch { return false; }
-  });
+
+  // Provider connections live in Connect now: this card keeps only the
+  // readiness signal (the same providers fetch the launch form already
+  // needs) and a link, so the provider panel mounts exactly once per session.
+  const connectedCount = providers.filter(p => p.connected).length;
 
   const connectedProvider = useMemo(
     () => providers.find(p => p.id === modelProviderId) || firstConnectedProvider(providers),
@@ -79,7 +80,7 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
     ev.preventDefault();
     if (!objective.trim()) return;
     if (!llmReady) {
-      flash?.("Connect an AI provider below before launching a run", "error");
+      flash?.("Connect an AI provider in Connect before launching a run", "error");
       return;
     }
     setBusy(true);
@@ -189,7 +190,21 @@ export function CommandCenter({ token, flash, onOpenRun, agents = [] }) {
       </section>
       {editing && <div className="workflow-editor-backdrop"><section className="workflow-editor"><header className="run-monitor-head"><div><h2>{editing.name}</h2></div><button className="panel-close" onClick={() => setEditing(null)} aria-label="Close designer"><X size={14} /></button></header><div className="workflow-node-list">{editNodes.map((node, index) => <div className="workflow-node" key={node.id}><span className="node-index">{index + 1}</span><span><b>{node.label}</b><small>{node.type === "agent" ? `${node.agent}${node.model ? ` · ${node.model}` : ""}` : node.type}</small></span><button className="node-remove" onClick={() => setEditNodes(nodes => nodes.filter(n => n.id !== node.id))} aria-label={`Remove ${node.label}`}><X size={12} /></button></div>)}</div><div className="cc-inline-form workflow-add"><select className="input" value={agentName} onChange={e => setAgentName(e.target.value)}>{agents.length ? agents.map(a => <option key={a.name} value={a.name}>{a.display_name || a.name}</option>) : <option value="swarm">swarm</option>}</select><ModelPicker token={token} providerId={connectedProvider?.id} value={agentModel} onChange={setAgentModel} placeholder="Model from API" /><Button variant="ghost" onClick={() => setEditNodes(nodes => [...nodes, { id: `agent-${Date.now()}`, type: "agent", label: `Agent ${agentName}`, agent: agentName, ...(agentModel.trim() ? { model: agentModel.trim() } : {}) }])}>Add agent</Button></div><footer className="workflow-editor-actions"><Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button><Button variant="primary" disabled={busy} onClick={saveEditor}>Save workflow</Button></footer></section></div>}
       <section className="cc-runs"><div className="cc-section-head"><h2>Runs</h2><span className="cc-count">{runs.length}</span></div>{runs.length ? <div className="cc-run-list">{runs.slice(0, 8).map(r => <button className="cc-run-row" key={r.id} onClick={() => onOpenRun?.(r)}><Lamp tone={r.status === "completed" ? "go" : r.status === "failed" ? "hold" : "amber"} /><span className="run-objective">{r.objective}</span><Badge variant={r.status === "completed" ? "success" : r.status === "failed" ? "error" : "subtle"}>{r.status.replaceAll("_", " ")}</Badge><span className="text-subtle" style={{ fontSize: 12 }}>{new Date(r.created_at * 1000).toLocaleString()}</span></button>)}</div> : <EmptyState kind="run" title="No runs yet" message="Launch a brief and your live run history will appear here." />}</section>
-      <section className={`cc-providers${providersCollapsed ? " collapsed" : ""}`}><div className="cc-section-head"><h2>AI providers</h2><span style={{ display: "flex", alignItems: "center", gap: 10 }}><span className="cc-provider-note" style={{ display: providersCollapsed ? "none" : undefined }}>API key or supported OAuth</span><button className="btn btn-ghost btn-sm" aria-expanded={!providersCollapsed} aria-label={providersCollapsed ? "Expand providers" : "Minimise providers"} onClick={() => { const next = !providersCollapsed; setProvidersCollapsed(next); try { localStorage.setItem("swarm.providersCollapsed", next ? "1" : "0"); } catch {} }}>{providersCollapsed ? "Show" : "Minimise"} <ChevronDown size={12} aria-hidden /></button></span></div>{!providersCollapsed && <ProviderPanel token={token} onStatusChange={load} flash={(message, error) => flash?.(message, error ? "error" : "success")} />}{providersCollapsed && <div className="cc-provider-collapsed-note"><span className="cc-provider-note">Collapsed — {providers.filter(p => p.connected).length} connected</span> <button className="btn btn-subtle btn-sm" onClick={() => { setProvidersCollapsed(false); try { localStorage.setItem("swarm.providersCollapsed", "0"); } catch {} }}>Expand</button></div>}</section>
+      <section className="cc-providers" aria-label="AI provider status">
+        <div className="cc-section-head">
+          <h2>AI providers</h2>
+        </div>
+        <div className="row">
+          <Lamp tone={llmReady ? "go" : "hold"} />
+          <p className="cc-provider-note" role="status" style={{ margin: 0, flex: 1 }}>
+            {connectedProvider
+              ? `${connectedCount} connected — answering via ${connectedProvider.name}.`
+              : "No AI provider connected — runs stay queued until one is."}
+          </p>
+          <Button variant="secondary" size="sm" onClick={onOpenConnect}>Open Connect</Button>
+        </div>
+        {!llmReady && <p className="cc-provider-note">Connect an API key in Connect, or set GROQ_API_KEY in your environment.</p>}
+      </section>
     </div>
   );
 }

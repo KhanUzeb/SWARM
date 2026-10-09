@@ -2,6 +2,7 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Flap, Lamp } from "@/components/Flap";
+import { PANEL_GROUPS } from "./ComputerPanel.jsx";
 import {
   Activity,
   Bot,
@@ -9,15 +10,12 @@ import {
   PanelRight,
   Search,
   ShieldAlert,
-  Terminal,
   Users,
 } from "lucide-react";
 
 interface TopBarProps {
   channel?: { id?: string; name?: string; topic?: string; kind?: string };
   agents: Array<{ name: string; status?: string; display_name?: string }>;
-  onToggleComputer: () => void;
-  computerOpen: boolean;
   onOpenCommandPalette: () => void;
   onViewChange: (view: string) => void;
   currentView: string;
@@ -50,6 +48,8 @@ const VIEW_ALIASES: Record<string, string> = {
   agents: "agents",
   knowledge: "knowledge",
   approvals: "approvals",
+  places: "places",
+  connect: "connect",
 };
 
 const VIEW_TARGETS: Record<string, string> = {
@@ -59,6 +59,8 @@ const VIEW_TARGETS: Record<string, string> = {
   agents: "agents",
   knowledge: "knowledge",
   approvals: "approvals",
+  places: "places",
+  connect: "connect",
 };
 
 const VIEWS: Array<[string, string]> = [
@@ -68,13 +70,14 @@ const VIEWS: Array<[string, string]> = [
   ["agents", "Roster"],
   ["knowledge", "Knowledge"],
   ["approvals", "Approvals"],
+  // The machine room names its own destinations: Places and Connect come
+  // from PANEL_GROUPS rather than being spelled a third time here.
+  ...PANEL_GROUPS.map((g) => [g.id, g.label] as [string, string]),
 ];
 
 export function TopBar({
   channel,
   agents,
-  onToggleComputer,
-  computerOpen,
   onOpenCommandPalette,
   onViewChange,
   currentView,
@@ -93,7 +96,6 @@ export function TopBar({
   // Counted across every channel: an approval raised in another room still
   // needs a decision, and the inbox is where all of them are reviewed.
   const pendingApprovals = approvals.filter((a) => a.status === "pending");
-  const working = agents.filter((a) => a.status === "working").length;
   const attention = (workAttention || []).length;
   const activeRuns = (workActive || []).length;
 
@@ -147,14 +149,18 @@ export function TopBar({
       </div>
 
       <div className="topbar-center">
-        <div className="view-tabs" role="tablist" aria-label="Views">
+        {/* These are destinations, not tabs over one panel: the Sidebar marks
+            the same list with aria-current, so this strip does too. Keeping
+            them as plain buttons means Tab and the arrow keys behave exactly
+            as they do anywhere else in the app. */}
+        <nav className="view-tabs" aria-label="Views">
           {VIEWS.map(([v, label]) => {
             const active = normalizedView === v;
             return (
               <button
                 key={v}
-                role="tab"
-                aria-selected={active}
+                type="button"
+                aria-current={active ? "page" : undefined}
                 onClick={() => go(v)}
                 className={`view-tab ${active ? "active" : ""}`}
               >
@@ -162,7 +168,7 @@ export function TopBar({
               </button>
             );
           })}
-        </div>
+        </nav>
       </div>
 
       <div className="topbar-right">
@@ -210,18 +216,6 @@ export function TopBar({
             aria-label="Toggle work rail"
           >
             <PanelRight size={14} />
-          </Button>
-        </Tooltip>
-
-        <Tooltip content={computerOpen ? "Hide computer" : "Open computer"}>
-          <Button
-            variant={computerOpen ? "secondary" : "ghost"}
-            size="icon-sm"
-            onClick={onToggleComputer}
-            aria-expanded={computerOpen}
-            aria-label="Toggle computer"
-          >
-            <Terminal size={14} />
           </Button>
         </Tooltip>
       </div>
