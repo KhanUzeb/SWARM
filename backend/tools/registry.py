@@ -1,6 +1,7 @@
 """Central tool registry: builtins, DB custom tools, and plugins/."""
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import inspect
 import json
@@ -321,7 +322,8 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "computer_run",
             "description": (
-                "Run a shell command in the shared sandbox (isolated cwd, 30s timeout). "
+                "Run a shell command in the shared sandbox (working directory "
+                "plus 30s timeout; not a security boundary). "
                 "For this machine's repo and host files, use system_run."
             ),
             "parameters": {
@@ -518,7 +520,7 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
                 "Run a shell command on this machine (full PATH, cwd = the current "
                 "System folder from Computer → System, which can be the project, Home, "
                 "Desktop, or any other directory). 60s timeout. Destructive commands "
-                "are blocked. computer_run is the isolated sandbox."
+                "are blocked. computer_run is the shared sandbox."
             ),
             "parameters": {
                 "type": "object",
@@ -612,6 +614,13 @@ from .. import db  # noqa: E402  — after constants so models can import them
 
 PLUGINS_DIR = Path(__file__).resolve().parent.parent.parent / "plugins"
 
+# Bound for one python-plugin call. Without it a hanging handler stalls the
+# agent turn past every other budget: the wall-clock check only runs between
+# rounds, never mid-await.
+PYTHON_PLUGIN_TIMEOUT = 30.0
+
+_VALID_PLUGIN_MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class ToolRegistry:
     def __init__(self) -> None:
@@ -626,6 +635,13 @@ class ToolRegistry:
         self._plugin_meta.clear()
         self._plugin_modules.clear()
         for row in await db.list_custom_tools(enabled_only=True):
+            # A custom tool must never silently shadow a builtin: execute()
+            # prefers builtins, so a colliding custom would either be dead
+            # (confusing) or, after a refactor, live (dangerous). Skip it so
+            # the catalog holds one entry per name and the builtin keeps its
+            # reviewed schema and implementation.
+            if row["name"] in BUILTIN_SCHEMAS:
+                continue
             self._custom[row["name"]] = row
         self._load_plugins()
 
@@ -737,6 +753,7 @@ class ToolRegistry:
         workspace_helpers: dict[str, Callable[..., Any]],
         delegate_depth: int = 0,
         delegate_chain: tuple[str, ...] = (),
+        audit_sink: list[dict[str, Any]] | None = None,
     ) -> str:
         if name not in allowed:
             return f"(tool {name} is disabled for this agent)"
@@ -747,6 +764,7 @@ class ToolRegistry:
                 workspace_helpers=workspace_helpers,
                 delegate_depth=delegate_depth,
                 delegate_chain=delegate_chain,
+                audit_sink=audit_sink,
             )
         if name in self._custom:
             return await self._exec_custom(self._custom[name], args)
@@ -771,9 +789,16 @@ class ToolRegistry:
         workspace_helpers: dict[str, Callable[..., Any]],
         delegate_depth: int = 0,
         delegate_chain: tuple[str, ...] = (),
+        audit_sink: list[dict[str, Any]] | None = None,
     ) -> str:
         if name == "read_only_shell":
-            return shell_runner(args.get("command", ""))
+            from . import guard as guard_mod
+
+            cmd = args.get("command", "")
+            match = guard_mod.is_dangerous(cmd or "")
+            if match:
+                return guard_mod.refusal_reason(cmd, match)
+            return shell_runner(cmd)
         if name == "search_channel_history":
             rows = await db.search_history(channel_id, args.get("query", ""), limit=10)
             if not rows:
@@ -866,7 +891,7 @@ class ToolRegistry:
             return await agent_mod.generate_delegate_reply(
                 args.get("agent", ""), args.get("task", ""), channel_id,
                 parent_name=agent_name, depth=delegate_depth,
-                chain=delegate_chain,
+                chain=delegate_chain, audit_sink=audit_sink,
             )
         if name == "computer_run":
             from . import computer
@@ -1071,7 +1096,16 @@ class ToolRegistry:
         plugin_dir = Path(row.get("plugin_dir") or "")
         module_name = handler.get("module") or "handler"
         func_name = handler.get("function") or row.get("tool_name") or "run"
-        path = plugin_dir / f"{module_name}.py"
+        # The manifest is unvetted input: a module of "../evil" or "/abs/path"
+        # would otherwise escape the plugin directory and load arbitrary code.
+        if not _VALID_PLUGIN_MODULE.match(module_name):
+            return f"(invalid plugin module {module_name!r} — use a plain python module name)"
+        try:
+            base = plugin_dir.resolve()
+            path = (base / f"{module_name}.py").resolve()
+            path.relative_to(base)
+        except (OSError, ValueError):
+            return f"(invalid plugin module {module_name!r} — outside the plugin directory)"
         if not path.is_file():
             return f"(plugin handler missing: {path})"
         cache_key = f"{row.get('plugin_id')}:{module_name}:{path}"
@@ -1092,9 +1126,23 @@ class ToolRegistry:
             call_kwargs = _plugin_call_kwargs(
                 fn, args, agent_name=agent_name, channel_id=channel_id,
             )
-            result = fn(**call_kwargs)
-            if inspect.isawaitable(result):
-                result = await result
+            try:
+                if inspect.iscoroutinefunction(fn):
+                    result = await asyncio.wait_for(
+                        fn(**call_kwargs), PYTHON_PLUGIN_TIMEOUT)
+                else:
+                    # Sync handlers run in a worker thread so a blocking call
+                    # still hits the same bound instead of stalling the turn.
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(fn, **call_kwargs),
+                        PYTHON_PLUGIN_TIMEOUT)
+                    if inspect.isawaitable(result):
+                        result = await asyncio.wait_for(
+                            result, PYTHON_PLUGIN_TIMEOUT)
+            except (asyncio.TimeoutError, TimeoutError):
+                return f"(plugin timed out after {PYTHON_PLUGIN_TIMEOUT:g}s)"
+            except Exception as exc:  # noqa: BLE001
+                return f"(plugin python error: {exc})"
         except Exception as exc:  # noqa: BLE001
             return f"(plugin python error: {exc})"
         if result is None:

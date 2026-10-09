@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from ..models import DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, resolve_groq_model
+from ..settings import get_settings
 from .config import OpenAICompatibleConfig, RuntimeProviderAuth
 from .providers import get_provider, providers_by_priority
 from . import store
@@ -39,7 +40,7 @@ async def resolve_effective_model(agent_model: str, *, override: str | None = No
     """Pick the model for an agent turn: explicit override, env, provider default, then agent row."""
     if override and override.strip():
         return resolve_groq_model(override.strip())
-    env = (os.environ.get("SWARM_AGENT_MODEL") or "").strip()
+    env = (get_settings().agent_model or "").strip()
     if env:
         return resolve_groq_model(env)
     chosen = resolve_groq_model((agent_model or "").strip())
@@ -79,7 +80,9 @@ def openai_compatible_config(auth: RuntimeProviderAuth) -> OpenAICompatibleConfi
     if auth.provider_id == "custom":
         # Generic BYO endpoint: explicit env wins so operators can point at
         # Ollama / LM Studio / vLLM without a code change (Rakazo-style).
-        env_base = (os.environ.get("SWARM_OPENAI_COMPAT_BASE_URL") or "").strip()
+        # Read through the one settings object so `swarm doctor` and this
+        # client can never disagree about where the endpoint is (AGENTS.md s2).
+        env_base = (get_settings().openai_compat_base_url or "").strip()
         if env_base:
             raw_base = env_base
     base = _normalize_base_url(str(raw_base)) or "https://api.openai.com/v1"
@@ -104,12 +107,18 @@ def build_openai_compatible_client(config: OpenAICompatibleConfig) -> Any:
     """
     from openai import AsyncOpenAI
 
+    from .config import DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
+
     kwargs: dict[str, Any] = {"api_key": config.api_key}
     base = _normalize_base_url(config.base_url)
     if base:
         kwargs["base_url"] = base
     if config.headers:
         kwargs["default_headers"] = dict(config.headers)
+    # Explicit so one hanging provider cannot stall the turn past every run
+    # budget: the wall-clock check only runs between rounds, never mid-await.
+    kwargs["timeout"] = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
+    kwargs["max_retries"] = config.max_retries
     return AsyncOpenAI(**kwargs)
 
 
@@ -185,11 +194,30 @@ class _AnthropicClient:
 
 
 async def iter_provider_attempts(agent_model: str) -> list[tuple[Any, str, str]]:
+    """Ordered fallback chain: (client, resolved_model, provider_id).
+
+    The OpenAI-compatible chain keeps its order from the catalog, and the
+    native Anthropic adapter is inserted at its catalog priority instead of
+    being appended after every OpenAI-compatible provider — so a priority-6
+    Anthropic key is tried before a priority-90 custom endpoint (AGENTS.md s4).
+    Built on iter_openai_compatible_attempts so the two share one seam."""
     attempts = await iter_openai_compatible_attempts(agent_model)
     spec = get_provider("anthropic") or {}
     auth = await resolve_runtime_auth("anthropic")
     if auth is not None and spec.get("kind") == "anthropic":
-        attempts.append((_AnthropicClient(auth), map_model_for_provider(agent_model, "anthropic", stored_model=auth.default_model), "anthropic"))
+        entry = (
+            _AnthropicClient(auth),
+            map_model_for_provider(
+                agent_model, "anthropic", stored_model=auth.default_model),
+            "anthropic",
+        )
+        prio = spec.get("priority", 99)
+        idx = len(attempts)
+        for i, (_, _, pid) in enumerate(attempts):
+            if (get_provider(pid) or {}).get("priority", 99) > prio:
+                idx = i
+                break
+        attempts.insert(idx, entry)
     return attempts
 
 

@@ -65,7 +65,11 @@ async def route(objective: str) -> dict[str, Any]:
         auth = await resolve_runtime_auth(spec["id"])
         if auth is None:
             continue
-        tool_ok = (spec.get("kind") == "openai_compatible") or spec["id"] == "anthropic"
+        # Only OpenAI-compatible providers carry tool calls end to end: the
+        # native Anthropic adapter is text-only (it drops tools kwargs), so
+        # routing coding/research there would silently disable the tools the
+        # task was classified as needing.
+        tool_ok = spec.get("kind") == "openai_compatible"
         if needs_tools(task_type) and not tool_ok:
             continue
         model = auth.default_model or spec.get("default_model")

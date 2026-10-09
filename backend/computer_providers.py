@@ -2,16 +2,17 @@
 
 Rakazo runs bot computers behind a provider-neutral interface
 (``SANDBOX_PROVIDER=docker|e2b|daytona|box|none``) with shared Team
-Computers plus isolated Private computers. Swarm runs on one host, so
+Computers plus separate Private computers. Swarm runs on one host, so
 this module provides the same *shape* without pretending to be a cloud
-runtime:
+runtime (no container or network separation — the sandbox is a working
+directory plus a timeout, and per-bot homes are plain subdirectories):
 
 - ``SWARM_COMPUTER_PROVIDER=local|none|fake`` selects the backend.
   ``local`` is today's sandbox + host-system tools. ``none`` boots the
   product without a computer host. ``fake`` is a deterministic emulator
   for tests only.
 - Team home = the shared sandbox every bot sees (``SWARM_SANDBOX_DIR``).
-- Private home = an isolated per-bot subdirectory
+- Private home = a separate per-bot subdirectory
   (``<sandbox>/private/<agent>``), created on demand. Bots can keep
   drafts there before publishing to the shared workspace.
 
@@ -62,7 +63,7 @@ def team_home() -> Path:
 
 
 def private_home(agent_name: str) -> Path | None:
-    """Isolated Private home for one bot, or None for a bad handle."""
+    """Separate Private home for one bot, or None for a bad handle."""
     name = (agent_name or "").strip()
     if not _AGENT_SEGMENT.match(name):
         return None

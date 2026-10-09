@@ -23,21 +23,46 @@ import unicodedata
 
 # Normalise before matching so `rm  -rf  /`, `rm -r -f /`, and `rm -rf --no-preserve-root /`
 # all reduce to something the patterns below actually see.
-_WS = re.compile(r"[\s ]+")
+# The two non-ASCII members are deliberate: U+00A0 (no-break space) and U+00A1
+# are what a copy-paste turns a space into, and a paste is exactly the input
+# a model hands this function. Written as escapes so no editor can mangle them.
+_WS = re.compile("[\\s\u00a0\u00a1]+")
 _DASHES = re.compile(r"-{2,}")
 # `rm -r -f /` is `rm -rf /` with the flags split apart. Collapse the split form
 # so one pattern covers both spellings.
 _SPLIT_RF = re.compile(r"\b(rm|rmdir)\s+-[a-z]*r[a-z]*\s+-[a-z]*f[a-z]*\b")
+# Every quoting form the shells below accept. A quoted argument means the same
+# thing to the shell as an unquoted one, so quotes are stripped before matching:
+# otherwise `rm -rf " /"` sails past the denylist that stops `rm -rf /`.
+_QUOTES = re.compile(r"[\"'`]")
+# `${VAR}` is the braced spelling of `$VAR` (bash/zsh); `%VAR%` is the cmd.exe
+# spelling. Both name the same home directory, so both must reduce to `$var`
+# or `rm -rf ${HOME}` deletes the user's home while `rm -rf $HOME` is blocked.
+_BRACED_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_CMD_VAR = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
 
 
 def normalize(command: str) -> str:
-    """Collapse whitespace and dash runs so obfuscation does not hide a match."""
+    """Collapse quoting, whitespace and dash runs so obfuscation does not hide a match."""
+    # `is_dangerous` runs on the raw argument before anything coerces it, and
+    # a schema that says "string" does not stop a model sending a number.
+    # Treat anything non-string as un-normalisable text rather than raising:
+    # this runs on the turn's hot path and an exception here would become an
+    # "[agent error: ...]" message instead of the reply.
+    if not isinstance(command, str):
+        command = "" if command is None else str(command)
     raw = unicodedata.normalize("NFKC", command or "")
     # The classic fork bomb needs its parentheses intact, so check for the
     # self-referential shape before punctuation is flattened.
     if re.search(r":\s*\(\s*\)\s*\{", raw):
         return ":(){"
     text = raw.replace("`", " ").replace("$(", " ").replace(")", " ")
+    # Quotes and both variable spellings go before the patterns see the text:
+    # the shells above all accept them, so the denylist must not be nicer than
+    # the thing it is guarding.
+    text = _BRACED_VAR.sub(r"$\1", text)
+    text = _CMD_VAR.sub(r"$\1", text)
+    text = _QUOTES.sub("", text)
     text = _WS.sub(" ", text)
     text = _DASHES.sub("-", text)
     text = text.lower()
@@ -49,7 +74,11 @@ def normalize(command: str) -> str:
 # a pattern nobody can trust.
 _DENY = (
     # filesystem destruction
-    re.compile(r"\brm\b[^|;&]*\s-[a-z]*[rf][a-z]*\s+(?:--?[\w-]+\s+)*(/|~|\$home|\*)"),
+    re.compile(r"\brm\b[^|;&]*\s-[a-z]*[rf][a-z]*\s+(?:--?[\w-]+\s+)*(/|~|\$home|\$[a-z_]+|\*)"),
+    # A whole drive: `rm -rf C:\` and `rm -rf C:\Users` are the same class of
+    # mistake as `rm -rf /`. The Windows denylist already refuses `del C:\`,
+    # so the recursive form must not be the one that slips through.
+    re.compile(r"\brm\b[^|;&]*\s-[a-z]*[rf][a-z]*\s+[a-z]:(?:[/\\]|$)"),
     re.compile(r"\brm\b[^|;&]*\s-[a-z]*[rf][a-z]*\s+\.\s*$"),
     re.compile(r"\brmdir\b[^|;&]*/(\s|$)"),
     # disks and partitions
@@ -63,7 +92,19 @@ _DENY = (
     re.compile(r":\s*\(\s*\)\s*\{"),
     re.compile(r"\b(yes|curl|wget)\b[^|;&]*\|\s*(ba)?sh\b"),
     # credential harvesting and exfiltration to the network
-    re.compile(r"\b(cat|type|get-content)\b[^|;&]*\.env\b"),
+    # Every common reader for a dotenv file, on both shell families: `type`
+    # (cmd), `cat` (posix), `get-content` and its alias `gc` (PowerShell),
+    # `more`/`less`/`head`/`tail`, plus the copy readers that duplicate it.
+    # The file component is matched whole so `cat env.txt` is a name, not a
+    # dotenv, and `cat .\env` (the Windows separator) still counts. The
+    # checked-in documentation suffixes are the exception: `.env.example`
+    # holds placeholder names by convention, not keys.
+    re.compile(
+        r"\b(cat|type|more|less|head|tail|gc|get-content|copy|cp|findstr|sls)\b"
+        r"[^|;&]*(?:^|[\s\"'|;&/\\])(?:"
+        r"\.env(?:\.(?!(?:example|sample|template|dist)\b)[\w.-]*)?|env"
+        r")(?:[\s\"']|$)"
+    ),
     re.compile(r"\b(cat|type)\b[^|;&]*(id_rsa|\.ssh[/\\]|credentials|\.aws[/\\])"),
     re.compile(r"\b(history|fc)\b[^|;&]*\|\s*(curl|wget|nc|ncat)\b"),
     # windows credential dump

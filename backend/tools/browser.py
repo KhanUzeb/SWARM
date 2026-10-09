@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,8 +15,12 @@ LAST_ERROR = ""
 
 
 def enabled() -> bool:
-    flag = (os.environ.get("SWARM_BROWSER") or "1").strip().lower()
-    return flag not in ("0", "false", "no", "off")
+    # The inverted contract lives in the one settings object
+    # (`browser_enabled`: unset means on, and only 0/false/no/off turn it
+    # off), so this is not a second parse surface (AGENTS.md s2).
+    from ..settings import get_settings
+
+    return get_settings().browser_enabled()
 
 
 def _unavailable(detail: str = "") -> str:
@@ -169,7 +172,13 @@ async def press(key: str) -> str:
 
 
 async def wait(ms: int = 1000) -> str:
-    delay = max(0, min(int(ms or 0), 10_000))
+    try:
+        delay = max(0, min(int(ms or 0), 10_000))
+    except (TypeError, ValueError):
+        # The schema declares an integer but the model may send a string;
+        # fall back to the default instead of raising a raw error that the
+        # audit path has to swallow (same coercion as channel_digest).
+        delay = 1000
     await asyncio.sleep(delay / 1000)
     return f"waited {delay}ms"
 

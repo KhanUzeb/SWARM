@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,11 @@ API_PREVIEW_BYTES = 64_000
 DISABLED = (
     "(system tools are disabled. Set SWARM_SYSTEM=1 to let Bots work on this machine.)"
 )
+# Every dotenv spelling carries provider keys, so the whole family is
+# protected, not just the three names that happened to be listed. A missing
+# `.env.staging` or `.env.development` line here is a leaked GROQ_API_KEY
+# in the channel audit (AGENTS.md s4: secrets never leave the machine).
+_PROTECTED_DOTENV = re.compile(r"^\.env(?:\.|$)", re.I)
 _PROTECTED_NAMES = {".env", ".env.local", ".env.production", "swarm.db"}
 _META_KEY = "system_root"
 _WIN_SHELL_JUNCTIONS = {
@@ -46,8 +52,11 @@ _warned = False
 
 
 def enabled() -> bool:
-    raw = (os.environ.get("SWARM_SYSTEM") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    # Through the one settings object, so `on` means on for this flag too
+    # (AGENTS.md s2). The old list accepted only 1/true/yes/on.
+    from ..settings import get_settings
+
+    return get_settings().system_enabled()
 
 
 def warn_if_exposed(logger: Any = None) -> str | None:
@@ -60,10 +69,11 @@ def warn_if_exposed(logger: Any = None) -> str | None:
     """
     if not enabled():
         return None
-    host = (os.environ.get("SWARM_HOST") or "").strip().lower()
-    bind = (os.environ.get("SWARM_BIND") or "").strip().lower()
-    # uvicorn's own default is 127.0.0.1, so an unset host is loopback-only.
-    candidates = {c for c in (host, bind) if c}
+    from ..settings import get_settings
+
+    # The bind addresses are the settings object's, not a second read of
+    # SWARM_HOST / SWARM_BIND here (AGENTS.md s2).
+    candidates = set(get_settings().bind_candidates())
     if not candidates or candidates <= {"127.0.0.1", "localhost", "::1"}:
         return None
     root = str(system_root())
@@ -80,8 +90,9 @@ def warn_if_exposed(logger: Any = None) -> str | None:
 
 
 def unrestricted() -> bool:
-    raw = (os.environ.get("SWARM_SYSTEM_UNRESTRICTED") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    from ..settings import get_settings
+
+    return get_settings().system_unrestricted_ok()
 
 
 def reset_runtime() -> None:
@@ -119,7 +130,12 @@ def _validate_root(candidate: Path) -> Path | None:
 
 
 def _env_or_repo_root() -> Path:
-    override = (os.environ.get("SWARM_SYSTEM_ROOT") or "").strip()
+    from ..settings import get_settings
+
+    # Read through the one settings object (AGENTS.md s2): this is the folder
+    # every host tool is bound to, so a second parse surface here would let
+    # the code and `swarm doctor` disagree about where that is.
+    override = (get_settings().system_root or "").strip()
     candidate = Path(override).expanduser() if override else _repo_root()
     try:
         resolved = candidate.resolve()
@@ -137,7 +153,22 @@ def system_root() -> Path:
 
 
 def _host_env() -> dict[str, str]:
+    return _sanitized_host_env()
+
+
+# Env vars whose value must never reach a tool result. Tool output is
+# persisted to the channel audit (AGENTS.md s6), so a host command that
+# prints its environment (`set`, `env`, `printenv`) would otherwise paste
+# provider keys and the seal secret into chat history.
+_SECRET_NAME_HINTS = ("secret", "key", "token", "password", "credentials")
+
+
+def _sanitized_host_env() -> dict[str, str]:
     env = os.environ.copy()
+    for name in list(env.keys()):
+        lowered = name.lower()
+        if name == "SWARM_SECRET" or any(hint in lowered for hint in _SECRET_NAME_HINTS):
+            env.pop(name, None)
     env["SWARM_SYSTEM_ROOT"] = str(system_root())
     return env
 
@@ -153,6 +184,12 @@ def rel_to_root(path: Path) -> str:
 
 def safe_path(rel: str | None) -> Path | None:
     root = system_root()
+    # The schema says string. A number, a list or null is a schema violation,
+    # and treating it as a path raises an AttributeError that propagates out
+    # of the tool and ends the turn in "[agent error: ...]" (AGENTS.md s6).
+    # Refuse instead, so the caller gets the normal invalid-path message.
+    if not isinstance(rel, str):
+        return None
     raw = (rel or "").strip()
     if "\x00" in raw:
         return None
@@ -168,9 +205,14 @@ def safe_path(rel: str | None) -> Path | None:
 
 
 def _protected_write(target: Path) -> bool:
-    if target.name.lower() in _PROTECTED_NAMES:
+    from ..settings import get_settings
+
+    name = target.name.lower()
+    if name in _PROTECTED_NAMES or _PROTECTED_DOTENV.match(name):
         return True
-    db_path = (os.environ.get("SWARM_DB_PATH") or "").strip()
+    # The DB path is compared against the one settings object's value, not a
+    # second read of SWARM_DB_PATH (AGENTS.md s2).
+    db_path = (get_settings().db_path or "").strip()
     if not db_path:
         return False
     try:
@@ -427,6 +469,11 @@ def system_read(path: str) -> str:
     target = safe_path(path)
     if target is None:
         return f"(invalid path — stay under the system root {system_root()})"
+    if _protected_write(target):
+        # The same names system_write refuses: .env files carry provider
+        # keys and the DB path carries chat history — reading them would leak
+        # secrets into the tool result and the channel audit (AGENTS.md s4).
+        return f"(blocked — {target.name} is protected)"
     if not target.exists() or not target.is_file():
         return f"(not found: {path})"
     try:
@@ -465,11 +512,23 @@ def system_write(path: str, content: str) -> str:
 def system_run(command: str, cwd: str = "") -> str:
     if not enabled():
         return DISABLED
+    # The command schema says string. A number or a list is a schema violation:
+    # refusing it here is a normal tool result, while letting it through raised
+    # an AttributeError that ended the turn in "[agent error: ...]".
+    if not isinstance(command, str):
+        return "(need a command string)"
+    if not isinstance(cwd, str):
+        cwd = "" if cwd is None else str(cwd)
     cmd = (command or "").strip()
     if not cmd:
         return "(need a command)"
+    from . import guard as guard_mod
+
     if _DANGEROUS.search(cmd):
         return "(blocked — that command is too destructive for the host system)"
+    match = guard_mod.is_dangerous(cmd)
+    if match:
+        return guard_mod.refusal_reason(cmd, match)
     root = system_root()
     work = root
     if (cwd or "").strip():

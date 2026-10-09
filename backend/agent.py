@@ -91,7 +91,12 @@ DEMO_STREAM_DELAY = 0.012
 
 
 def _default_sandbox_dir() -> str:
-    override = os.environ.get("SWARM_SANDBOX_DIR")
+    from .settings import get_settings
+
+    # The one settings object owns this variable (AGENTS.md s2). It is read
+    # once, at import, because SANDBOX_DIR is a module constant used as the
+    # cwd of every sandboxed command.
+    override = (get_settings().sandbox_dir or "").strip()
     if override:
         return override
     if os.name == "nt":
@@ -127,8 +132,8 @@ _TOOL_POLICY = (
     "CUA desktop, a connected app (Composio), history, memory, a saved skill, "
     "or an approval gate. Greetings in a shared room get a short text reply. "
     "system_run / system_ls / system_read / system_write work on this host "
-    "(bound to the system root, usually the repo). computer_run is the isolated "
-    "sandbox. browser_* is Playwright; browser_use is the Browser Use CLI; "
+    "(bound to the system root, usually the repo). computer_run is the shared "
+    "sandbox (working directory plus a timeout; not a security boundary). browser_* is Playwright; browser_use is the Browser Use CLI; "
     "cua_desktop is the CUA host driver; plugin:composio:* lists, connects, "
     "and executes Gmail/Slack/GitHub/Notion/etc. "
     "For sending, publishing, deleting, purchasing, or production changes, call "
@@ -196,11 +201,14 @@ def should_offer_tools(
 
 def find_mentioned_agents(body: str, agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Returns agents mentioned in body, ordered by position of first
-    mention in the text (not by agent registration order)."""
+    mention in the text (not by agent registration order).
+
+    Whole-word and case-insensitive per AGENTS.md s6: the ``@`` must not be
+    part of a larger token, so ``foo@bar.com`` never mentions ``@bar``."""
     hits: list[tuple[int, dict[str, Any]]] = []
     lowered = body.lower()
     for a in agents:
-        match = re.search(rf"@{re.escape(a['name'].lower())}\b", lowered)
+        match = re.search(rf"(?<!\w)@{re.escape(a['name'].lower())}\b", lowered)
         if match:
             hits.append((match.start(), a))
     hits.sort(key=lambda h: h[0])
@@ -215,11 +223,28 @@ def find_mentioned_teams(body: str, teams: list[dict[str, Any]]) -> list[dict[st
         slug = (team.get("id") or "").lower()
         if not slug:
             continue
-        match = re.search(rf"@{re.escape(slug)}\b", lowered)
+        match = re.search(rf"(?<!\w)@{re.escape(slug)}\b", lowered)
         if match:
             hits.append((match.start(), team))
     hits.sort(key=lambda h: h[0])
     return [t for _, t in hits]
+
+
+ROUTINE_PREFIX = "[routine:"
+
+
+def routine_instruction_of(history: list[dict[str, Any]]) -> str | None:
+    """Newest ``[routine:…]`` tick body in history, or None.
+
+    AGENTS.md s6 triggers on routine ticks; the tick body is the task. The
+    model-context builders drop system messages (tool audit must never reach
+    the model), so the tick has to be resurfaced explicitly via this helper
+    instead of riding along with history."""
+    for m in reversed(history or []):
+        body = m.get("body") or ""
+        if m.get("author_kind") == "system" and body.startswith(ROUTINE_PREFIX):
+            return body
+    return None
 
 
 def _langfuse_client():
@@ -251,10 +276,18 @@ def _shell_env() -> dict[str, str]:
 
 
 def _run_shell_tool(command: str) -> str:
+    from .tools import guard as guard_mod
+
+    cmd = (command or "").strip()
+    if not cmd:
+        return "(need a command)"
+    match = guard_mod.is_dangerous(cmd)
+    if match:
+        return guard_mod.refusal_reason(cmd, match)
     os.makedirs(SANDBOX_DIR, exist_ok=True)
     try:
         result = subprocess.run(
-            command,
+            cmd,
             shell=True,
             cwd=SANDBOX_DIR,
             capture_output=True,
@@ -304,6 +337,10 @@ async def _run_list_workspace() -> str:
 
 
 def _safe_workspace_path(rel: str) -> Path | None:
+    # The schema says string. A number or a list is a schema violation, and
+    # calling .strip() on it raises an AttributeError that ends the turn.
+    if not isinstance(rel, str):
+        return None
     if not rel or rel.strip() != rel:
         rel = (rel or "").strip()
     if not rel or rel.startswith("/") or "\\" in rel[:1]:
@@ -422,6 +459,7 @@ def _build_messages(
     group_mates: list[str] | None = None,
     display_name: str | None = None,
     profile: str | None = None,
+    routine: str | None = None,
 ) -> list[dict[str, Any]]:
     tools = allowed_tools if allowed_tools is not None else list(DEFAULT_TOOLS)
     policy = _TOOL_POLICY
@@ -434,6 +472,11 @@ def _build_messages(
     else:
         policy += " You have no tools for this turn."
     blocks = [system_prompt, policy, _UNTRUSTED_POLICY]
+    if routine:
+        # The tick that triggered this turn (AGENTS.md s6). History builders
+        # drop system messages so tool audit never reaches the model; without
+        # this block the routine instruction would never reach it either.
+        blocks.append("Routine tick — do this job now:\n" + routine)
     if profile:
         blocks.append("Bot profile (profile.md):\n" + profile)
     if group_mates:
@@ -487,6 +530,13 @@ def _build_messages(
     messages = [{"role": "system", "content": "\n\n".join(blocks)}]
     for m in history[-window:]:
         if m["author_kind"] == "system":
+            body = m.get("body") or ""
+            if body.startswith(ROUTINE_PREFIX):
+                # A routine tick handed to _build_messages directly (unfiltered
+                # history) rides as a user turn so the task is visible. Tool
+                # audit messages stay dropped — they are evidence for the
+                # channel, not context for the model.
+                messages.append({"role": "user", "content": f"routine: {body}"})
             continue  # tool-call audit messages aren't part of the model's own context
         role = "assistant" if m["author_kind"] == "agent" else "user"
         prefix = "" if role == "assistant" else f"{m['author']}: "
@@ -679,6 +729,7 @@ async def _execute_tool(
     allowed: list[str],
     delegate_depth: int = 0,
     delegate_chain: tuple[str, ...] = (),
+    audit_sink: list[dict[str, Any]] | None = None,
 ) -> str:
     helpers = {
         "list": _run_list_workspace,
@@ -697,6 +748,7 @@ async def _execute_tool(
         workspace_helpers=helpers,
         delegate_depth=delegate_depth,
         delegate_chain=delegate_chain,
+        audit_sink=audit_sink,
     )
 
 
@@ -790,7 +842,12 @@ async def _run_with_client(
         await on_tools_ready(tool_events)
 
     async def stream_start_after_tools() -> None:
-        await announce_tools()
+        # Deliberately does NOT announce the tool audit first. That list is
+        # only complete once this round's tool calls have run, so announcing
+        # from here — on the first streamed token — handed the caller an empty
+        # audit, and the caller persists exactly one batch (AGENTS.md s6). The
+        # audit is announced at the exits of the loop instead, where the list
+        # is final. Tokens still stream live and in order either way.
         if on_stream_start is not None:
             await on_stream_start()
 
@@ -873,6 +930,8 @@ async def _run_with_client(
 
         round_results: list[str] = []
         round_reason: str | None = None
+        # Per-tool-call collector for a delegated sub-run's own tool calls.
+        sub_audit: list[dict[str, Any]] = []
         for tc in selected_tool_calls:
             try:
                 args = _json.loads(tc["arguments"] or "{}")
@@ -886,7 +945,6 @@ async def _run_with_client(
                 })
                 round_results.append(result)
                 continue
-
             # --- loop detection -------------------------------------------
             # The identity of a call is (tool, args, result). The result is
             # part of it on purpose: re-reading a file that is being appended
@@ -905,6 +963,7 @@ async def _run_with_client(
                     allowed=allowed,
                     delegate_depth=delegate_depth,
                     delegate_chain=delegate_chain,
+                    audit_sink=sub_audit,
                 )
             except Exception as exc:  # noqa: BLE001
                 # A tool that raises must still be audited like any other tool
@@ -921,6 +980,27 @@ async def _run_with_client(
             full_key = f"{arg_key}\x00{result}"
             identical = identical + 1 if full_key == last_call else 1
             last_call = full_key
+
+            # The audit event keeps the raw result for the channel; only the
+            # model's copy is wrapped as untrusted data. This append happens
+            # BEFORE the loop-guard break below: the call that proves the
+            # loop is still a call, and AGENTS.md s6 persists every tool call
+            # as a system audit message in-channel.
+            tool_events.append({"tool": tc["name"], "args": args, "result": result})
+            # A delegated sub-run answers headlessly, so its own tool calls are
+            # not in this loop's `tc` list. They are collected by
+            # generate_delegate_reply and folded in here, right after the
+            # delegate_task wrapper, so the channel keeps one complete audit
+            # trail for the whole turn (AGENTS.md s6).
+            if sub_audit:
+                tool_events.extend(sub_audit)
+                sub_audit.clear()
+            messages.append({
+                "role": "tool", "tool_call_id": tc["id"],
+                "content": wrap_untrusted(tc["name"], result),
+            })
+            round_results.append(result)
+
             if identical >= LOOP_REPEAT_LIMIT:
                 round_reason = (
                     f"stopped after calling {tc['name']} with identical "
@@ -929,15 +1009,6 @@ async def _run_with_client(
                     f"progress"
                 )
                 break
-
-            # The audit event keeps the raw result for the channel; only the
-            # model's copy is wrapped as untrusted data.
-            tool_events.append({"tool": tc["name"], "args": args, "result": result})
-            messages.append({
-                "role": "tool", "tool_call_id": tc["id"],
-                "content": wrap_untrusted(tc["name"], result),
-            })
-            round_results.append(result)
 
         if round_reason is None:
             fresh = [r for r in round_results if r not in seen_results]
@@ -1023,7 +1094,11 @@ async def _closing_after_cap(
 
 
 def demo_mode_enabled() -> bool:
-    return (os.environ.get("SWARM_DEMO") or "").strip().lower() in ("1", "true", "yes")
+    # Through the one settings object's parser, so `on` means on for this
+    # flag too (AGENTS.md s2). The old list accepted only 1/true/yes.
+    from .settings import get_settings
+
+    return get_settings().demo_mode()
 
 
 def _last_human_message(history: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1131,8 +1206,10 @@ async def generate_reply(
         allowed = [t for t in allowed if t != "delegate_task"]
     notes, summary = await db.get_context_memories(name, channel_id, MEMORY_INJECT_LIMIT)
     from . import context as context_mod
+    routine = routine_instruction_of(history)
     package = await context_mod.build_context(
-        name, channel_id, history, window=window, kb_limit=3)
+        name, channel_id, history, window=window, kb_limit=3,
+        kb_query=(routine[:300] if routine else None))
     context_history = package["history"]
     kb_hits = package["kb_hits"]
     channel = await db.get_channel(channel_id)
@@ -1156,7 +1233,7 @@ async def generate_reply(
         knowledge=kb_hits,
         job=agent_row.get("job"), skills=skills, invoked_skills=invoked,
         group_mates=group_mates, display_name=agent_row.get("display_name"),
-        profile=profile,
+        profile=profile, routine=routine,
     )
     use_tools = (force_tools or should_offer_tools(history, channel_kind=channel_kind)) and bool(allowed)
 
@@ -1203,6 +1280,11 @@ async def generate_reply(
 
     last_exc: BaseException | None = None
 
+    # Readiness gate first: mocked in offline tests, and in production its
+    # per-provider resolves are served from the store's request-window cache,
+    # so the gate plus the attempts chain below still cost one DB read per
+    # provider instead of three (the catalog fixed the same double-resolve;
+    # see list_all_models).
     if not await any_provider_ready():
         return {
             "reply": "[agent error: no API key — set GROQ_API_KEY or SWARM_OPENAI_COMPAT_API_KEY in .env, or connect a provider in Command Center → AI providers]",
@@ -1248,8 +1330,14 @@ async def generate_reply(
         fallback = await generate_reply(
             agent_row, channel_id, history,
             on_tools_ready=on_tools_ready,
-            on_stream_start=on_stream_start,
-            on_token=on_token,
+            # The guarded wrappers, not the raw callbacks: the fallback is a
+            # re-entry into this same reply, so it must not open a second
+            # visible stream. `stream_announced` is per-call state, so
+            # handing the raw on_stream_start to the recursive call would
+            # broadcast a second agent_stream_start after tokens already
+            # flowed (AGENTS.md s6: one stream start per reply).
+            on_stream_start=safe_stream_start,
+            on_token=safe_token,
             model_override=None,
             delegate_depth=delegate_depth,
             exclude_tools=exclude_tools,
@@ -1275,6 +1363,7 @@ async def generate_delegate_reply(
     parent_name: str,
     depth: int = 0,
     chain: tuple[str, ...] = (),
+    audit_sink: list[dict[str, Any]] | None = None,
 ) -> str:
     """Run one bot as a sub-agent of another and return its reply as text.
 
@@ -1286,6 +1375,11 @@ async def generate_delegate_reply(
     bot-to-bot turns per human message); a bot already in the chain is never
     asked a second time. The delegated bot never posts, approves, or spawns —
     it only answers the parent.
+
+    ``audit_sink`` collects the sub-run's own tool calls: the parent turn
+    persists every tool call in-channel (AGENTS.md §6), and a sub-agent's
+    calls are not in the parent's tool-call list, so they ride back here to
+    be folded into the same audit trail.
     """
     target = (target_name or "").strip().lower()
     job = (task or "").strip()
@@ -1348,6 +1442,9 @@ async def generate_delegate_reply(
     reply = (result.get("reply") or "").strip()
     if reply.startswith("[agent error:"):
         return f"(@{target} failed: {reply})"
+    # Hand the sub-run's tool calls to the parent turn's audit trail.
+    if audit_sink is not None:
+        audit_sink.extend(result.get("tool_events") or [])
     # Reference the sub-run rather than pasting it wholesale: the parent needs
     # the answer, not a second copy of a whole conversation. Anything longer
     # than a short reply goes to the channel audit trail instead.
