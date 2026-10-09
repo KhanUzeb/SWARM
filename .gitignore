@@ -76,3 +76,8 @@ Desktop.ini
 *.rej
 .cache/
 
+agent/skills/
+plans/
+skills/impeccable/
+skills/improve/
+skills/web-design-guidelines/
