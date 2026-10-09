@@ -131,14 +131,14 @@ export default function AppsPanel({ token, flash }) {
                   onChange={(e) => setKeys((k) => ({ ...k, [c.id]: e.target.value }))}
                 />
                 <div className="modal-actions">
-                  {c.key_url ? <a className="btn ghost" href={c.key_url} target="_blank" rel="noreferrer">Get key</a> : null}
-                  <button type="submit" className="btn primary" disabled={busy === `connect-${c.id}`}>
+                  {c.key_url ? <a className="btn btn-ghost" href={c.key_url} target="_blank" rel="noreferrer">Get key</a> : null}
+                  <button type="submit" className="btn btn-primary" disabled={busy === `connect-${c.id}`}>
                     {busy === `connect-${c.id}` ? "Connecting…" : "Connect"}
                   </button>
                 </div>
               </form>
             ) : (
-              <button type="button" className="btn ghost btn-sm" disabled={busy === `disconnect-${c.id}`} onClick={() => disconnect(c.id)}>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={busy === `disconnect-${c.id}`} onClick={() => disconnect(c.id)}>
                 Disconnect stored key
               </button>
             )}
@@ -155,10 +155,10 @@ export default function AppsPanel({ token, flash }) {
               onChange={(e) => setToolkit(e.target.value)}
             />
             <div className="modal-actions">
-              <button type="submit" className="btn primary" disabled={busy === "list"}>
+              <button type="submit" className="btn btn-primary" disabled={busy === "list"}>
                 {busy === "list" ? "Listing…" : "List toolkits"}
               </button>
-              <button type="button" className="btn ghost" disabled={busy === "toolkit"} onClick={connectToolkit}>
+              <button type="button" className="btn btn-ghost" disabled={busy === "toolkit"} onClick={connectToolkit}>
                 {busy === "toolkit" ? "Starting…" : "Connect this app"}
               </button>
             </div>

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ContextChips } from "./ContextDrawer.jsx";
+import { canSubmitDraft } from "../lib.js";
 import { CornerDownLeft } from "lucide-react";
 
 const MODES = [
@@ -16,14 +17,22 @@ const MODES = [
 export function SmartComposer({ onSend, contextItems = [], onRemoveContext, disabled }) {
   const [mode, setMode] = useState("ask");
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
   const active = MODES.find((m) => m.id === mode);
+  const submittable = canSubmitDraft({ text, busy: sending, disabled });
 
   async function submit(e) {
     e?.preventDefault();
-    const value = text.trim();
-    if (!value || disabled) return;
-    const result = await onSend?.(value, { mode, context: contextItems });
-    if (result !== false) setText("");
+    if (!submittable) return;
+    // One brief, one run: without the guard a double Enter posts the same
+    // brief twice and queues two runs (POST /api/v2/runs has no idempotency).
+    setSending(true);
+    try {
+      const result = await onSend?.(text.trim(), { mode, context: contextItems });
+      if (result !== false) setText("");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -58,16 +67,16 @@ export function SmartComposer({ onSend, contextItems = [], onRemoveContext, disa
         <button
           type="submit"
           className="btn btn-primary"
-          disabled={!text.trim() || disabled}
+          disabled={!submittable}
           aria-label="Send the brief"
         >
           <CornerDownLeft size={13} />
-          Send
+          {sending ? "Sending…" : "Send"}
         </button>
       </div>
 
       <div className="composer-hints">
-        <span>Ctrl + Enter sends</span>
+        <span>Enter sends</span>
         <span style={{ marginLeft: "auto" }}>{active.label} mode</span>
       </div>
     </form>

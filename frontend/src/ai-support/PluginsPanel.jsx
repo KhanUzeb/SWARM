@@ -43,7 +43,7 @@ export default function PluginsPanel({ token, flash, meRole }) {
       <div className="panel-section-head">
         <span className="mem-title">Loaded plugins ({plugins.length})</span>
         {meRole === "admin" && (
-          <button type="button" className="btn ghost btn-sm" disabled={busy} onClick={reloadPlugins}>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={reloadPlugins}>
             {busy ? "Reloading…" : "Reload plugins"}
           </button>
         )}

@@ -9,7 +9,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { escapeHtml, fmtTime, initials } from "./lib.js";
+import { escapeHtml, fmtTime, initials, badgeClass, avatarKindClass } from "./lib.js";
 
 // ── API & utilities ──
 // lib.js is the single owner of the API client and the shared formatters.
@@ -31,6 +31,8 @@ export {
   fmtTime,
   fmtBytes,
   initials,
+  badgeClass,
+  avatarKindClass,
   botLabel,
   slugFromName,
   statusLabel,
@@ -133,7 +135,7 @@ function CodeBlock({ lang, text }) {
 
 function Avatar({ name, kind = "human", size = "md", src, avatar }) {
   const sizes = { sm: "avatar-sm", md: "", lg: "avatar-lg", xl: "avatar-xl" };
-  const kindClass = { human: "avatar-human", agent: "avatar-agent", system: "avatar-system" }[kind] || "avatar-human";
+  const kindClass = avatarKindClass(kind);
   const pfp = (avatar || src || "").trim();
   const isImage = /^https?:\/\//i.test(pfp) || pfp.startsWith("data:image");
 
@@ -155,15 +157,9 @@ function Avatar({ name, kind = "human", size = "md", src, avatar }) {
 }
 
 function Badge({ children, variant = "neutral", className = "" }) {
-  const variants = {
-    neutral: "badge-neutral",
-    brand: "badge-brand",
-    success: "badge-success",
-    warning: "badge-warning",
-    error: "badge-error",
-    subtle: "badge-subtle",
-  };
-  return <span className={`badge ${variants[variant]} ${className}`}>{children}</span>;
+  // Variant classes resolve through lib.js so both Badge implementations
+  // land on the badge-go/hold/amber classes styles.css actually defines.
+  return <span className={`badge ${badgeClass(variant)} ${className}`}>{children}</span>;
 }
 
 function Button({ children, variant = "secondary", size = "md", className = "", icon, loading, ...props }) {
@@ -339,6 +335,10 @@ const EMPTY_ICON = {
   sandbox: Monitor,
   search: Search,
 };
+
+// The only EmptyState kinds with an icon. Anything else falls back to the
+// default mark, so prefer one of these at call sites.
+export const EMPTY_STATE_KINDS = Object.keys(EMPTY_ICON);
 
 function EmptyState({ kind = "default", icon, title, message, action }) {
   const Mark = EMPTY_ICON[kind] || EMPTY_ICON.default;

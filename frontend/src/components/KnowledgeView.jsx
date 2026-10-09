@@ -95,7 +95,7 @@ export function KnowledgeView({ token, flash }) {
       <div className="knowledge-list">
         {shown.length === 0 && (
           <EmptyState
-            kind="docs"
+            kind="search"
             title={results ? "No matches" : "No knowledge yet"}
             message={results ? "Try different keywords." : "Save runbooks, decisions, and conventions your agents should reuse."}
           />

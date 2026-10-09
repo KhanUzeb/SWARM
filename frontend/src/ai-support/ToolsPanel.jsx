@@ -86,7 +86,7 @@ export default function ToolsPanel({ token, flash }) {
       <div className="panel-section">
         <div className="panel-section-head">
           <span className="mem-title">Built-in ({builtins.length})</span>
-          <button type="button" className="btn ghost btn-sm" onClick={load}>Refresh</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={load}>Refresh</button>
         </div>
         <ul className="panel-list tool-grid">
           {builtins.map((t) => (
@@ -112,7 +112,7 @@ export default function ToolsPanel({ token, flash }) {
         <div className="panel-section-head">
           <span className="mem-title">Custom tools ({customs.length})</span>
           {!showForm && (
-            <button type="button" className="btn primary btn-sm" onClick={() => setShowForm(true)}>+ Custom</button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>+ Custom</button>
           )}
         </div>
         {!customs.length && !showForm && <p className="empty-state">No custom tools yet.</p>}
@@ -121,7 +121,7 @@ export default function ToolsPanel({ token, flash }) {
             <li key={t.name} className="tool-row-item">
               <span className="tool-tag custom">{t.name}</span>
               <span className="tool-row-desc">{t.description}</span>
-              <button type="button" className="btn ghost btn-sm" onClick={() => deleteTool(t.id, t.name)}>Delete</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => deleteTool(t.id, t.name)}>Delete</button>
             </li>
           ))}
         </ul>
@@ -136,8 +136,8 @@ export default function ToolsPanel({ token, flash }) {
             </select>
             <textarea rows={2} placeholder={form.handler_type === "http_get" ? "https://api.example.com?q={{query}}" : "Result: {{query}}"} value={form.template} onChange={(e) => setForm((f) => ({ ...f, template: e.target.value }))} />
             <div className="modal-actions">
-              <button type="button" className="btn ghost" onClick={() => setShowForm(false)}>Cancel</button>
-              <button type="submit" className="btn primary" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
             </div>
           </form>
         )}

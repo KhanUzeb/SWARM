@@ -66,8 +66,8 @@ export default function BrowserPanel({ token, flash }) {
         </p>
       )}
       <div className="panel-actions">
-        <button type="button" className="btn ghost" onClick={load}>Refresh status</button>
-        <button type="button" className="btn ghost" disabled={busy || !ready} onClick={closeBrowser}>
+        <button type="button" className="btn btn-ghost" onClick={load}>Refresh status</button>
+        <button type="button" className="btn btn-ghost" disabled={busy || !ready} onClick={closeBrowser}>
           {busy ? "Closing…" : "Close browser"}
         </button>
       </div>

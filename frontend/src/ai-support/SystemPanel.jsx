@@ -155,7 +155,7 @@ export default function SystemPanel({ token, flash, onRootChange }) {
               spellCheck={false}
               autoComplete="off"
             />
-            <button type="submit" className="btn primary" disabled={busy}>Go</button>
+            <button type="submit" className="btn btn-primary" disabled={busy}>Go</button>
             {listing?.can_go_up && listing?.parent_abs && !listing?.path && (
               <button
                 type="button"
@@ -244,7 +244,7 @@ export default function SystemPanel({ token, flash, onRootChange }) {
           {previewName && (
             <div className="preview-head">
               <strong>{previewName}</strong>
-              <button type="button" className="btn ghost" onClick={() => { setPreview(""); setPreviewName(""); }}>
+              <button type="button" className="btn btn-ghost" onClick={() => { setPreview(""); setPreviewName(""); }}>
                 Close
               </button>
             </div>

@@ -118,6 +118,79 @@ export function statusLabel(status) {
   return ({ working: "Working", needs_approval: "Needs approval", idle: "Idle" })[status] || status || "Idle";
 }
 
+/** Class for a Badge variant. Only these classes exist in styles.css —
+ *  anything else renders as an unstyled span, so unknown variants (including
+ *  the work-rail tones) fall back to the base badge, never to "undefined". */
+const BADGE_CLASS = {
+  neutral: "",
+  subtle: "",
+  brand: "badge-go",
+  success: "badge-go",
+  warning: "badge-amber",
+  error: "badge-hold",
+  danger: "badge-hold",
+  intelligence: "badge-amber",
+};
+
+export function badgeClass(variant) {
+  return BADGE_CLASS[variant] ?? "";
+}
+
+/** Class for an Avatar kind. styles.css owns `avatar-user` (not
+ *  `avatar-human`); the shadcn Avatar already uses it, so this keeps both
+ *  implementations on the same class. */
+const AVATAR_KIND_CLASS = {
+  human: "avatar-user",
+  agent: "avatar-agent",
+  system: "avatar-system",
+};
+
+export function avatarKindClass(kind) {
+  return AVATAR_KIND_CLASS[kind] || "avatar-user";
+}
+
+/** Build the REST call for the quick-create dialog. Pure so the dialog and
+ *  the tests share one copy of the channel/dm/group/team/agent contract
+ *  (backend/main.py ChannelCreate, DirectMessageCreate, TeamCreate,
+ *  AgentCreate). Returns {path, body} or {error} when the form is incomplete. */
+export function quickCreatePayload(action, {
+  name, detail = "", members = [], avatar = "",
+  templates = [], selectedTemplate = null,
+} = {}) {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return { error: "Give it a name first." };
+  if (action === "dm") return { path: "/api/dms", body: { handle: trimmed } };
+  if (action === "group") {
+    if (!members.length) return { error: "A group needs at least one bot." };
+    return { path: "/api/channels", body: { name: trimmed, topic: String(detail).trim(), kind: "group", members } };
+  }
+  if (action === "team") {
+    if (!members.length) return { error: "A team needs at least one bot." };
+    return { path: "/api/teams", body: { name: trimmed, description: String(detail).trim(), members } };
+  }
+  if (action === "agent") {
+    const tpl = (templates || []).find(t => t.id === selectedTemplate);
+    return {
+      path: "/api/agents",
+      body: {
+        name: trimmed,
+        display_name: trimmed,
+        avatar: String(avatar).trim().slice(0, 500),
+        system_prompt: String(detail).trim() || `You are ${trimmed}, a helpful specialist teammate.`,
+        job: tpl ? tpl.job : "Teammate",
+      },
+    };
+  }
+  return { path: "/api/channels", body: { name: trimmed } };
+}
+
+/** Submit guard shared by the composers: text present, not already sending,
+ *  not disabled. SmartComposer lacked the busy half, so rapid Enter keys
+ *  could POST the same brief twice. */
+export function canSubmitDraft({ text, busy, disabled }) {
+  return Boolean(String(text || "").trim()) && !busy && !disabled;
+}
+
 export function isAgentError(body) {
   return String(body || "").trim().startsWith("[agent error:");
 }

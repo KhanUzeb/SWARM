@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, apiJson, bustCache, CACHE_TTL } from "../lib.js";
+import { draftAfterSave, isUsableKey } from "./modelConnection.js";
 import ModelPicker from "./ModelPicker";
 
 export default function ProviderPanel({ token, onStatusChange, flash }) {
@@ -29,7 +30,9 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
   async function connect(provider) {
     const draft = draftFor(provider);
     const key = (draft.key || "").trim();
-    if (key.length < 8) {
+    // Defect 1: the connect gate is the one predicate the live preview uses, so
+    // a key that previewed models is provably a key that can connect them.
+    if (!isUsableKey(key)) {
       flash?.("Enter a valid API key (8+ chars)", true);
       return;
     }
@@ -71,6 +74,13 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
       return;
     }
     setBusy(`model-${provider.id}`);
+    // A model is only claimed active once the save succeeds: a failed save
+    // reverts the draft to whatever the provider is already using, so an
+    // unsaved pick never masquerades as the active model (defect 3).
+    const commit = (ok) => setDrafts((d) => ({
+      ...d,
+      [provider.id]: { ...draftFor(provider), ...draftAfterSave({ requested: model, saved: model, ok, serverModel: provider.model || "" }) },
+    }));
     try {
       const res = await api(`/api/ai-support/connect/${provider.id}`, {
         token,
@@ -79,12 +89,17 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
       });
       if (res.ok) {
         flash?.(`Using ${model} on ${provider.name}`);
+        commit(true);
         bustCache("/api/status", "/api/ai-support");
         await load();
         onStatusChange?.();
-      } else flash?.("Couldn't save that model", true);
+      } else {
+        flash?.("Couldn't save that model", true);
+        commit(false);
+      }
     } catch {
       flash?.("Couldn't save that model", true);
+      commit(false);
     }
     setBusy(null);
   }
@@ -138,7 +153,9 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
                     value={draft.key}
                     onChange={(e) => setDrafts((d) => ({
                       ...d,
-                      [p.id]: { ...draftFor(p), key: e.target.value },
+                      // The model belongs to the key it was chosen under; a new
+                      // key means a new list, so the stale pick is dropped.
+                      [p.id]: { key: e.target.value, model: "" },
                     }))}
                   />
                   <label className="field-label" htmlFor={`model-${p.id}`}>Model</label>
@@ -150,16 +167,16 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
                     value={draft.model || p.default_model || ""}
                     onChange={(model) => setDrafts((d) => ({
                       ...d,
-                      [p.id]: { ...draftFor(p), model },
+                      [p.id]: { key: draft.key, model },
                     }))}
                     placeholder="Search this provider's models"
                   />
                   <div className="provider-actions">
-                    {p.auth_methods?.includes("oauth") && p.oauth_configured && <button type="button" className="btn ghost" onClick={() => startOAuth(p)}>Connect with OAuth</button>}
-                    <a className="btn ghost" href={p.key_url} target="_blank" rel="noreferrer">Get key</a>
+                    {p.auth_methods?.includes("oauth") && p.oauth_configured && <button type="button" className="btn btn-ghost" onClick={() => startOAuth(p)}>Connect with OAuth</button>}
+                    <a className="btn btn-ghost" href={p.key_url} target="_blank" rel="noreferrer">Get key</a>
                     <button
                       type="button"
-                      className="btn primary"
+                      className="btn btn-primary"
                       disabled={busy === p.id}
                       onClick={() => connect(p)}
                     >
@@ -185,7 +202,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
                     {p.via !== "env" && (
                       <button
                         type="button"
-                        className="btn primary"
+                        className="btn btn-primary"
                         disabled={busy === `model-${p.id}` || !(draft.model || p.model)}
                         onClick={() => saveModel(p)}
                       >
@@ -195,7 +212,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
                     {p.via !== "env" && (
                       <button
                         type="button"
-                        className="btn ghost"
+                        className="btn btn-ghost"
                         disabled={busy === p.id}
                         onClick={() => disconnect(p.id, p.name)}
                       >
@@ -228,10 +245,10 @@ function CustomProviderCard({ provider: p, token, draft, busy, setBusy, setDraft
     const key = (draft.key || "").trim();
     const model = (draft.model || "").trim();
     if (!model) {
-      flash?.("Enter the exact model id your server serves (e.g. qwen3:4b)", true);
+      flash?.("Pick or type the model id your server serves", true);
       return;
     }
-    if (key && key.length < 8) {
+    if (key && !isUsableKey(key)) {
       flash?.("Key looks too short — clear it for keyless local servers", true);
       return;
     }
@@ -279,19 +296,23 @@ function CustomProviderCard({ provider: p, token, draft, busy, setBusy, setDraft
             autoComplete="off"
             placeholder="Optional — blank for local servers"
             value={draft.key}
-            onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: { ...draftFor(p), key: e.target.value } }))}
+            onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: { key: e.target.value, model: "" } }))}
           />
-          <label className="field-label" htmlFor="model-custom">Model id (exact, as served)</label>
-          <input
+          <label className="field-label" htmlFor="model-custom">Model</label>
+          {/* Defect 2: the custom card wired no picker, so a keyed server's
+              models were invisible. The picker lists live models once a key is
+              present; without one it accepts an exact typed id (Enter). */}
+          <ModelPicker
             id="model-custom"
-            type="text"
-            autoComplete="off"
-            placeholder="e.g. qwen3:4b"
+            token={token}
+            providerId="custom"
+            apiKey={draft.key}
             value={draft.model || ""}
-            onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: { ...draftFor(p), model: e.target.value } }))}
+            onChange={(model) => setDrafts((d) => ({ ...d, [p.id]: { key: draft.key, model } }))}
+            placeholder="Search models, or type an exact id"
           />
           <div className="provider-actions">
-            <button type="button" className="btn primary" disabled={busy === p.id} onClick={connectCustom}>
+            <button type="button" className="btn btn-primary" disabled={busy === p.id} onClick={connectCustom}>
               {busy === p.id ? "Connecting…" : "Connect endpoint"}
             </button>
           </div>
@@ -300,7 +321,7 @@ function CustomProviderCard({ provider: p, token, draft, busy, setBusy, setDraft
         <div className="provider-actions">
           <span className="hint">Model: {p.model || draft.model || "custom"}</span>
           {p.via !== "env" && (
-            <button type="button" className="btn ghost" disabled={busy === p.id} onClick={async () => {
+            <button type="button" className="btn btn-ghost" disabled={busy === p.id} onClick={async () => {
               setBusy(p.id);
               try {
                 const res = await api(`/api/ai-support/connect/${p.id}`, { token, method: "DELETE", json: false });
