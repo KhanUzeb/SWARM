@@ -45,8 +45,8 @@ from .models import (
     ComputerRunRequest,
 )
 from .security import (
-    allowed_origins, install_api_guard, is_loopback, optional_auth, parse_token,
-    require_admin, require_auth,
+    allowed_origins, install_api_guard, is_loopback, optional_auth, origin_allowed,
+    parse_token, require_admin, require_auth,
 )
 from .settings import get_settings, validate_settings
 from .tools.registry import get_registry, reload_registry
@@ -86,7 +86,7 @@ async def _validation_error_json(request: Request, exc: RequestValidationError) 
 async def _unhandled_exception_json(request: Request, exc: Exception) -> JSONResponse:
     _logger = logging.getLogger("swarm.backend")
     _logger.error("unhandled error on %s %s: %s", request.method, request.url.path, exc)
-    return JSONResponse(status_code=500, content={"ok": False, "message": "internal error"})
+    return JSONResponse(status_code=500, content={"ok": False, "detail": "internal error"})
 
 app.add_middleware(
     CORSMiddleware,
@@ -219,7 +219,10 @@ async def lifespan(app: FastAPI):
     await work.init_db()
     await knowledge.init_db()
     from . import gc as gc_mod
-    _gc_stats = gc_mod.gc_sweep()
+    # Same rule as the periodic sweep: the startup pass is a blocking
+    # filesystem walk, so it runs on the worker thread rather than holding
+    # the loop that is about to start serving requests.
+    _gc_stats = await asyncio.to_thread(gc_mod.gc_sweep)
     if _gc_stats.get("deleted"):
         _logger.info("sandbox GC at startup: %s", _gc_stats)
     for recoverable in await v2.recoverable_runs():
@@ -323,7 +326,11 @@ async def api_v2_providers(handle: str = Depends(require_auth)):
         elif env_ok:
             provider["model"] = spec.get("default_model")
         provider["capabilities"] = {"streaming": True, "tool_calling": spec.get("kind") == "openai_compatible", "vision": False}
-        provider["oauth_configured"] = bool(spec.get("oauth_authorize_url") and os.environ.get(f"SWARM_{provider['id'].upper()}_OAUTH_CLIENT_ID"))
+        from .settings import oauth_client_id as _oauth_client_id
+
+        provider["oauth_configured"] = bool(
+            spec.get("oauth_authorize_url") and _oauth_client_id(provider["id"])
+        )
     return catalog
 
 
@@ -724,6 +731,14 @@ async def api_cancel_work(work_id: str, handle: str = Depends(require_auth)):
 
 @app.websocket("/api/v2/ws/runs/{run_id}")
 async def ws_v2_run(websocket: WebSocket, run_id: str):
+    # Browser guard applies to sockets too: the http middleware skips
+    # non-/api/ upgrade paths, so check Origin here. Missing Origin
+    # (curl, native clients) stays allowed per origin_allowed().
+    _ws_origin = websocket.headers.get("origin") if hasattr(websocket, "headers") else None
+    _ws_host = websocket.headers.get("host") if hasattr(websocket, "headers") else None
+    if _ws_origin and not origin_allowed(_ws_origin, _ws_host):
+        await websocket.close(code=4003)
+        return
     await websocket.accept()
     try:
         first = await websocket.receive_json()
@@ -752,12 +767,40 @@ async def ws_v2_run(websocket: WebSocket, run_id: str):
         with suppress(Exception):
             await websocket.close(code=1011)
 
-def _key_set(name: str) -> bool:
+def _key_set(name: str | None) -> bool:
+    """Whether an env key is set. SWARM_* names read via Settings."""
+    if not name:
+        return False
+    if name.startswith("SWARM_"):
+        # Route through the one settings object: map SWARM_FOO_BAR to the
+        # matching Settings field (foo_bar) when it exists, else read the
+        # raw env here in main is forbidden, so fall back to Settings'
+        # generic managed-var lookup via os in settings is not available;
+        # use get_settings for known fields, env only for unknown dynamic
+        # OAuth ids which have central helpers in settings.
+        attr = name[len("SWARM_"):].lower()
+        settings = get_settings()
+        if hasattr(settings, attr):
+            return bool((getattr(settings, attr) or "").strip().strip('"').strip("'"))
+        if attr.endswith("_oauth_client_id"):
+            from .settings import oauth_client_id as _cid
+
+            provider = attr[: -len("_oauth_client_id")]
+            return bool(_cid(provider))
+        if attr.endswith("_oauth_client_secret"):
+            from .settings import oauth_client_secret as _csec
+
+            provider = attr[: -len("_oauth_client_secret")]
+            return bool(_csec(provider))
     return bool((os.environ.get(name) or "").strip().strip('"').strip("'"))
 
 
 def _revision() -> str:
-    for env_name in ("GIT_SHA", "SWARM_REVISION", "RAKAZO_IMAGE_TAG"):
+    # SWARM_REVISION via Settings; the other two are not SWARM_* flags.
+    rev = (get_settings().revision or "").strip()
+    if rev:
+        return rev[:40]
+    for env_name in ("GIT_SHA", "RAKAZO_IMAGE_TAG"):
         value = (os.environ.get(env_name) or "").strip()
         if value:
             return value[:40]
@@ -1025,8 +1068,8 @@ async def api_delete_channel(channel_id: str, handle: str = Depends(require_auth
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
     channel = await _require_channel(channel_id, handle)
-    if channel.get("kind") == "dm":
-        raise HTTPException(400, "cannot delete a bot 1:1")
+    if channel.get("kind") in ("dm", "people"):
+        raise HTTPException(400, "cannot delete a 1:1 conversation")
     await db.delete_channel(channel_id)
     await hub.broadcast(channel_id, {"type": "channel_deleted", "channel_id": channel_id})
     return {"ok": True, "id": channel_id}
@@ -1183,7 +1226,7 @@ async def _validate_tool_names(names: list[str] | None) -> None:
 
 
 @app.get("/api/agent-templates")
-async def api_agent_templates():
+async def api_agent_templates(handle: str = Depends(require_auth)):
     return get_agent_templates()
 
 
@@ -1729,7 +1772,7 @@ async def api_computer(handle: str = Depends(require_auth)):
         "note": (
             "Bots share two places on this host: the sandbox (Sandbox tab) and "
             f"the machine folder {system_info.get('root')} (System tab, system_run). "
-            "Change that folder from System → Places. Optional Playwright, Browser Use "
+            "Change that folder from Places → System. Optional Playwright, Browser Use "
             "CLI, CUA, Exa/Tavily/Firecrawl, and Composio apps live in the other tabs."
         ),
     }
@@ -1904,6 +1947,11 @@ async def api_composio_connect_toolkit(
 
 @app.websocket("/ws/{channel_id}")
 async def ws_channel(websocket: WebSocket, channel_id: str):
+    _ws_origin = websocket.headers.get("origin") if hasattr(websocket, "headers") else None
+    _ws_host = websocket.headers.get("host") if hasattr(websocket, "headers") else None
+    if _ws_origin and not origin_allowed(_ws_origin, _ws_host):
+        await websocket.close(code=4003)
+        return
     channel = await db.get_channel(channel_id)
     if channel is None:
         await websocket.close(code=4004)
@@ -2328,7 +2376,13 @@ async def _gc_loop() -> None:
     await asyncio.sleep(GC_SWEEP_INTERVAL_SECONDS)
     while True:
         try:
-            stats = gc_mod.gc_sweep()
+            # gc_sweep() is synchronous filesystem work — a full os.walk of
+            # the sandbox plus up to 512 unlinks per pass. Running it inline
+            # would hold the event loop for the whole sweep and stall every
+            # request in flight, which is exactly what gc.py's "never
+            # blocking a request" promise rules out. The worker thread keeps
+            # that promise.
+            stats = await asyncio.to_thread(gc_mod.gc_sweep)
             if stats.get("deleted"):
                 _logger.info("sandbox GC sweep: %s", stats)
         except asyncio.CancelledError:

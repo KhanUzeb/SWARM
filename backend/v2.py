@@ -13,7 +13,6 @@ import asyncio
 import base64
 import hashlib
 import logging
-import os
 import secrets
 from urllib.parse import urlencode
 from typing import Any
@@ -22,7 +21,16 @@ from pathlib import Path
 import aiosqlite
 
 from . import db
+from .db import open_db as _open_db
+from .settings import get_settings
 from .work_state import event_lock
+
+_DEFAULT_OAUTH_REDIRECT = "http://localhost:8000/api/v2/oauth/callback"
+
+
+def _oauth_redirect_uri() -> str:
+    """Redirect URI via the one settings object; blank falls back to default."""
+    return (get_settings().oauth_redirect_uri or "").strip() or _DEFAULT_OAUTH_REDIRECT
 
 _logger = logging.getLogger("swarm.v2")
 
@@ -52,7 +60,9 @@ async def shutdown() -> None:
 
 
 def oauth_start(provider_id: str, owner: str, spec: dict[str, Any]) -> str:
-    client_id = (os.environ.get(f"SWARM_{provider_id.upper()}_OAUTH_CLIENT_ID") or "").strip()
+    from .settings import oauth_client_id as _oauth_client_id
+
+    client_id = _oauth_client_id(provider_id)
     authorize_url = (spec.get("oauth_authorize_url") or "").strip()
     if not client_id or not authorize_url:
         raise ValueError("OAuth is not configured for this provider; connect with an API key")
@@ -64,7 +74,7 @@ def oauth_start(provider_id: str, owner: str, spec: dict[str, Any]) -> str:
         "provider_id": provider_id, "owner": owner, "verifier": verifier,
         "expires_at": time.time() + OAUTH_STATE_TTL_SECONDS,
     }
-    redirect_uri = os.environ.get("SWARM_OAUTH_REDIRECT_URI", "http://localhost:8000/api/v2/oauth/callback")
+    redirect_uri = _oauth_redirect_uri()
     params = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code", "state": state, "code_challenge": challenge, "code_challenge_method": "S256", "scope": spec.get("oauth_scope", "")}
     return f"{authorize_url}?{urlencode({k: v for k, v in params.items() if v})}"
 
@@ -79,14 +89,17 @@ async def oauth_callback(state: str, code: str) -> dict[str, Any]:
         raise ValueError("invalid or expired OAuth state")
     provider_id = context["provider_id"]
     from .ai_support.providers import get_provider
+    from .settings import oauth_client_id as _oauth_client_id
+    from .settings import oauth_client_secret as _oauth_client_secret
+
     spec = get_provider(provider_id) or {}
-    client_id = (os.environ.get(f"SWARM_{provider_id.upper()}_OAUTH_CLIENT_ID") or "").strip()
-    client_secret = (os.environ.get(f"SWARM_{provider_id.upper()}_OAUTH_CLIENT_SECRET") or "").strip()
+    client_id = _oauth_client_id(provider_id)
+    client_secret = _oauth_client_secret(provider_id)
     token_url = (spec.get("oauth_token_url") or "").strip()
     if not client_id or not token_url:
         raise ValueError("OAuth is not configured for this provider")
     import httpx
-    redirect_uri = os.environ.get("SWARM_OAUTH_REDIRECT_URI", "http://localhost:8000/api/v2/oauth/callback")
+    redirect_uri = _oauth_redirect_uri()
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(token_url, data={"grant_type": "authorization_code", "code": code, "client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri, "code_verifier": context["verifier"]})
         response.raise_for_status()
@@ -187,7 +200,7 @@ CREATE INDEX IF NOT EXISTS idx_run_artifacts_run ON run_artifacts(run_id);
 
 
 async def init_db() -> None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         await conn.executescript(SCHEMA)
         cur = await conn.execute("PRAGMA table_info(ai_providers)")
         columns = {row[1] for row in await cur.fetchall()}
@@ -216,7 +229,7 @@ def _decode(value: str | None, fallback: Any) -> Any:
 
 
 async def list_workflows(owner: str, limit: int = 200) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM workflows WHERE owner = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT ?",
@@ -231,7 +244,7 @@ async def list_workflows(owner: str, limit: int = 200) -> list[dict[str, Any]]:
 async def create_workflow(owner: str, name: str, description: str, graph: dict[str, Any]) -> dict[str, Any]:
     now = time.time()
     workflow_id = f"wf_{uuid.uuid4().hex[:12]}"
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         await conn.execute(
             "INSERT INTO workflows(id, owner, name, description, graph, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
             (workflow_id, owner, name, description, json.dumps(graph), now, now),
@@ -241,7 +254,7 @@ async def create_workflow(owner: str, name: str, description: str, graph: dict[s
 
 
 async def get_workflow(workflow_id: str, owner: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT * FROM workflows WHERE id = ? AND owner = ? AND archived_at IS NULL", (workflow_id, owner))
         row = _row(await cur.fetchone())
@@ -258,7 +271,7 @@ async def update_workflow(workflow_id: str, owner: str, patch: dict[str, Any]) -
     description = str(patch.get("description", current["description"]))
     graph = patch.get("graph", current["graph"])
     now = time.time()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         await conn.execute("UPDATE workflows SET name=?, description=?, graph=?, updated_at=? WHERE id=? AND owner=?", (name, description, json.dumps(graph), now, workflow_id, owner))
         await conn.commit()
     current.update(name=name, description=description, graph=graph, updated_at=now)
@@ -274,7 +287,7 @@ async def create_run(
 ) -> dict[str, Any]:
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     now = time.time()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         await conn.execute(
             "INSERT INTO runs(id, workflow_id, owner, objective, status, policy, model, created_at) VALUES(?,?,?,?,?,?,?,?)",
             (run_id, workflow_id, owner, objective, "queued", policy, model, now),
@@ -294,7 +307,7 @@ async def create_run(
 
 
 async def list_runs(owner: str, limit: int = 50) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT * FROM runs WHERE owner=? ORDER BY created_at DESC LIMIT ?", (owner, min(max(limit, 1), 100)))
         rows = [dict(r) for r in await cur.fetchall()]
@@ -304,7 +317,7 @@ async def list_runs(owner: str, limit: int = 50) -> list[dict[str, Any]]:
 
 
 async def recoverable_runs() -> list[dict[str, Any]]:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM runs WHERE status IN ('queued', 'running', 'waiting_for_approval')"
@@ -313,7 +326,7 @@ async def recoverable_runs() -> list[dict[str, Any]]:
 
 
 async def get_run(run_id: str, owner: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT * FROM runs WHERE id=? AND owner=?", (run_id, owner))
         row = _row(await cur.fetchone())
@@ -324,7 +337,7 @@ async def get_run(run_id: str, owner: str) -> dict[str, Any] | None:
 
 async def get_run_any_owner(run_id: str) -> dict[str, Any] | None:
     """Owner-blind run lookup for startup recovery only (never exposed via API)."""
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT * FROM runs WHERE id=?", (run_id,))
         row = _row(await cur.fetchone())
@@ -337,7 +350,7 @@ async def update_run(run_id: str, owner: str, status: str, *, report: dict[str, 
     now = time.time()
     started = now if status == "running" else None
     finished = now if status in {"completed", "failed", "cancelled"} else None
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         if report is None:
             cur = await conn.execute("UPDATE runs SET status=?, started_at=COALESCE(started_at, ?), finished_at=COALESCE(?, finished_at) WHERE id=? AND owner=?", (status, started, finished, run_id, owner))
         else:
@@ -348,7 +361,7 @@ async def update_run(run_id: str, owner: str, status: str, *, report: dict[str, 
 
 async def claim_run(run_id: str, owner: str) -> bool:
     """Atomically claim queued/running work for one executor."""
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         cur = await conn.execute("UPDATE runs SET status='running', started_at=COALESCE(started_at, ?) WHERE id=? AND owner=? AND status IN ('queued', 'running', 'waiting_for_approval')", (time.time(), run_id, owner))
         await conn.commit()
         return cur.rowcount > 0
@@ -356,7 +369,7 @@ async def claim_run(run_id: str, owner: str) -> bool:
 
 async def append_event(run_id: str, event_type: str, payload: dict[str, Any] | None = None, step_id: str | None = None) -> dict[str, Any]:
     async with event_lock():
-        async with aiosqlite.connect(db.DB_PATH) as conn:
+        async with _open_db() as conn:
             cur = await conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id=?", (run_id,))
             (seq,) = await cur.fetchone()
             now = time.time()
@@ -368,7 +381,7 @@ async def append_event(run_id: str, event_type: str, payload: dict[str, Any] | N
 async def list_events(run_id: str, owner: str, after: int = 0, limit: int = 2000) -> list[dict[str, Any]]:
     if not await get_run(run_id, owner):
         return []
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT e.* FROM run_events e JOIN runs r ON r.id=e.run_id WHERE e.run_id=? AND r.owner=? AND e.seq>? ORDER BY e.seq LIMIT ?", (run_id, owner, after, min(max(limit, 1), 5000)))
         rows = [dict(r) for r in await cur.fetchall()]
@@ -390,7 +403,7 @@ async def create_artifact(run_id: str, owner: str, name: str, content: str, mime
     target.write_text(content, encoding="utf-8")
     artifact_id = f"art_{uuid.uuid4().hex[:12]}"
     now = time.time()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         await conn.execute("INSERT INTO run_artifacts(id, run_id, step_id, name, uri, mime_type, metadata, created_at) VALUES(?,?,?,?,?,?,?,?)", (artifact_id, run_id, step_id, safe_name, str(target), mime_type, json.dumps({"size": target.stat().st_size}), now))
         await conn.commit()
     return {"id": artifact_id, "run_id": run_id, "step_id": step_id, "name": safe_name, "uri": str(target), "mime_type": mime_type, "created_at": now}
@@ -399,7 +412,7 @@ async def create_artifact(run_id: str, owner: str, name: str, content: str, mime
 async def list_artifacts(run_id: str, owner: str) -> list[dict[str, Any]]:
     if not await get_run(run_id, owner):
         return []
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT id, run_id, step_id, name, uri, mime_type, metadata, created_at FROM run_artifacts WHERE run_id=? ORDER BY created_at", (run_id,))
         rows = [dict(row) for row in await cur.fetchall()]
@@ -409,7 +422,7 @@ async def list_artifacts(run_id: str, owner: str) -> list[dict[str, Any]]:
 
 
 async def get_artifact(artifact_id: str, owner: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT a.* FROM run_artifacts a JOIN runs r ON r.id=a.run_id WHERE a.id=? AND r.owner=?", (artifact_id, owner))
         row = _row(await cur.fetchone())

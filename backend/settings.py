@@ -83,8 +83,10 @@ DEFAULT_GC_MAX_MB = 512.0
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0:0:0:0:0:0:0:1"})
 
 # Never printed, never logged, never returned by `settings_snapshot`. Listed
-# here only so the redaction rule has a name.
-SECRET_FIELDS: frozenset[str] = frozenset({"secret"})
+# here only so the redaction rule has a name. Both halves of the generic
+# OpenAI-compatible connection belong here: the API key is a credential, so
+# `swarm doctor` must report only whether it is set.
+SECRET_FIELDS: frozenset[str] = frozenset({"secret", "openai_compat_api_key"})
 
 
 def truthy(raw: str | None, default: bool = False) -> bool:
@@ -195,8 +197,10 @@ class Settings(BaseSettings):
     allowed_origins: str | None = Field(default=None, description="comma-separated browser origins")
     agent_model: str | None = Field(default=None, description="overrides every agent's model column")
     openai_compat_base_url: str | None = Field(default=None, description="custom OpenAI-compatible base URL")
+    openai_compat_api_key: str | None = Field(default=None, description="custom OpenAI-compatible API key")
     oauth_redirect_uri: str | None = Field(default=None, description="provider OAuth callback URL")
     secret: str | None = Field(default=None, description="seal key for stored provider keys")
+    revision: str | None = Field(default=None, description="build revision for /health, informational only")
 
     # --- numerics (lenient, with documented fallbacks) ---------------------
     sqlite_busy_timeout_ms: str | None = None
@@ -336,6 +340,30 @@ class Settings(BaseSettings):
     def secret_configured(self) -> bool:
         """True when SWARM_SECRET has a value. The value is never returned."""
         return bool((self.secret or "").strip())
+
+    def openai_compat_key_configured(self) -> bool:
+        """True when SWARM_OPENAI_COMPAT_API_KEY has a value.
+
+        The generic BYO endpoint's key, owned here like every other
+        `SWARM_*` variable. Only the answer is exposed; the value stays
+        in this object.
+        """
+        return bool((self.openai_compat_api_key or "").strip().strip('"').strip("'"))
+
+
+def oauth_client_id(provider_id: str) -> str:
+    """Per-provider OAuth client id via the one settings object.
+
+    Provider ids are open-ended (google, github, ...), so they cannot be
+    enumerated as Settings fields. The read still lives here so no other
+    module does a fresh os.environ.get for a SWARM_* flag.
+    """
+    return (os.environ.get(f"SWARM_{provider_id.upper()}_OAUTH_CLIENT_ID") or "").strip()
+
+
+def oauth_client_secret(provider_id: str) -> str:
+    """Per-provider OAuth client secret, same central-read rule as above."""
+    return (os.environ.get(f"SWARM_{provider_id.upper()}_OAUTH_CLIENT_SECRET") or "").strip()
 
 
 # Every variable this module owns, for cache signatures and snapshots.

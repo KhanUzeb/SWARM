@@ -67,8 +67,16 @@ def origin_allowed(origin: str | None, request_host: str | None = None) -> bool:
     return origin_host.lower() == request_host.lower()
 
 
-def parse_token(raw: str) -> tuple[str, str] | None:
-    if ":" not in raw:
+def parse_token(raw: object) -> tuple[str, str] | None:
+    """Split a composite `<handle>:<raw>` token, or return None.
+
+    `raw` is untrusted JSON, not a header: the WebSocket handshake feeds
+    whatever the client sent straight in. `":" not in raw` raises TypeError
+    on a number, a list or a map, so the type is checked first and a
+    non-string is simply "not a token" — the caller closes with 4001
+    instead of the exception escaping the WS handler (AGENTS.md s3).
+    """
+    if not isinstance(raw, str) or ":" not in raw:
         return None
     handle, _, token = raw.partition(":")
     if not handle or not token:
@@ -124,6 +132,7 @@ def install_api_guard(app) -> None:
             # stays strict - only the error message changes.
             return JSONResponse(
                 {
+                    "ok": False,
                     "detail": (
                         f"origin not allowed: {origin}. Add it to "
                         "SWARM_ALLOWED_ORIGINS (comma-separated) and restart, e.g. "
@@ -139,6 +148,6 @@ def install_api_guard(app) -> None:
 
         # Browser cross-origin calls must identify as the swarm web app.
         if origin and request.headers.get("x-swarm-client") != SWARM_CLIENT_HEADER:
-            return JSONResponse({"detail": "forbidden client"}, status_code=403)
+            return JSONResponse({"ok": False, "detail": "forbidden client"}, status_code=403)
 
         return await call_next(request)

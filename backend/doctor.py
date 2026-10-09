@@ -159,7 +159,18 @@ def check_providers() -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for spec in providers_by_priority():
             env_name = spec.get("env_fallback")
-            env_ok = bool((os.environ.get(env_name) or "").strip()) if env_name else False
+            # Two kinds of fallback. Provider keys (GROQ_API_KEY, HF_TOKEN)
+            # are the provider's own vocabulary and stay a direct env read;
+            # SWARM_OPENAI_COMPAT_API_KEY is a SWARM_* flag, so it is read
+            # through the one settings object like every other one
+            # (AGENTS.md s2). Reading it here with os.environ would make
+            # this the one place a SWARM_* flag bypasses Settings.
+            env_ok = False
+            if env_name:
+                if env_name == "SWARM_OPENAI_COMPAT_API_KEY":
+                    env_ok = settings.openai_compat_key_configured()
+                else:
+                    env_ok = bool((os.environ.get(env_name) or "").strip())
             # resolve_key() deliberately conflates the sealed store with the env
             # fallback, so it cannot tell us *where* a key came from. The
             # operator's next action depends on that: a key in .env is found by
@@ -208,6 +219,16 @@ def check_providers() -> list[dict[str, Any]]:
                 "no provider key found; bots will not reply",
                 "Add GROQ_API_KEY to .env, connect a provider in Command Center, "
                 "or set SWARM_DEMO=1 to boot without a key.",
+            ))
+    else:
+        # Stable shape: run_doctor always contains a "providers" row (like
+        # "connectivity"), so tooling and the report-coverage test can rely
+        # on it even when per-provider rows exist.
+        connected = [r for r in rows if r["check"].startswith("provider:")]
+        if connected and not any(r["check"] == "providers" for r in rows):
+            rows.insert(0, _check(
+                "providers", OK,
+                f"{len(connected)} provider(s) connected",
             ))
     return rows
 
@@ -285,7 +306,7 @@ def check_sandbox() -> dict[str, Any]:
 
 def _describe_sandbox() -> str:
     """Where the sandbox came from, which is the question operators ask."""
-    if (os.environ.get("SWARM_SANDBOX_DIR") or "").strip():
+    if (get_settings().sandbox_dir or "").strip():
         return "from SWARM_SANDBOX_DIR"
     if os.name == "nt":
         return "default (TEMP/swarm-sandbox)"

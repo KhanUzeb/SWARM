@@ -35,8 +35,16 @@ def _isolated_env(monkeypatch, tmp_path):
     monkeypatch.setenv("SWARM_SANDBOX_DIR", str(tmp_path / "sandbox"))
     monkeypatch.setenv("SWARM_DB_PATH", str(tmp_path / "swarm.db"))
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
-    for name in ("GROQ_API_KEY", "OPENROUTER_API_KEY"):
-        monkeypatch.delenv(name, raising=False)
+    # "No key" means no key for any provider in the catalog (now 16 with
+    # env_fallbacks), not just the two this cleared when the catalog was
+    # smaller. Clearing only GROQ/OPENROUTER lets an ambient HF_TOKEN (or
+    # any other provider key) leak in and flip the no-key/demo assertions.
+    from backend.ai_support.providers import providers_by_priority
+
+    for spec in providers_by_priority():
+        env_name = spec.get("env_fallback")
+        if env_name:
+            monkeypatch.delenv(env_name, raising=False)
 
     original_path = db_mod.DB_PATH
     db_mod.DB_PATH = tmp_path / "provider-store.db"

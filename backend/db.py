@@ -20,7 +20,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -43,7 +42,18 @@ from .models import (
     resolve_groq_model,
 )
 
-DB_PATH = Path(os.environ.get("SWARM_DB_PATH", str(Path(__file__).parent / "swarm.db")))
+def _default_db_path() -> Path:
+    """Initial DB_PATH via the one settings object (no fresh env read)."""
+    try:
+        raw = (get_settings().db_path or "").strip()
+    except Exception:  # noqa: BLE001 — import-time safety, fall back below
+        raw = ""
+    if raw:
+        return Path(raw)
+    return Path(__file__).parent / "swarm.db"
+
+
+DB_PATH = _default_db_path()
 
 _logger = logging.getLogger("swarm.db")
 
@@ -712,6 +722,20 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
                 "VALUES ('core', ?, ?)",
                 (agent_name, i),
             )
+    # OAuth columns for ai_providers live here (not in v2) so db.init_db
+    # alone is sufficient: update_ai_provider_oauth assumes them, and a
+    # database that never ran v2.init_db would otherwise 500 with
+    # "no column named auth_method". Additive PRAGMA + ALTER TABLE only.
+    cur = await db.execute("PRAGMA table_info(ai_providers)")
+    provider_cols = {row[1] for row in await cur.fetchall()}
+    if "auth_method" not in provider_cols:
+        await db.execute(
+            "ALTER TABLE ai_providers ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'api_key'"
+        )
+    if "refresh_secret" not in provider_cols:
+        await db.execute("ALTER TABLE ai_providers ADD COLUMN refresh_secret TEXT")
+    if "expires_at" not in provider_cols:
+        await db.execute("ALTER TABLE ai_providers ADD COLUMN expires_at REAL")
     await _grant_computer_use_tools(db)
     await _seed_bundled_skills(db)
 
@@ -1227,14 +1251,27 @@ async def message_in_channel(message_id: int, channel_id: str) -> bool:
 
 
 async def delete_message(message_id: int) -> list[int]:
-    """Delete a message and its direct replies. Returns removed ids."""
+    """Delete a message and its whole reply thread. Returns removed ids.
+
+    Replies can themselves be replied to, so all descendants are collected
+    transitively. Deleting only the direct children leaves grandchildren
+    pointing at a deleted parent, which raises IntegrityError with
+    foreign_keys ON instead of deleting.
+    """
     async with open_db() as db:
         cur = await db.execute("SELECT id FROM messages WHERE id = ?", (message_id,))
         if await cur.fetchone() is None:
             return []
-        cur = await db.execute("SELECT id FROM messages WHERE parent_id = ?", (message_id,))
-        reply_ids = [row[0] for row in await cur.fetchall()]
-        ids = [message_id, *reply_ids]
+        ids = [message_id]
+        queue = [message_id]
+        while queue:
+            cur = await db.execute(
+                "SELECT id FROM messages WHERE parent_id = ?", (queue.pop(),)
+            )
+            for row in await cur.fetchall():
+                if row[0] not in ids:
+                    ids.append(row[0])
+                    queue.append(row[0])
         placeholders = ",".join("?" * len(ids))
         await db.execute(f"DELETE FROM reactions WHERE message_id IN ({placeholders})", ids)
         await db.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", ids)
@@ -1258,6 +1295,7 @@ async def delete_channel(channel_id: str) -> bool:
         await db.execute("DELETE FROM agent_memory WHERE channel_id = ?", (channel_id,))
         await db.execute("DELETE FROM approvals WHERE channel_id = ?", (channel_id,))
         await db.execute("DELETE FROM channel_members WHERE channel_id = ?", (channel_id,))
+        await db.execute("DELETE FROM channel_people WHERE channel_id = ?", (channel_id,))
         await db.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
         await db.commit()
         return True
@@ -2453,14 +2491,14 @@ async def search_workspace(
     needle = (query or "").strip()
     if len(needle) < 2:
         return []
-    like = f"%{needle}%"
+    like = f"%{_like_escape(needle)}%"
     async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT m.id, m.channel_id, m.author, m.author_kind, m.body, m.created_at, "
             "m.parent_id, m.model, c.name AS channel_name, c.kind AS channel_kind "
             "FROM messages m JOIN channels c ON c.id = m.channel_id "
-            "WHERE m.body LIKE ? COLLATE NOCASE "
+            "WHERE m.body LIKE ? ESCAPE '\\' COLLATE NOCASE "
             "ORDER BY m.created_at DESC, m.id DESC LIMIT ?",
             (like, max(1, min(int(limit), 50))),
         )
