@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown } from "lucide-react";
 import { Lamp } from "../components/Flap";
 import { placeOverlay, type OverlayPlacement } from "../lib/overlay";
 import { apiJson } from "../lib.js";
+import { modelEmptyState, modelFootHint, modelListRequest } from "./modelConnection.js";
 
 export interface ModelOption {
   id: string;
@@ -69,6 +70,12 @@ export default function ModelPicker({
   const loadedSpec = useRef("");
   const spec = `${providerId} ${apiKey.trim()}`;
 
+  // Per-instance ids: this picker is mounted in several places at once, so the
+  // listbox and each option must not share one hard-coded id (defect 5).
+  const uid = useId();
+  const listId = `model-list${uid}`;
+  const optionId = (index: number) => `${listId}-opt-${index}`;
+
   const applyModels = useCallback((list: ModelOption[], meta: Record<string, unknown> = {}) => {
     setModels(list);
     setLive(Boolean(meta.live));
@@ -86,20 +93,17 @@ export default function ModelPicker({
 
   const load = useCallback(async () => {
     if (!token || disabled) return;
+    const request = modelListRequest({ providerId, apiKey });
     const generation = ++fetchGen.current;
     setLoading(true);
     setError("");
     try {
-      const path = providerId
-        ? `/api/v2/providers/${encodeURIComponent(providerId)}/models`
-        : "/api/v2/models/connected";
-      const response = apiKey.trim().length >= 8 && providerId
-        ? await apiJson(`/api/ai-support/providers/${encodeURIComponent(providerId)}/models`, {
-            token,
-            method: "POST",
-            body: { api_key: apiKey.trim() },
-          })
-        : await apiJson(path, { token, cacheTtl: 0 });
+      // The preview and the connect flow both go through modelListRequest, so
+      // the key previewed here is provably the key ProviderPanel connects with
+      // (defect 1): one builder decides POST-live-preview vs GET-catalog.
+      const response = request.method === "POST"
+        ? await apiJson(request.path, { token, method: "POST", body: request.body })
+        : await apiJson(request.path, { token, cacheTtl: 0 });
       if (generation !== fetchGen.current) return;
       const data = response.ok ? response.data : null;
       applyModels(data?.models || [], {
@@ -128,6 +132,14 @@ export default function ModelPicker({
     if (disabled || !token || hasLoaded) return;
     void load();
   }, [disabled, hasLoaded, load, token]);
+
+  // A changed key or provider invalidates the list the picker is showing: the
+  // next open (ensureLoaded) re-fetches under the new spec, and a fresh
+  // auto-select is allowed so a second instance/provider isn't blocked by the
+  // first one's latch.
+  useEffect(() => {
+    autoSelected.current = false;
+  }, [spec]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -171,7 +183,7 @@ export default function ModelPicker({
     window.addEventListener("scroll", onReflow, true);
     return () => {
       window.removeEventListener("resize", onReflow);
-      window.removeEventListener("scroll", onReflow, true);
+      window.removeEventListener("scroll", onReflow, false);
     };
     // The list grows as it loads, and the panel rides the viewport edge,
     // so the placement is re-measured whenever its height can have changed.
@@ -179,9 +191,18 @@ export default function ModelPicker({
 
   useEffect(() => setActive(0), [open, query, filtered.length]);
 
+  // Keep the ARIA-active option scrolled into view for keyboard users, matching
+  // the visual `.active` that a mouse user sees. keyed on the stable list id.
+  useEffect(() => {
+    if (!open) return;
+    document.getElementById(`${listId}-opt-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [open, active, filtered.length, listId]);
+
   function pick(modelId: string) {
     onChange?.(modelId);
     setQuery("");
+    // Close on selection so the committed value shows in the toggle; the tab
+    // strip pattern relies on the popover dismissing once a choice lands.
     setOpen(false);
   }
 
@@ -213,6 +234,9 @@ export default function ModelPicker({
         : models.length
           ? "Catalog"
           : "No models";
+
+  const previewing = Boolean(apiKey.trim()) && Boolean(providerId);
+  const customKeyless = providerId === "custom" && !apiKey.trim();
 
   return (
     <div className="model-picker" ref={rootRef}>
@@ -260,34 +284,40 @@ export default function ModelPicker({
             onKeyDown={onKeyDown}
             autoComplete="off"
             spellCheck={false}
+            role="combobox"
             aria-label="Search models"
+            aria-expanded={open}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={open && filtered[active] ? optionId(active) : undefined}
           />
-          <ul className="model-picker-list" role="listbox" aria-label="Models">
+          <ul className="model-picker-list" id={listId} role="listbox" aria-label="Models">
             {loading && !filtered.length && <li className="empty-state">Fetching models from your provider…</li>}
             {!loading && !filtered.length && (
-              <li className="empty-state">{note || "No models found. Connect a provider in Command Center → AI providers."}</li>
+              <li className="empty-state">{modelEmptyState({ note, customKeyless })}</li>
             )}
             {filtered.slice(0, 80).map((model, index) => {
               const provider = providerOf(model);
               return (
-                <li key={`${model.provider_id || ""}:${model.id}`}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={model.id === value}
-                    className={`model-option${index === active ? " active" : ""}${model.id === value ? " selected" : ""}`}
-                    onMouseEnter={() => setActive(index)}
-                    onClick={() => pick(model.id)}
-                  >
-                    <span className="model-option-name">{labelOf(model)}</span>
-                    <span className="model-option-id">{provider ? `${provider} · ` : ""}{model.id}</span>
-                  </button>
+                <li
+                  key={`${model.provider_id || ""}:${model.id}`}
+                  id={optionId(index)}
+                  role="option"
+                  aria-selected={model.id === value}
+                  className={`model-option${index === active ? " active" : ""}${model.id === value ? " selected" : ""}`}
+                  onMouseEnter={() => setActive(index)}
+                  onClick={() => pick(model.id)}
+                >
+                  <span className="model-option-name">{labelOf(model)}</span>
+                  <span className="model-option-id">{provider ? `${provider} · ` : ""}{model.id}</span>
                 </li>
               );
             })}
           </ul>
           <div className="model-picker-foot">
-            <span className={`hint${error ? " error" : ""}`}>{error || note || (live ? "Fetched from provider API" : "Catalog models — connect a key for live results")}</span>
+            <span className={`hint${error ? " error" : ""}`}>
+              {modelFootHint({ error, note, live, previewing })}
+            </span>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void load()} disabled={loading}>
               {loading ? "Refreshing…" : "Refresh"}
             </button>
