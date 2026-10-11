@@ -41,6 +41,7 @@ must stay accepted. See `backend/tools/browser.py`.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from typing import Any, Iterator
@@ -192,6 +193,10 @@ class Settings(BaseSettings):
     host: str | None = Field(default=None, description="bind address, informational only")
     bind: str | None = Field(default=None, description="bind address alias, informational only")
     system_root: str | None = Field(default=None, description="directory host tools may touch")
+    system_places: str | None = Field(
+        default=None,
+        description="comma- or os.pathsep-separated absolute paths offered as read-only Places",
+    )
     sandbox_dir: str | None = Field(default=None, description="shared team computer home")
     db_path: str | None = Field(default=None, description="SQLite file")
     allowed_origins: str | None = Field(default=None, description="comma-separated browser origins")
@@ -245,6 +250,32 @@ class Settings(BaseSettings):
     def system_unrestricted_ok(self) -> bool:
         """Allow the filesystem root as a system root. Unset means off."""
         return truthy(self.system_unrestricted, False)
+
+    def system_places_list(self) -> list[str]:
+        """SWARM_SYSTEM_PLACES as absolute paths, cleaned and de-duplicated.
+
+        `;` always splits, `,` splits everywhere, and `:` splits only on POSIX
+        — on Windows a colon is part of a drive letter, so `C:/a;D:/b` must
+        stay two paths while `C:\\Users\\x` stays one. De-duplication is
+        case-insensitive for the same reason the places list is: two spellings
+        of one folder must not appear as two Places.
+        """
+        raw = (self.system_places or "").strip()
+        if not raw:
+            return []
+        separators = r"[;,]" if os.name == "nt" else r"[;:,]"
+        out: list[str] = []
+        seen: set[str] = set()
+        for part in re.split(separators, raw):
+            text = part.strip().strip('"').strip("'")
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+        return out
 
     def demo_mode(self) -> bool:
         """Deterministic mock replies. Unset means off."""

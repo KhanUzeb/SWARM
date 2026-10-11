@@ -1,9 +1,12 @@
 """Host-system tools: Bots work on this machine, not only the sandbox.
 
 Bound to the current system folder (default: the swarm repo). Not a cloud VM.
-The UI can rebind that folder so Bots can work in Home, Desktop, or any other
-directory. Set SWARM_SYSTEM=1 to enable. Destructive commands and path
-escapes are blocked. Filesystem root is refused unless SWARM_SYSTEM_UNRESTRICTED=1.
+The UI can rebind that folder so Bots can work in any directory on the
+machine. Places are where that rebinding comes from: user-saved places
+(persisted in `workspace_meta`), folders named in SWARM_SYSTEM_PLACES, and a
+small set of sensible defaults. Set SWARM_SYSTEM=1 to enable. Destructive
+commands and path escapes are blocked. Filesystem root is refused unless
+SWARM_SYSTEM_UNRESTRICTED=1.
 
 Default is OFF. Host-system tools run commands on the machine that runs the
 backend, so an opt-in is the only sane default for something self-hosted and
@@ -12,6 +15,8 @@ SWARM_SYSTEM=1 explicitly.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
@@ -38,6 +43,14 @@ DISABLED = (
 _PROTECTED_DOTENV = re.compile(r"^\.env(?:\.|$)", re.I)
 _PROTECTED_NAMES = {".env", ".env.local", ".env.production", "swarm.db"}
 _META_KEY = "system_root"
+# User-saved places live in the workspace_meta table as one JSON value. The
+# root binding itself stays under its own key, so renaming or deleting a place
+# never disturbs the folder the host tools are pointed at.
+_META_PLACES_KEY = "system_places"
+# Stable per-folder id, so re-saving the same folder keeps one entry and the
+# UI's `current` highlight survives a relabel.
+_ID_PREFIX = "place-"
+_ID_SUFFIX_LEN = 8
 _WIN_SHELL_JUNCTIONS = {
     "application data", "cookies", "local settings", "my documents",
     "my music", "my pictures", "my videos", "nethood", "printhood",
@@ -221,7 +234,43 @@ def _protected_write(target: Path) -> bool:
         return False
 
 
-def places() -> list[dict[str, str]]:
+def _place_id(path: Path) -> str:
+    """Stable id for a folder, so saving it twice keeps one row.
+
+    Hash of the resolved path (lower-cased) rather than of the label: a folder
+    keeps its id when it is relabelled, and two spellings of the same folder
+    collapse to the same id.
+    """
+    digest = hashlib.sha1(str(path).casefold().encode("utf-8", "replace")).hexdigest()
+    return f"{_ID_PREFIX}{digest[:_ID_SUFFIX_LEN]}"
+
+
+def _env_places() -> list[dict[str, str]]:
+    """Folders the operator named in SWARM_SYSTEM_PLACES, read-only in the UI.
+
+    Parsed in settings.py with every other SWARM_* variable (AGENTS.md s2), so
+    `swarm doctor` and this list can never disagree about what was asked for.
+    Each entry is auto-labelled from the folder's basename.
+    """
+    from ..settings import get_settings
+
+    out: list[dict[str, str]] = []
+    for raw in get_settings().system_places_list():
+        resolved = _validate_root(Path(raw))
+        if resolved is None:
+            continue
+        label = resolved.name or str(resolved)
+        out.append({
+            "id": f"env-{_place_id(resolved)}",
+            "label": label,
+            "path": str(resolved),
+            "kind": "env",
+        })
+    return out
+
+
+def _default_places() -> list[dict[str, str]]:
+    """The fallback guesses, kept as-is for installs that never saved a place."""
     home = Path.home()
     candidates = [
         ("project", "Project", _repo_root()),
@@ -231,18 +280,184 @@ def places() -> list[dict[str, str]]:
         ("documents", "Documents", home / "Documents"),
         ("downloads", "Downloads", home / "Downloads"),
     ]
-    seen: set[str] = set()
     out: list[dict[str, str]] = []
     for pid, label, path in candidates:
         resolved = _validate_root(path)
         if resolved is None:
             continue
-        key = str(resolved).casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"id": pid, "label": label, "path": str(resolved)})
+        out.append({
+            "id": pid,
+            "label": label,
+            "path": str(resolved),
+            "kind": "default",
+        })
     return out
+
+
+async def _saved_places() -> list[dict[str, str]]:
+    """User-saved places from workspace_meta, malformed rows skipped.
+
+    A row written by hand (or by an older build) must not break the whole list,
+    so each entry is re-validated against _validate_root and a bad one is
+    dropped rather than raised. That is also what makes a place silently
+    disappear once its folder is deleted, which is the honest outcome.
+    """
+    from .. import db
+
+    stored = await db.get_workspace_meta(_META_PLACES_KEY)
+    if not stored:
+        return []
+    try:
+        rows = json.loads(stored)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    out: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_path = str(row.get("path") or "").strip()
+        if not raw_path:
+            continue
+        resolved = _validate_root(Path(raw_path))
+        if resolved is None:
+            continue
+        label = str(row.get("label") or "").strip() or resolved.name or str(resolved)
+        out.append({
+            "id": str(row.get("id") or "").strip() or _place_id(resolved),
+            "label": label,
+            "path": str(resolved),
+            "kind": "saved",
+        })
+    return out
+
+
+async def _write_places(rows: list[dict[str, Any]]) -> None:
+    from .. import db
+
+    await db.set_workspace_meta(
+        _META_PLACES_KEY,
+        json.dumps([
+            {"id": r["id"], "label": r["label"], "path": r["path"]} for r in rows
+        ]),
+    )
+
+
+def _merge_places(
+    saved: list[dict[str, str]],
+    env: list[dict[str, str]],
+    defaults: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """One list, saved first then env then default, deduped by path.
+
+    Dedupe is case-insensitive because the filesystem is on Windows, and the
+    first occurrence wins — a folder the user saved keeps its label and its
+    `saved` kind even when it is also an env or default guess. Sorting within
+    each kind keeps the chip row from shuffling between renders.
+    """
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for kind_rows in (saved, env, defaults):
+        for row in sorted(kind_rows, key=lambda r: (str(r.get("label") or "").casefold(), str(r.get("path") or "").casefold())):
+            key = str(row["path"]).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(row)
+    return out
+
+
+async def places() -> list[dict[str, str]]:
+    """Every place the UI may offer, merged and sorted.
+
+    Callers that only need the defaults synchronously (status/listing at import
+    time, before the DB is reachable) still see a full list, because the async
+    path below is the only one that touches the database.
+    """
+    return _merge_places(await _saved_places(), _env_places(), _default_places())
+
+
+def add_place(path: str, label: str = "") -> dict[str, Any]:
+    """Validate a folder for saving. Pure: the caller persists the result.
+
+    Validation lives here rather than in the route so a bad path is refused by
+    the same rule whether it arrives from the UI, the CLI, or a test.
+    """
+    resolved = _validate_root(Path((path or "").strip()))
+    if resolved is None:
+        raw = (path or "").strip()
+        if raw and _is_fs_root(Path(raw).expanduser()) and not unrestricted():
+            return {
+                "ok": False,
+                "error": "filesystem root needs SWARM_SYSTEM_UNRESTRICTED=1",
+            }
+        return {"ok": False, "error": "not a directory"}
+    return {
+        "ok": True,
+        "id": _place_id(resolved),
+        "label": (label or "").strip() or resolved.name or str(resolved),
+        "path": str(resolved),
+    }
+
+
+async def save_place(path: str, label: str = "") -> dict[str, Any]:
+    """Persist a user place. Same folder re-saves as a relabel, not a duplicate."""
+    checked = add_place(path, label)
+    if not checked.get("ok"):
+        return checked
+    saved = await _saved_places()
+    entry = {
+        "id": checked["id"],
+        "label": checked["label"],
+        "path": checked["path"],
+        "kind": "saved",
+    }
+    kept = [r for r in saved if r["id"] != entry["id"]]
+    kept.append(entry)
+    await _write_places(kept)
+    return {"ok": True, "place": entry}
+
+
+async def remove_place(place_id: str) -> dict[str, Any]:
+    """Delete a saved place by id.
+
+    Only 'saved' rows are ever stored, so an id that is not in the list is by
+    definition an env or default entry (or unknown): the caller gets a 404 and
+    nothing is deleted. The system root is a separate workspace_meta key, so
+    removing the place the root happens to point at leaves the binding intact.
+    """
+    wanted = (place_id or "").strip()
+    if not wanted:
+        return {"ok": False, "error": "no such place"}
+    saved = await _saved_places()
+    kept = [r for r in saved if r["id"] != wanted]
+    if len(kept) == len(saved):
+        return {"ok": False, "error": "no such place"}
+    await _write_places(kept)
+    return {"ok": True}
+
+
+def _place_by_id(rows: list[dict[str, str]], place_id: str) -> dict[str, str] | None:
+    wanted = (place_id or "").strip()
+    if not wanted:
+        return None
+    for row in rows:
+        if row.get("id") == wanted:
+            return row
+    return None
+
+
+def _default_place_rows() -> list[dict[str, str]]:
+    """Env + defaults only, synchronously.
+
+    status() and listing() are called from sync contexts (the /api/computer
+    payload builder, the tool implementations) where there is no await. They
+    show the same list minus the saved rows; the places endpoints and the UI's
+    own refresh go through the async path, so the persisted places are always
+    what the panel renders.
+    """
+    return _merge_places([], _env_places(), _default_places())
 
 
 def _crumbs(target: Path) -> list[dict[str, str]]:
@@ -357,6 +572,12 @@ async def hydrate_root() -> Path:
 
 
 async def set_root(path: str) -> dict[str, Any]:
+    """Point the host tools at a folder. Accepts a raw path.
+
+    The route resolves a `place_id` to its path before calling this, so a place
+    and a typed path take the same validation route (AGENTS.md s1: the backend,
+    not the caller, decides what a valid root is).
+    """
     global _active_root
     raw = (path or "").strip()
     if not raw or "\x00" in raw:
@@ -372,6 +593,15 @@ async def set_root(path: str) -> dict[str, Any]:
     return {"ok": True, "root": str(resolved)}
 
 
+async def resolve_place(place_id: str) -> Path | None:
+    """Path of a known place (saved, env or default), or None if unknown."""
+    rows = await places()
+    row = _place_by_id(rows, place_id)
+    if row is None:
+        return None
+    return _validate_root(Path(row["path"]))
+
+
 def status() -> dict[str, Any]:
     root = system_root()
     parent = root.parent
@@ -380,7 +610,7 @@ def status() -> dict[str, Any]:
         "root": str(root),
         "unrestricted": unrestricted(),
         "writable": os.access(root, os.W_OK) if root.exists() else False,
-        "places": places(),
+        "places": _default_place_rows(),
         "can_go_up": _can_go_up(root),
         "parent_abs": str(parent) if _can_go_up(root) else None,
         "project": str(_repo_root()),
@@ -397,7 +627,7 @@ def listing(path: str = "") -> dict[str, Any]:
     info["entries"] = []
     info["note"] = (
         "Bots use system_run / system_ls / system_read / system_write in this folder. "
-        "Pick Home, Desktop, or type a path to work somewhere else. "
+        "Save any folder as a Place, or type a path, to work somewhere else. "
         "computer_run stays in the sandbox. Set SWARM_SYSTEM=0 to disable."
     )
     if not enabled():

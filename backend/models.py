@@ -99,7 +99,11 @@ class TeamCreate(BaseModel):
                 names.append(name)
         if not names:
             raise ValueError("team needs at least one bot")
-        return self.model_copy(update={"id": slug, "members": names[:MAX_TEAM_MEMBERS]})
+        # In-place mutation, not model_copy: returning a second instance makes
+        # pydantic emit a UserWarning on every validate (same as AgentCreate).
+        self.id = slug
+        self.members = names[:MAX_TEAM_MEMBERS]
+        return self
 
 
 class TeamPatch(BaseModel):
@@ -159,7 +163,19 @@ class AiModelsPreview(BaseModel):
 
 
 class SystemRootSet(BaseModel):
+    """Rebind the host-system root. Either a raw path or a known place id.
+
+    Both keys are optional because the two spellings are alternatives, not
+    stages: the route resolves `place_id` first and falls back to `path`, so
+    existing clients that send only `path` keep working unchanged.
+    """
+    path: str | None = Field(default=None, min_length=1, max_length=1024)
+    place_id: str | None = Field(default=None, max_length=200)
+
+
+class SystemPlaceAdd(BaseModel):
     path: str = Field(min_length=1, max_length=1024)
+    label: str | None = Field(default=None, max_length=120)
 
 
 class RegisterRequest(BaseModel):
@@ -204,7 +220,11 @@ class AgentCreate(BaseModel):
             raise ValueError("name must be 1-32 letters, numbers, _ or -")
         if not display:
             display = pretty_name(handle)
-        return self.model_copy(update={"name": handle, "display_name": display[:40]})
+        # Mutate in place and return self: model_copy would hand back a second
+        # instance, which pydantic flags with a UserWarning on every validate.
+        self.name = handle
+        self.display_name = display[:40]
+        return self
 
     @field_validator("model")
     @classmethod

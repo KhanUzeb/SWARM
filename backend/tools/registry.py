@@ -517,10 +517,14 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "system_run",
             "description": (
-                "Run a shell command on this machine (full PATH, cwd = the current "
-                "System folder from Computer → System, which can be the project, Home, "
-                "Desktop, or any other directory). 60s timeout. Destructive commands "
-                "are blocked. computer_run is the shared sandbox."
+                "Run a shell command on this machine (full PATH). Everything in this "
+                "tool family is bound to the current System folder — a Places entry "
+                "the team saved, a folder the operator set in SWARM_SYSTEM_PLACES, or "
+                "a sensible default — and that folder can be ANY directory on this "
+                "machine, not only the project. There is no tool to rebind it: it is "
+                "changed by a human admin in Computer → System. Ask for that rather "
+                "than reporting a path as unreachable. 60s timeout. Destructive "
+                "commands are blocked. computer_run is the shared sandbox."
             ),
             "parameters": {
                 "type": "object",
@@ -536,7 +540,12 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "system_ls",
-            "description": "List a directory on this machine under the current System folder (Computer → System). Use an empty path for the folder root.",
+            "description": (
+                "List a directory on this machine under the current System folder. "
+                "That folder is a Places entry and can be any directory on the "
+                "machine; there is no tool to rebind it, so a human admin changes it "
+                "in Computer → System. Use an empty path for the folder root."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -547,7 +556,12 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "system_read",
-            "description": "Read a text file on this machine under the current System folder (cap 200k chars).",
+            "description": (
+                "Read a text file on this machine under the current System folder "
+                "(cap 200k chars). The folder is a Places entry that can point "
+                "anywhere on the machine and cannot be rebound from here — ask a "
+                "human admin to change it in Computer → System."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -560,8 +574,11 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "system_write",
             "description": (
-                "Write a text file on this machine under the current System folder. "
-                ".env and swarm.db are protected. Request approval before production changes."
+                "Write a text file on this machine under the current System folder, "
+                "a Places entry that can be any directory on the machine. There is no "
+                "tool to rebind it; a human admin does that in Computer → System. "
+                ".env and swarm.db are protected. Request approval before production "
+                "changes."
             ),
             "parameters": {
                 "type": "object",

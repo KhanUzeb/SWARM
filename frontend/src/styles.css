@@ -1806,6 +1806,28 @@ select.input { cursor: pointer; }
   border: 1px solid var(--rule);
   border-radius: var(--r-slot);
 }
+/* A place chip is a flap with two controls inside it: the label binds the
+   root, the × drops a saved place. Both stay flat machine-register buttons —
+   no nested cards, no second accent hue (AGENTS.md s8a). */
+.place-chip-main, .place-chip-remove {
+  font-family: var(--f-machine);
+  font-size: var(--t-xs);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.place-chip-remove { color: var(--ink-3); padding: 0 2px; }
+.place-chip-remove:hover:not(:disabled) { color: var(--hold-lit); }
+.place-chip-remove:disabled { cursor: default; opacity: 0.5; }
+.place-chip.current .place-chip-main { color: var(--go-lit); }
+.place-chip-kind { color: var(--ink-3); letter-spacing: 0.04em; }
+.place-add { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.place-add .input { flex: 1 1 220px; min-width: 0; }
 .provider-badge { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.08em; text-transform: uppercase; border-radius: var(--r-slot); border: 1px solid var(--rule-2); color: var(--ink-3); }
 .provider-badge.ready { color: var(--go-lit); border-color: rgba(23, 168, 106, 0.45); }
 .provider-badge.missing { color: var(--ink-3); }

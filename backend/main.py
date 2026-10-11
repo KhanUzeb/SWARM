@@ -41,7 +41,7 @@ from .models import (
     ComposioToolkitConnect, CustomToolCreate,
     CustomToolPatch, DirectMessageCreate, MessageCreate, ReactionCreate,
     RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate, SkillPatch,
-    SystemRootSet, TeamCreate, TeamPatch, RunCreate, WorkflowCreate, WorkflowPatch,
+    SystemRootSet, SystemPlaceAdd, TeamCreate, TeamPatch, RunCreate, WorkflowCreate, WorkflowPatch,
     ComputerRunRequest,
 )
 from .security import (
@@ -59,7 +59,13 @@ install_api_guard(app)
 async def _http_exception_json(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     # Keep the default {"detail": ...} shape (tests + UI read it) and add
     # ok:false so clients can branch without sniffing status codes.
-    return JSONResponse(status_code=exc.status_code, content={"ok": False, "detail": exc.detail})
+    # Defect: exc.headers was thrown away here, so a 401 lost its
+    # WWW-Authenticate challenge and any Retry-After went with it.
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"ok": False, "detail": exc.detail},
+        headers=exc.headers,
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -133,9 +139,12 @@ def _prune_last_write(now: float) -> None:
 
 
 def _rate_limited(handle: str) -> bool:
-    now = time.time()
-    last = _last_write.get(handle, 0.0)
-    if now - last < RATE_LIMIT_SECONDS:
+    # Defect: the window was measured on time.time(), so one backwards clock
+    # step (NTP correction, VM resume, a hand-set clock) computed a negative
+    # elapsed time and throttled that handle until the clock caught up.
+    now = time.monotonic()
+    last = _last_write.get(handle)
+    if last is not None and now - last < RATE_LIMIT_SECONDS:
         return True
     _prune_last_write(now)
     _last_write[handle] = now
@@ -184,7 +193,10 @@ class Hub:
 
     async def broadcast(self, channel_id: str, payload: dict) -> None:
         dead = []
-        for ws in self._rooms.get(channel_id, set()):
+        # Defect: iterating the live set across an await let a disconnecting
+        # socket's leave() mutate it mid-loop, which is a RuntimeError and a
+        # silently truncated fanout; send over a snapshot.
+        for ws in list(self._rooms.get(channel_id, ())):
             try:
                 await ws.send_json(payload)
             except Exception:  # noqa: BLE001
@@ -740,17 +752,34 @@ async def ws_v2_run(websocket: WebSocket, run_id: str):
         await websocket.close(code=4003)
         return
     await websocket.accept()
+    # Defect: the first frame is the handshake, so a frame that is not JSON or
+    # not the token frame closed 1011 ("server fault") from the catch-all
+    # instead of the 4001 AGENTS.md s3 specifies for a failed handshake.
     try:
         first = await websocket.receive_json()
-        parsed = parse_token(first.get("token", "")) if isinstance(first, dict) else None
-        if parsed is None or not await db.verify_token(parsed[0], parsed[1]):
-            await websocket.close(code=4001)
-            return
-        owner = parsed[0]
-        if not await v2.get_run(run_id, owner):
-            await websocket.close(code=4004)
-            return
-        cursor = int(first.get("after", 0) or 0)
+    except WebSocketDisconnect:
+        return
+    except Exception:  # noqa: BLE001 - a bad first frame is a bad handshake
+        await websocket.close(code=4001)
+        return
+    parsed = parse_token(first.get("token", "")) if isinstance(first, dict) else None
+    if parsed is None or not await db.verify_token(parsed[0], parsed[1]):
+        await websocket.close(code=4001)
+        return
+    owner = parsed[0]
+    if not await v2.get_run(run_id, owner):
+        await websocket.close(code=4004)
+        return
+    # Defect: `after` came off the wire straight into int(), so "abc" or a list
+    # raised out of the loop and closed 1011 on a client-side typo.
+    try:
+        cursor = int(first.get("after") or 0)
+    except (TypeError, ValueError):
+        await websocket.close(code=4001)
+        return
+    if cursor < 0:
+        cursor = 0
+    try:
         while True:
             events = await v2.list_events(run_id, owner, cursor)
             for event in events:
@@ -766,6 +795,7 @@ async def ws_v2_run(websocket: WebSocket, run_id: str):
     except Exception:
         with suppress(Exception):
             await websocket.close(code=1011)
+
 
 def _key_set(name: str | None) -> bool:
     """Whether an env key is set. SWARM_* names read via Settings."""
@@ -1803,8 +1833,16 @@ async def api_computer_run(payload: ComputerRunRequest, handle: str = Depends(re
 @app.get("/api/computer/system")
 async def api_computer_system(path: str = "", handle: str = Depends(require_auth)):
     from .tools import system as system_mod
+
     await system_mod.hydrate_root()
-    return system_mod.listing(path)
+    payload = system_mod.listing(path)
+    # listing() is sync (tools and /api/computer build it without an await), so
+    # its places are env+default only. The panel must render the saved rows
+    # too, and since this route is async it is the cheapest place to merge the
+    # full list in — one request per render instead of the client stitching
+    # two endpoints together.
+    payload["places"] = await system_mod.places()
+    return payload
 
 
 @app.post("/api/computer/system/root")
@@ -1814,10 +1852,71 @@ async def api_computer_system_root(
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
     from .tools import system as system_mod
-    result = await system_mod.set_root(payload.path)
+
+    # A place id is resolved here so the binding and the list stay in the
+    # backend; a raw path still goes straight through for older clients.
+    target = (payload.path or "").strip()
+    if payload.place_id and not target:
+        resolved = await system_mod.resolve_place(payload.place_id)
+        if resolved is None:
+            raise HTTPException(404, "no such place")
+        target = str(resolved)
+    if not target:
+        raise HTTPException(400, "invalid path")
+    result = await system_mod.set_root(target)
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "invalid path")
     return system_mod.listing("")
+
+
+@app.get("/api/computer/system/places")
+async def api_computer_system_places(handle: str = Depends(require_auth)):
+    """Every Place the panel may offer, merged from saved, env and default.
+
+    Auth-only like GET /api/computer/system: reading the list reveals folder
+    names but changes nothing. The two writes below are admin-only, matching
+    the root rebind they sit next to.
+    """
+    from .tools import system as system_mod
+
+    await system_mod.hydrate_root()
+    return {"places": await system_mod.places()}
+
+
+@app.post("/api/computer/system/places")
+async def api_computer_system_places_add(
+    payload: SystemPlaceAdd, handle: str = Depends(require_admin)
+):
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import system as system_mod
+
+    result = await system_mod.save_place(payload.path, payload.label or "")
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "invalid path")
+    await system_mod.hydrate_root()
+    return {"places": await system_mod.places()}
+
+
+@app.delete("/api/computer/system/places/{place_id}")
+async def api_computer_system_places_remove(
+    place_id: str, handle: str = Depends(require_admin)
+):
+    """Remove a user-saved place. Env and default entries are never removable.
+
+    404 for an unknown or non-saved id: only 'saved' rows are ever stored, so
+    anything else in the list is read-only and must not be deletable by
+    guessing an id.
+    """
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    from .tools import system as system_mod
+
+    result = await system_mod.remove_place(place_id)
+    if not result.get("ok"):
+        raise HTTPException(404, "no such place")
+    await system_mod.hydrate_root()
+    return {"places": await system_mod.places()}
 
 
 @app.get("/api/computer/system/file")
@@ -1979,30 +2078,33 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
         return
 
     last_seen_id = first.get("last_seen_id") if isinstance(first, dict) else None
-    hub.join(channel_id, websocket)
-    hub.mark_online(handle)
-
-    if last_seen_id is not None:
-        try:
-            after = int(last_seen_id)
-        except (TypeError, ValueError):
-            after = None
-        if after is not None:
-            # Page through the entire gap. A single 200-row page silently
-            # loses newer replies after a long disconnect.
-            cursor = after
-            for _ in range(20):
-                page = await db.get_history_after(channel_id, cursor)
-                if not page:
-                    break
-                page = await _with_reactions(page)
-                for msg in page:
-                    await websocket.send_json({"type": "message", "message": msg})
-                if len(page) < 200:
-                    break
-                cursor = int(page[-1]["id"])
-
+    # Defect: the catch-up replay sat outside the try/finally that owns the
+    # cleanup, so a client that dropped mid-replay left its socket joined to
+    # the room forever and its handle stuck "online" in /api/people.
     try:
+        hub.join(channel_id, websocket)
+        hub.mark_online(handle)
+
+        if last_seen_id is not None:
+            try:
+                after = int(last_seen_id)
+            except (TypeError, ValueError):
+                after = None
+            if after is not None:
+                # Page through the entire gap. A single 200-row page silently
+                # loses newer replies after a long disconnect.
+                cursor = after
+                for _ in range(20):
+                    page = await db.get_history_after(channel_id, cursor)
+                    if not page:
+                        break
+                    page = await _with_reactions(page)
+                    for msg in page:
+                        await websocket.send_json({"type": "message", "message": msg})
+                    if len(page) < 200:
+                        break
+                    cursor = int(page[-1]["id"])
+
         while True:
             try:
                 data = await websocket.receive_json()

@@ -18,6 +18,8 @@ export default function SystemPanel({ token, flash, onRootChange }) {
   const [previewName, setPreviewName] = useState("");
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const [newPlace, setNewPlace] = useState("");
+  const [newLabel, setNewLabel] = useState("");
   const reqSeq = useRef(0);
   const flashRef = useRef(flash);
   flashRef.current = flash;
@@ -116,30 +118,137 @@ export default function SystemPanel({ token, flash, onRootChange }) {
   });
   const crumbs = listing?.crumbs || [];
   const places = listing?.places || [];
+  // The `current` highlight follows the resolved root, not the path the user
+  // is browsing inside it, so adding or removing a place while a subfolder is
+  // open cannot desync the chip from the folder actually in use.
+  const activeRoot = listing?.root || "";
+
+  async function addPlace(ev) {
+    ev?.preventDefault();
+    const next = newPlace.trim();
+    if (!next) return;
+    const seq = ++reqSeq.current;
+    setBusy(true);
+    try {
+      const res = await apiJson(
+        "/api/computer/system/places",
+        { token, method: "POST", body: { path: next, label: newLabel.trim() || undefined } },
+      );
+      if (seq !== reqSeq.current) return;
+      if (!res.ok || !Array.isArray(res.data?.places)) {
+        flashRef.current?.(
+          res.data?.detail || "That folder could not be saved as a place",
+          true,
+        );
+        setBusy(false);
+        return;
+      }
+      setListing((prev) => (prev ? { ...prev, places: res.data.places } : prev));
+      setNewPlace("");
+      setNewLabel("");
+      flashRef.current?.("Place saved");
+      await load(path);
+    } catch {
+      if (seq !== reqSeq.current) return;
+      flashRef.current?.("That folder could not be saved as a place", true);
+    }
+    if (seq === reqSeq.current) setBusy(false);
+  }
+
+  async function removePlace(place) {
+    if (place?.kind !== "saved" || !place?.id) return;
+    const seq = ++reqSeq.current;
+    setBusy(true);
+    try {
+      const res = await apiJson(
+        `/api/computer/system/places/${encodeURIComponent(place.id)}`,
+        { token, method: "DELETE" },
+      );
+      if (seq !== reqSeq.current) return;
+      if (!res.ok || !Array.isArray(res.data?.places)) {
+        flashRef.current?.(res.data?.detail || "Couldn't remove that place", true);
+        setBusy(false);
+        return;
+      }
+      // Drop it locally so the row is gone even before the refetch lands.
+      setListing((prev) => (prev ? { ...prev, places: res.data.places } : prev));
+      flashRef.current?.("Place removed");
+      await load(path);
+    } catch {
+      if (seq !== reqSeq.current) return;
+      flashRef.current?.("Couldn't remove that place", true);
+    }
+    if (seq === reqSeq.current) setBusy(false);
+  }
 
   return (
     <div className="panel-body system-panel">
       <p className="panel-note">
-        This machine — not just the project. Jump to Home or Desktop, type any folder,
-        or go up a level. Bots follow this folder with <code>system_run</code>,
-        <code> system_read</code>, and <code>system_write</code>.
+        This machine — not just the project. Save any folder as a place, type any
+        folder, or go up a level. Bots follow this folder with{" "}
+        <code>system_run</code>, <code>system_read</code>, and <code>system_write</code>.
       </p>
       <div className="place-chips">
         <span className={`place-chip${enabled ? " on" : ""}`}>
           {enabled ? "On" : "Off"}
         </span>
         {places.map((place) => (
-          <button
+          <span
             key={place.id}
-            type="button"
-            className={`place-chip btn-chip${listing?.root === place.path ? " current" : ""}`}
+            className={`place-chip btn-chip${
+              activeRoot && place.path && activeRoot.toLowerCase() === place.path.toLowerCase()
+                ? " current"
+                : ""
+            }`}
             title={place.path}
-            onClick={() => bindRoot(place.path)}
           >
-            {place.label}
-          </button>
+            <button
+              type="button"
+              className="place-chip-main"
+              onClick={() => bindRoot(place.path)}
+            >
+              {place.label}
+            </button>
+            {place.kind === "saved" && (
+              <button
+                type="button"
+                className="place-chip-remove"
+                onClick={() => removePlace(place)}
+                disabled={busy}
+                aria-label={`Remove ${place.label}`}
+                title={`Remove ${place.label}`}
+              >
+                ×
+              </button>
+            )}
+            {place.kind === "env" && <span className="place-chip-kind" title="From SWARM_SYSTEM_PLACES">env</span>}
+          </span>
         ))}
       </div>
+      {enabled && (
+        <form className="place-add" onSubmit={addPlace}>
+          <label className="sr-only" htmlFor="place-path">Folder path to save as a place</label>
+          <input
+            id="place-path"
+            value={newPlace}
+            onChange={(e) => setNewPlace(e.target.value)}
+            placeholder="C:\Users\… or ~/Documents"
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <label className="sr-only" htmlFor="place-label">Label (optional)</label>
+          <input
+            id="place-label"
+            value={newLabel}
+            onChange={(e) => setNewLabel(e.target.value)}
+            placeholder="Label (optional)"
+            autoComplete="off"
+          />
+          <button type="submit" className="btn" disabled={busy || !newPlace.trim()}>
+            Add place
+          </button>
+        </form>
+      )}
       {!enabled && (
         <p className="panel-note">{listing?.note || "System tools are disabled."}</p>
       )}
