@@ -108,11 +108,11 @@ export default function AppsPanel({ token, flash }) {
           <li key={c.id} className={`connector-card${c.connected ? " connected" : ""}`}>
             <div className="connector-head">
               <strong className="connector-name">{c.name}</strong>
-              <span className={`provider-badge${c.connected ? " on" : ""}`}>
+              <span className={`provider-badge${c.connected ? " ready" : " missing"}`}>
                 {c.connected ? "Ready" : "Not connected"}
               </span>
             </div>
-            <p className="connector-meta">{c.kind}{c.key_hint ? ` · ${c.key_hint}` : ""}</p>
+            <p className="connector-meta">{c.kind}{c.key_hint ? `, ${c.key_hint}` : ""}</p>
             <p className="connector-desc">{c.note}</p>
             {c.tools?.length > 0 && (
               <div className="tool-grid">

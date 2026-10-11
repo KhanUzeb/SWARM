@@ -147,8 +147,13 @@ export default function ModelPicker({
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", onDocumentDown);
-    window.setTimeout(() => inputRef.current?.focus(), 0);
-    return () => document.removeEventListener("mousedown", onDocumentDown);
+    // Defect: this focus timer was never cleared, so closing the popover (or
+    // switching provider) inside the tick focused an input that was gone.
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => {
+      document.removeEventListener("mousedown", onDocumentDown);
+      window.clearTimeout(timer);
+    };
   }, [open]);
 
   // An inline picker lives inside a surface someone else already placed.
@@ -251,10 +256,11 @@ export default function ModelPicker({
           aria-haspopup="listbox"
           aria-expanded={open}
           onClick={() => {
-            setOpen((wasOpen) => {
-              if (!wasOpen) ensureLoaded();
-              return !wasOpen;
-            });
+            // Defect: ensureLoaded() (a fetch) ran inside the setOpen updater.
+            // Updaters must be pure and StrictMode invokes them twice, so the
+            // first click of the session issued two concurrent model loads.
+            if (!open) ensureLoaded();
+            setOpen(!open);
           }}
         >
           <span className="model-picker-value">{current ? labelOf(current) : value || placeholder}</span>
@@ -309,7 +315,7 @@ export default function ModelPicker({
                   onClick={() => pick(model.id)}
                 >
                   <span className="model-option-name">{labelOf(model)}</span>
-                  <span className="model-option-id">{provider ? `${provider} · ` : ""}{model.id}</span>
+                  <span className="model-option-id">{provider ? `${provider} ${model.id}` : model.id}</span>
                 </li>
               );
             })}

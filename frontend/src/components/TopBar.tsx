@@ -143,7 +143,10 @@ export function TopBar({
                 : "No link to the workspace"
           }
         >
-          <Lamp tone={link === "connected" ? "go" : link === "connecting" ? "amber" : "off"} />
+          {/* Two hues. A link that is up is live (go); a link that is down
+              needs you (hold). "Connecting" is transient and settles either
+              way, so it stays neutral rather than borrowing a third colour. */}
+          <Lamp tone={link === "connected" ? "go" : link === "connecting" ? "off" : "hold"} />
           <span className="reg">{link}</span>
         </span>
       </div>
@@ -172,10 +175,13 @@ export function TopBar({
       </div>
 
       <div className="topbar-right">
+        {/* Workspace-wide, like the attention chip beside it: the run counter
+            used to be scoped to the open channel, so it changed as you moved
+            between rooms while the sibling count did not. */}
         {activeRuns > 0 && (
           <Flap
             value={`${activeRuns} run${activeRuns === 1 ? "" : "s"}`}
-            tone="amber"
+            tone="go"
             title={workConnected ? "Runs in progress" : "Replaying run history"}
           />
         )}

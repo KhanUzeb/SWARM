@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiJson } from "../ui.jsx";
+// lib.js owns the API client; reaching for it through the UI barrel made this
+// data hook depend on every component's module for one function.
+import { apiJson, isUnauthorized } from "../lib.js";
 import {
   WORK_ACTIVE, WORK_TERMINAL, applyWorkEventToSession,
   groupWorkByAttention, mergeWorkEvents,
@@ -8,27 +10,35 @@ import {
 export { WORK_ACTIVE, WORK_TERMINAL, applyWorkEventToSession, groupWorkByAttention, mergeWorkEvents };
 export { workStatusLabel, workStatusTone } from "./workUtils.js";
 
+/** A failed call, carrying the HTTP status so the poller can tell "this token
+ *  is dead" from "the work feed is unhappy". The status used to be dropped, and
+ *  a 401 was reported to the user as "Work feed failed" with a Retry button
+ *  that could never succeed. */
+function failed(what, res) {
+  return Object.assign(new Error(res?.data?.detail || what), { status: res?.status });
+}
+
 export async function fetchWork(token, limit = 50) {
   const res = await apiJson(`/api/work?limit=${limit}`, { token });
-  if (!res.ok) throw new Error(res.data?.detail || "work list failed");
+  if (!res.ok) throw failed("work list failed", res);
   return res.data;
 }
 
 export async function fetchWorkEvents(token, workId, after = 0) {
   const res = await apiJson(`/api/work/${encodeURIComponent(workId)}/events?after=${after}`, { token });
-  if (!res.ok) throw new Error(res.data?.detail || "work events failed");
+  if (!res.ok) throw failed("work events failed", res);
   return res.data;
 }
 
 export async function fetchWorkMessages(token, workId) {
   const res = await apiJson(`/api/work/${encodeURIComponent(workId)}/messages`, { token });
-  if (!res.ok) throw new Error(res.data?.detail || "work messages failed");
+  if (!res.ok) throw failed("work messages failed", res);
   return res.data;
 }
 
 export async function cancelWork(token, workId) {
   const res = await apiJson(`/api/work/${encodeURIComponent(workId)}/cancel`, { token, method: "POST" });
-  if (!res.ok) throw new Error(res.data?.detail || "cancel failed");
+  if (!res.ok) throw failed("cancel failed", res);
   return res.data;
 }
 
@@ -37,7 +47,7 @@ export async function cancelWork(token, workId) {
  * `{"type":"work","event"}` frames arriving on the existing chat socket.
  * Event cursors are monotonic per work_id and replay-safe after reconnects.
  */
-export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000 } = {}) {
+export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000, onUnauthorized } = {}) {
   const [sessions, setSessions] = useState([]);
   const [eventsByWork, setEventsByWork] = useState({});
   const [connected, setConnected] = useState(false);
@@ -45,6 +55,9 @@ export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000 } = {}
   const cursors = useRef(new Map());
   const tokenRef = useRef(token);
   tokenRef.current = token;
+  const alive = useRef(true);
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  onUnauthorizedRef.current = onUnauthorized;
 
   const ingestWorkEvent = useCallback((event) => {
     if (!event?.work_id || typeof event.seq !== "number") return;
@@ -57,9 +70,20 @@ export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000 } = {}
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!tokenRef.current) return;
+    const t = tokenRef.current;
+    if (!t) {
+      // Signed out. Saying nothing here left the rail on its loading skeleton
+      // for ever, because the rail shows it while it has no runs and no error.
+      setSessions([]); setEventsByWork({}); cursors.current = new Map();
+      setConnected(false); setError(null);
+      return;
+    }
     try {
-      const list = await fetchWork(tokenRef.current);
+      const list = await fetchWork(t);
+      // The token can be revoked or replaced while the request is in the air;
+      // writing that answer into the next session's rail is how one user's runs
+      // showed up under another's name.
+      if (!alive.current || tokenRef.current !== t) return;
       setSessions(groupWorkByAttention(list));
       setConnected(true);
       setError(null);
@@ -70,7 +94,8 @@ export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000 } = {}
       for (const s of needsReplay) {
         try {
           const after = cursors.current.get(s.id) || 0;
-          const incoming = await fetchWorkEvents(tokenRef.current, s.id, after);
+          const incoming = await fetchWorkEvents(t, s.id, after);
+          if (!alive.current || tokenRef.current !== t) return;
           if (incoming.length) {
             cursors.current.set(s.id, Math.max(after, ...incoming.map(e => e.seq)));
             setEventsByWork(prev => ({ ...prev, [s.id]: mergeWorkEvents(prev[s.id], incoming) }));
@@ -80,6 +105,8 @@ export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000 } = {}
         } catch { /* per-session replay must not fail the whole refresh */ }
       }
     } catch (e) {
+      if (!alive.current || tokenRef.current !== t) return;
+      if (isUnauthorized(e)) { onUnauthorizedRef.current?.(); return; }
       setConnected(false);
       setError(e.message);
     }
@@ -97,7 +124,16 @@ export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000 } = {}
   connectedRef.current = connected;
 
   useEffect(() => {
+    // Every run, event and cursor belongs to the token that was in hand. They
+    // survived a sign-out, so signing in as somebody else showed their runs in
+    // the rail until the first poll answered.
+    cursors.current = new Map();
+    setSessions([]);
+    setEventsByWork({});
+    setError(null);
+    setConnected(false);
     if (!token) return;
+    alive.current = true;
     refresh();
     let timer = setInterval(refresh, pollMs);
     const settle = setInterval(() => {
@@ -106,6 +142,9 @@ export function useWorkSessions(token, { pollMs = 4000, healthyMs = 30000 } = {}
       timer = setInterval(refresh, next);
     }, 2000);
     return () => {
+      // Stop a poll that is still in the air from writing into a session that
+      // has already been torn down.
+      alive.current = false;
       clearInterval(timer);
       clearInterval(settle);
     };

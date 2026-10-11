@@ -26,7 +26,7 @@ export function ContextDrawer({ stats, included = [], onRefresh, onClose }) {
             <div className="progress-fill" style={{ width: `${pct}%` }} />
           </div>
           <dl className="context-rows">
-            <div className="context-row"><dt>History</dt><dd>{fmtChars(stats.history_chars)} · {stats.messages ?? "—"} msgs</dd></div>
+            <div className="context-row"><dt>History</dt><dd>{fmtChars(stats.history_chars)}, {stats.messages ?? "—"} msgs</dd></div>
             <div className="context-row"><dt>Memory</dt><dd>{stats.memory_notes ?? "—"} notes</dd></div>
             <div className="context-row"><dt>Knowledge</dt><dd>{stats.kb_docs ?? "—"} docs</dd></div>
             {stats.dropped_messages ? <div className="context-row"><dt>Trimmed</dt><dd>{stats.dropped_messages} msgs</dd></div> : null}
@@ -55,8 +55,10 @@ export function ContextChips({ items = [], onRemove }) {
   return (
     <div className="context-chips" aria-label="Selected context">
       <span className="muted small">Context</span>
-      {items.map((item) => (
-        <button key={item} className="context-chip" onClick={() => onRemove?.(item)} title={`Remove ${item}`}>
+      {/* Defect: `key={item}` collided whenever the same context was listed
+          twice, so React dropped one chip and its Remove button. */}
+      {items.map((item, i) => (
+        <button key={`${item}-${i}`} className="context-chip" onClick={() => onRemove?.(item)} title={`Remove ${item}`}>
           × {item}
         </button>
       ))}

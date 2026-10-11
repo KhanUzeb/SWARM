@@ -14,7 +14,8 @@ describe("work rail states", () => {
       expect(workStatusTone(s)).toBeTruthy();
       expect(workStatusLabel(s)).not.toBe("Unknown");
     }
-    // Approvals read amber; failures read red.
+    // Approvals read hold; failures read red. Live work reads go — there is
+    // no third hue for "in progress" (8a).
     expect(workStatusTone("waiting_for_approval")).toBe("warning");
     expect(workStatusTone("failed")).toBe("danger");
     expect(workStatusTone("running")).toBe("intelligence");

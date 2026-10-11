@@ -107,11 +107,12 @@ const WORKSPACE_NAV: NavItem[] = PANEL_GROUPS.map((g) => ({
  * you can read this column without reading a word of it, so the state
  * gets the machine register and the name gets ordinary sentence case.
  */
-function flapFor(status?: string): { value: string; tone: "go" | "amber" | "hold" | "unlit" } {
+function flapFor(status?: string): { value: string; tone: "go" | "hold" | "unlit" } {
   switch (status) {
     case "working":
     case "running":
-      return { value: "Work", tone: "amber" };
+      // Live, so green. Amber was the third hue 8a forbids.
+      return { value: "Work", tone: "go" };
     case "needs_approval":
     case "waiting_for_approval":
       return { value: "Hold", tone: "hold" };
@@ -123,11 +124,11 @@ function flapFor(status?: string): { value: string; tone: "go" | "amber" | "hold
   }
 }
 
-function lampFor(status?: string): "go" | "amber" | "hold" | "off" {
+function lampFor(status?: string): "go" | "hold" | "off" {
   switch (status) {
     case "working":
     case "running":
-      return "amber";
+      return "go";
     case "needs_approval":
     case "waiting_for_approval":
       return "hold";
@@ -176,7 +177,9 @@ export function Sidebar({
     (a.display_name || "").toLowerCase().includes(q);
 
   const rooms = channels.filter(
-    (c) => (c.kind === "room" || c.kind === undefined) && matchChannel(c),
+    // `!c.kind`, not `c.kind === undefined`: a legacy row carries kind null,
+    // and null === undefined is false, so those rooms vanished from the roster.
+    (c) => (!c.kind || c.kind === "room") && matchChannel(c),
   );
   const groups = channels.filter((c) => c.kind === "group" && matchChannel(c));
   const peopleDms = channels.filter((c) => c.kind === "people" && matchChannel(c));
@@ -405,7 +408,10 @@ export function Sidebar({
             </button>
           }
           items={[
-            { label: "Settings", icon: <Settings size={14} />, onClick: onOpenSettings },
+            // This opens the Board (the command centre), which is what every
+            // other control in the app calls it — "Settings" pointed at a
+            // screen with no settings on it.
+            { label: "Board", icon: <Settings size={14} />, onClick: onOpenSettings },
             "divider",
             { label: "Sign out", icon: <LogOut size={14} />, danger: true, onClick: onLogout },
           ]}

@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: bun install --frozen-lockfile
+      - name: Frontend contract tests
+        working-directory: frontend
+        run: bun test
       - name: Production build
         working-directory: frontend
         run: bun run build

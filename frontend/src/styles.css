@@ -81,8 +81,6 @@
   /* Edge tint for a surface that needs your attention. A border, not a fill:
   a wash behind text is what turns state into a tint. */
   --hold-edge: rgba(236, 110, 114, 0.4);
-  --lamp-hold: #f0b429;
-  --lamp-hold-wash: rgba(240, 180, 41, 0.14);
 
   /* ── Rules ─────────────────────────────────────────────────── */
   --rule: rgba(233, 227, 213, 0.11);
@@ -226,7 +224,6 @@ body {
 .reg-lit { color: var(--ink-on-housing); }
 .reg-go { color: var(--go-lit); }
 .reg-hold { color: var(--hold-lit); }
-.reg-amber { color: var(--lamp-hold); }
 
 /* ═══ Flap: the signature object ═══════════════════════════════
    A split-flap card. The face is split at the centre line, which is
@@ -283,7 +280,6 @@ body {
 /* lit: a lamp burns behind the card */
 .flap-go { background: var(--flap); color: var(--go); box-shadow: var(--slot-shadow), 0 0 0 1px var(--go-lit), 0 0 10px -2px var(--go-wash); }
 .flap-hold { background: var(--flap); color: var(--hold); box-shadow: var(--slot-shadow), 0 0 0 1px var(--hold-lit), 0 0 10px -2px var(--hold-wash); }
-.flap-amber { background: var(--flap); color: #8a5a05; box-shadow: var(--slot-shadow), 0 0 0 1px var(--lamp-hold); }
 .flap-reverse { background: var(--flap-reverse); color: var(--flap); }
 .flap-lg { height: 22px; padding: 0 8px; }
 
@@ -395,7 +391,6 @@ body {
 }
 .chip-go { color: var(--go-lit); border-color: rgba(23, 168, 106, 0.4); background: var(--go-wash); }
 .chip-hold { color: var(--hold-lit); border-color: rgba(236, 110, 114, 0.4); background: var(--hold-wash); }
-.chip-amber { color: var(--lamp-hold); border-color: rgba(240, 180, 41, 0.4); background: var(--lamp-hold-wash); }
 .chip:disabled, .chip[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
 
 .input, .textarea, .terminal-input {
@@ -443,7 +438,7 @@ select.input { cursor: pointer; }
 .halt {
   background-image: repeating-linear-gradient(
     45deg,
-    var(--lamp-hold) 0 6px,
+    var(--hold) 0 6px,
     #17150f 6px 12px
   );
 }
@@ -461,7 +456,6 @@ select.input { cursor: pointer; }
    poll interval, and animating width forces layout on every frame. */
 .progress-fill { height: 100%; background: var(--go-lit); border-radius: var(--r-slot); }
 .progress-fill.is-hold { background: var(--hold-lit); }
-.progress-fill.is-amber { background: var(--lamp-hold); }
 
 /* ═══ The shell ═════════════════════════════════════════════════
    Full-bleed housing. Fixed regions: navigation swaps region
@@ -612,10 +606,13 @@ select.input { cursor: pointer; }
 .channel-link.needs-you { color: var(--ink-on-housing); }
 .channel-link.needs-you .channel-name { color: var(--hold-lit); }
 
+/* Status language (components/Status.jsx). Three tones, never a tint: `go` is
+   live or cleared, `hold` needs you, `idle` has nothing to report. The old
+   `.online`/`.warning`/`.offline` names matched nothing Status.jsx emits. */
 .status-dot { width: 7px; height: 7px; border-radius: 1px; flex-shrink: 0; }
-.status-dot.online { background: var(--go-lit); }
-.status-dot.warning { background: var(--lamp-hold); }
-.status-dot.offline { background: var(--ink-3); }
+.status-dot.go { background: var(--go-lit); }
+.status-dot.hold { background: var(--hold-lit); }
+.status-dot.idle { background: var(--ink-3); }
 
 #me {
   display: flex;
@@ -632,7 +629,7 @@ select.input { cursor: pointer; }
 .me-meta .handle { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .me-meta .sub { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 .me-meta .sub.online { color: var(--go-lit); }
-.me-meta .sub.connecting { color: var(--lamp-hold); }
+.me-meta .sub.connecting { color: var(--hold-lit); }
 .role-pill {
   padding: 1px 6px;
   font-family: var(--f-machine);
@@ -714,8 +711,13 @@ select.input { cursor: pointer; }
 .view-tab.active { color: var(--ink-on-housing); background: var(--housing-raised); }
 
 .status-chip { display: inline-flex; align-items: center; gap: 6px; }
+.status-chip.go { color: var(--go-lit); }
+.status-chip.hold { color: var(--hold-lit); }
+.status-chip.idle { color: var(--ink-3); }
 .pulse-dot { width: 6px; height: 6px; border-radius: 1px; background: var(--go-lit); }
-.pulse-dot.connecting { background: var(--lamp-hold); }
+/* A link that is neither up nor idle is one you need to act on, so it takes
+   the hold hue — there is no third colour for "still negotiating". */
+.pulse-dot.connecting { background: var(--hold-lit); }
 .pulse-dot.offline { background: var(--ink-3); }
 
 .topbar-sidebar-trigger { display: none; }
@@ -825,7 +827,7 @@ select.input { cursor: pointer; }
 .entry-body.is-stopped::before {
   background-image: repeating-linear-gradient(
     45deg,
-    var(--lamp-hold) 0 3px,
+    var(--hold-lit) 0 3px,
     var(--flap-reverse) 3px 6px
   );
 }
@@ -833,7 +835,7 @@ select.input { cursor: pointer; }
 
 .entry-foot { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; min-height: 22px; }
 .entry.streaming-entry .entry-body { color: var(--flap); }
-.entry.is-streaming .entry-author { color: var(--lamp-hold); }
+.entry.is-streaming .entry-author { color: var(--go-lit); }
 .msg-mini-action.is-danger:hover { color: var(--hold-lit); }
 
 /* A system line: the machine register speaking. */
@@ -1898,6 +1900,9 @@ select.input { cursor: pointer; }
 .terminal-prompt { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--go-lit); flex-shrink: 0; }
 .terminal-output { max-height: 260px; overflow-y: auto; padding: var(--s3); display: flex; flex-direction: column; gap: 2px; }
 .terminal-line { font-family: var(--f-machine); font-size: var(--t-xs); line-height: 1.6; color: var(--ink-2); white-space: pre-wrap; word-break: break-word; }
+/* The terminal is machine data top to bottom, prompt included — the input gets
+   the machine register too rather than inheriting the UI face from `.input`. */
+.terminal-input { font-family: var(--f-machine); font-size: var(--t-xs); }
 
 .files-view, .agents-view, .knowledge-view, .paper-doc { flex: 1; min-height: 0; overflow-y: auto; }
 .files-header, .agents-view-head, .knowledge-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s3); padding: var(--s6) var(--s5) var(--s4); max-width: var(--measure-app); margin: 0 auto; width: 100%; }
@@ -2066,13 +2071,14 @@ select.input { cursor: pointer; }
 /* Quick create: five ways to make something, one focused form. */
 .quick-create { width: 100%; max-width: 520px; max-height: 86dvh; display: flex; flex-direction: column; background: var(--housing); border: 1px solid var(--rule-2); border-radius: var(--r-overlay); box-shadow: var(--lift-high); overflow: hidden; }
 .quick-create-form { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); overflow-y: auto; }
-.quick-members { display: flex; flex-wrap: wrap; gap: 4px; }
+.quick-members { display: flex; flex-wrap: wrap; gap: 4px; border: 0; margin: 0; padding: 0; }
+.quick-member { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; background: var(--slot); border: 1px solid var(--rule); border-radius: var(--r-key); font-size: var(--t-sm); color: var(--ink-on-housing); cursor: pointer; }
 .template-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s2); }
 .template-card { cursor: pointer; }
 .template-card.selected { border-color: var(--go-lit); background: var(--go-wash); }
 .conf-conn-dot { width: 7px; height: 7px; border-radius: 1px; }
 .conf-conn-dot.connected { background: var(--go-lit); }
-.conf-conn-dot.connecting { background: var(--lamp-hold); }
+.conf-conn-dot.connecting { background: var(--hold-lit); }
 .conf-conn-dot.offline { background: var(--ink-3); }
 
 /* ═══ Model picker ═══════════════════════════════════════════════ */
@@ -2202,6 +2208,7 @@ select.input { cursor: pointer; }
 .avatar-agent { background: var(--housing-raised); color: var(--go-lit); border-color: rgba(23, 168, 106, 0.35); }
 .avatar-system { background: transparent; color: var(--ink-3); }
 .avatar-sm { width: 20px; height: 20px; font-size: 9px; }
+.avatar-xs { width: 16px; height: 16px; font-size: 8px; }
 .avatar-lg { width: 36px; height: 36px; font-size: 12px; }
 
 .badge {
@@ -2219,7 +2226,6 @@ select.input { cursor: pointer; }
 }
 .badge-go { color: var(--go-lit); border-color: rgba(23, 168, 106, 0.45); }
 .badge-hold { color: var(--hold-lit); border-color: rgba(236, 110, 114, 0.45); }
-.badge-amber { color: var(--lamp-hold); border-color: rgba(240, 180, 41, 0.45); }
 
 /* ═══ Login ══════════════════════════════════════════════════════ */
 

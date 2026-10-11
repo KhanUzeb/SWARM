@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiJson, Button, Card, EmptyState, Input, Textarea } from "../ui.jsx";
 
 export function KnowledgeView({ token, flash }) {
@@ -12,21 +12,44 @@ export function KnowledgeView({ token, flash }) {
   const [editingId, setEditingId] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  async function load() {
-    const res = await apiJson("/api/knowledge?limit=50", { token });
-    if (res.ok) setDocs(res.data);
-  }
+  // Defect: `flash` was called bare in four places, so any surface that mounts
+  // this view without a flasher threw instead of showing the failure.
+  const say = (message, type) => flash?.(message, type);
 
-  useEffect(() => { load(); }, [token]);
+  const load = useCallback(async (isLive = () => true) => {
+    try {
+      const res = await apiJson("/api/knowledge?limit=50", { token });
+      // Defect: a null body landed in `docs` and the next `shown.length`
+      // render threw on it.
+      if (isLive() && res.ok) setDocs(res.data || []);
+    } catch {
+      if (isLive()) setDocs([]);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    let alive = true;
+    // Defect: the initial load was never cancelled, so navigating away
+    // mid-flight set state on an unmounted KnowledgeView.
+    void load(() => alive);
+    return () => { alive = false; };
+  }, [load]);
 
   async function search(e) {
     e?.preventDefault();
     if (query.trim().length < 2) { setResults(null); return; }
     setSearching(true);
-    const res = await apiJson(`/api/knowledge/search?q=${encodeURIComponent(query.trim())}`, { token });
-    setSearching(false);
-    if (res.ok) setResults(res.data);
-    else flash(res.data?.detail || "Search failed", "error");
+    try {
+      const res = await apiJson(`/api/knowledge/search?q=${encodeURIComponent(query.trim())}`, { token });
+      if (res.ok) setResults(res.data || []);
+      else say(res.data?.detail || "Search failed", "error");
+    } catch (err) {
+      // Defect: a rejected request left `searching` true forever, so the
+      // Search button never came back.
+      say(err.message || "Search failed", "error");
+    } finally {
+      setSearching(false);
+    }
   }
 
   async function submit(e) {
@@ -34,16 +57,22 @@ export function KnowledgeView({ token, flash }) {
     if (!title.trim() || !body.trim()) return;
     setBusy(true);
     const payload = { title: title.trim(), body: body.trim(), tags: tags.trim() };
-    const res = editingId
-      ? await apiJson(`/api/knowledge/${editingId}`, { token, method: "PATCH", body: payload })
-      : await apiJson("/api/knowledge", { token, method: "POST", body: payload });
-    setBusy(false);
-    if (res.ok) {
-      flash(editingId ? "Knowledge updated" : "Knowledge saved", "success");
-      setTitle(""); setBody(""); setTags(""); setEditingId(null);
-      setResults(null); setQuery("");
-      load();
-    } else flash(res.data?.detail || "Save failed", "error");
+    try {
+      const res = editingId
+        ? await apiJson(`/api/knowledge/${editingId}`, { token, method: "PATCH", body: payload })
+        : await apiJson("/api/knowledge", { token, method: "POST", body: payload });
+      if (res.ok) {
+        say(editingId ? "Knowledge updated" : "Knowledge saved", "success");
+        setTitle(""); setBody(""); setTags(""); setEditingId(null);
+        setResults(null); setQuery("");
+        load();
+      } else say(res.data?.detail || "Save failed", "error");
+    } catch (err) {
+      // Defect: a rejected save left the Save button spinning for good.
+      say(err.message || "Save failed", "error");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function edit(doc) {
@@ -56,9 +85,13 @@ export function KnowledgeView({ token, flash }) {
 
   async function remove(doc) {
     if (!window.confirm(`Delete knowledge "${doc.title}"? Agents will no longer see it.`)) return;
-    const res = await apiJson(`/api/knowledge/${doc.id}`, { token, method: "DELETE" });
-    if (res.ok) { flash("Knowledge deleted", "info"); setResults(null); load(); }
-    else flash(res.data?.detail || "Delete failed", "error");
+    try {
+      const res = await apiJson(`/api/knowledge/${doc.id}`, { token, method: "DELETE" });
+      if (res.ok) { say("Knowledge deleted", "info"); setResults(null); load(); }
+      else say(res.data?.detail || "Delete failed", "error");
+    } catch (err) {
+      say(err.message || "Delete failed", "error");
+    }
   }
 
   const shown = results || docs;
@@ -108,8 +141,12 @@ export function KnowledgeView({ token, flash }) {
             </div>
             <p className="knowledge-card-body">{d.body}</p>
             <div className="knowledge-card-actions">
-              <button className="msg-mini-action" onClick={() => edit(d)}>Edit</button>
-              <button className="msg-mini-action danger" onClick={() => remove(d)}>Delete</button>
+              {/* Not .msg-mini-action: that is a 22x22 icon square that also
+                  stays at opacity 0 until the row is hovered, so the words
+                  "Edit" and "Delete" overflowed the box and were invisible
+                  until hover. Real buttons, real size. */}
+              <button className="btn btn-ghost btn-sm" onClick={() => edit(d)}>Edit</button>
+              <button className="btn btn-danger btn-sm" onClick={() => remove(d)}>Delete</button>
             </div>
           </Card>
         ))}

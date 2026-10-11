@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // The API client lives in lib.js, which is its only owner.
-import { apiJson, CACHE_TTL, HISTORY_LIMIT, fmtBytes, quickCreatePayload } from "./lib.js";
+import { apiJson, bustCache, CACHE_TTL, HISTORY_LIMIT, fmtBytes, isUnauthorized, quickCreatePayload } from "./lib.js";
 import {
   WS_MESSAGE_FRAME_TYPES,
   WS_DELTA_FRAME_TYPES,
@@ -35,7 +35,7 @@ import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js
 export default function App() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
-  const [channel, setChannel] = useState("dm-swarm");
+  const [channel, setChannel] = useState("general");
   const [channels, setChannels] = useState([]);
   const [agents, setAgents] = useState([]);
   const [allAgents, setAllAgents] = useState([]);
@@ -51,13 +51,15 @@ export default function App() {
   const [hasMore, setHasMore] = useState(false);
   const [loadingLog, setLoadingLog] = useState(false);
   const [threadId, setThreadId] = useState(null);
-  const [threadParent, setThreadParent] = useState(null);
   const [threadReplies, setThreadReplies] = useState([]);
   const [wsStatus, setWsStatus] = useState("offline");
   const [toast, setToast] = useState(null);
-  const [loginErr, setLoginErr] = useState("");
-  const [loginBusy, setLoginBusy] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
+  // The relay lamp on the sign-in screen reads the public status probe, not the
+  // chat socket: wsStatus is pinned "offline" while logged out, so driving that
+  // lamp from it said "Relay not ready" on a perfectly healthy backend.
+  const [serverUp, setServerUp] = useState(false);
+  const [onboarded, setOnboarded] = useState(null);
   const [mainView, setMainView] = useState("talk");
   const [cmdOpen, setCmdOpen] = useState(false);
   const [typing, setTyping] = useState("");
@@ -120,7 +122,21 @@ export default function App() {
   const pendingApprovals = approvals.filter(a => a.status === "pending");
   const pendingHere = pendingApprovals.filter(a => a.channel_id === channel);
 
-  const { sessions: workSessions, eventsByWork, connected: workConnected, error: workError, refresh: refreshWork, ingestWorkEvent } = useWorkSessions(token);
+  const flash = useCallback((msg, type = "info", title) => {
+    setToast({ msg, type, title });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null; }, 3500);
+  }, []);
+
+  /** One 401 from anywhere means the same thing: warn once, end the session,
+   *  send the user back to sign-in. Declared with the other stable callbacks
+   *  so the token effect and the work poller can both reach it. */
+  const sessionExpired = useCallback(() => {
+    flash("Session expired — please sign in again", "warning");
+    handleLogout();
+  }, [flash]);
+
+  const { sessions: workSessions, eventsByWork, connected: workConnected, error: workError, refresh: refreshWork, ingestWorkEvent } = useWorkSessions(token, { onUnauthorized: sessionExpired });
   const activeWork = workSessions.filter(s => WORK_ACTIVE.has(s.status));
   const workAttention = workSessions.filter(s => s.requires_action || s.status === "waiting_for_approval");
   const activeWorkHere = activeWork.filter(s => !s.channel_id || s.channel_id === channel);
@@ -150,12 +166,6 @@ export default function App() {
   );
   ingestWorkEventRef.current = ingestWorkEvent;
   handleChannelDeletedRef.current = handleChannelDeleted;
-
-  const flash = useCallback((msg, type = "info", title) => {
-    setToast({ msg, type, title });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null; }, 3500);
-  }, []);
 
   const remember = useCallback((m) => {
     const channelKey = channelRef.current;
@@ -200,14 +210,10 @@ export default function App() {
     const previousId = lastSeenId.current[channelKey] || 0;
     if (m.id && m.id > previousId) lastSeenId.current[channelKey] = m.id;
     setReactions(prev => (prev[m.id] ? prev : { ...prev, [m.id]: m.reactions || [] }));
-    if (m.parent_id) {
-      setReplyCounts(prev => ({ ...prev, [m.parent_id]: (prev[m.parent_id] || 0) + 1 }));
-      setThreadId(tid => {
-        if (tid === m.parent_id) setThreadReplies(list => list.some(x => x.id === m.id) ? list : [...list, m]);
-        return tid;
-      });
-      return;
-    }
+    // Streaming state clears on *every* finished agent message, before the
+    // thread branch returns. A reply inside a thread carries a parent_id, and
+    // returning on it first left typing/streamingAgents/streamText set for
+    // good — the composer stayed "working" and refused input until reload.
     if (m.author_kind === "agent") {
       setTyping("");
       setStreamingAgents(prev => {
@@ -223,6 +229,15 @@ export default function App() {
         return next;
       });
     }
+    if (m.parent_id) {
+      setReplyCounts(prev => ({ ...prev, [m.parent_id]: (prev[m.parent_id] || 0) + 1 }));
+      setThreadId(tid => {
+        if (tid === m.parent_id) setThreadReplies(list => list.some(x => x.id === m.id) ? list : [...list, m]);
+        return tid;
+      });
+      // A thread reply is not a root line: it never joins the roll.
+      return;
+    }
     setOrder(prev => (prev.includes(m.id) ? prev : [...prev, m.id]));
     if (m.author_kind === "system") loadComputer();
   }, [patchReactions]);
@@ -234,27 +249,39 @@ export default function App() {
     return err;
   }
 
-  async function loadChannels() {
-    if (!tokenRef.current) return [];
-    const res = await apiJson("/api/channels", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
-    if (!res.ok) throw authError("channels", res.status);
+  // Every loader answers a rejected token the same way. They used to catch a
+  // 401 into empty state (`catch { setApprovals([]) }`), which is how an expired
+  // session rendered as a workspace with nothing in it instead of returning to
+  // sign-in. Returns true when it was a 401 and the session has been ended.
+  function dead(res) {
+    if (!isUnauthorized(res)) return false;
+    sessionExpired();
+    return true;
+  }
+
+  async function loadChannels(t = tokenRef.current) {
+    if (!t) return [];
+    const res = await apiJson("/api/channels", { token: t, cacheTtl: CACHE_TTL.list });
+    if (!res.ok) { dead(res); throw authError("channels", res.status); }
     setChannels(res.data);
     return res.data;
   }
 
-  async function loadAllAgents() {
-    if (!tokenRef.current) return;
+  async function loadAllAgents(t = tokenRef.current) {
+    if (!t) return;
     try {
-      const res = await apiJson("/api/agents", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      const res = await apiJson("/api/agents", { token: t, cacheTtl: CACHE_TTL.list });
+      if (dead(res)) return;
       setAllAgents(res.ok ? res.data : []);
     } catch { setAllAgents([]); }
   }
 
-  async function loadAgents(channelId) {
-    if (!tokenRef.current) return;
+  async function loadAgents(channelId, t = tokenRef.current) {
+    if (!t) return;
     try {
       const path = `/api/agents?channel_id=${encodeURIComponent(channelId)}`;
-      const res = await apiJson(path, { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      const res = await apiJson(path, { token: t, cacheTtl: CACHE_TTL.list });
+      if (dead(res)) return;
       setAgents(res.ok ? res.data : []);
     } catch { setAgents([]); }
   }
@@ -262,23 +289,27 @@ export default function App() {
   async function loadGroqStatus() {
     try {
       const pub = await apiJson("/api/status", { cacheTtl: CACHE_TTL.status });
+      setServerUp(true);
+      if (typeof pub.data?.onboarded === "boolean") setOnboarded(pub.data.onboarded);
       const authed = tokenRef.current ? await apiJson("/api/status", { token: tokenRef.current, cacheTtl: CACHE_TTL.status }) : pub;
+      if (dead(authed)) return;
       const data = authed.ok ? authed.data : (pub.data || {});
       setDemoMode(!!data.demo);
       if (data.me?.role) setMeRole(data.me.role);
     } catch { setDemoMode(false); }
   }
 
-  async function loadApprovals() {
-    if (!tokenRef.current) return;
+  async function loadApprovals(t = tokenRef.current) {
+    if (!t) return;
     try {
       // Pending drives the "N to clear" affordance and the bot status gates;
       // resolved rows back the approvals inbox so a decision stays readable
       // after it is made. Both come from the same endpoint, status-filtered.
-      const res = await apiJson("/api/approvals?status=pending", { token: tokenRef.current, cacheTtl: 10_000 });
+      const res = await apiJson("/api/approvals?status=pending", { token: t, cacheTtl: 10_000 });
+      if (dead(res)) return;
       const pending = res.ok ? res.data : [];
-      const history = await apiJson("/api/approvals?status=approved", { token: tokenRef.current, cacheTtl: 10_000 });
-      const denied = await apiJson("/api/approvals?status=denied", { token: tokenRef.current, cacheTtl: 10_000 });
+      const history = await apiJson("/api/approvals?status=approved", { token: t, cacheTtl: 10_000 });
+      const denied = await apiJson("/api/approvals?status=denied", { token: t, cacheTtl: 10_000 });
       const byId = new Map();
       for (const row of [...pending, ...(history.ok ? history.data : []), ...(denied.ok ? denied.data : [])]) {
         byId.set(row.id, row);
@@ -287,41 +318,44 @@ export default function App() {
     } catch { setApprovals([]); }
   }
 
-  async function loadComputer() {
-    if (!tokenRef.current) return;
+  async function loadComputer(t = tokenRef.current) {
+    if (!t) return;
     try {
-      const res = await apiJson("/api/computer", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      const res = await apiJson("/api/computer", { token: t, cacheTtl: CACHE_TTL.list });
+      if (dead(res)) return;
       setComputer(res.ok ? res.data : null);
     } catch { setComputer(null); }
   }
 
-  async function loadContextStats(channelId) {
-    if (!tokenRef.current) return;
+  async function loadContextStats(channelId, t = tokenRef.current) {
+    if (!t) return;
     try {
       const agentName = bot?.name || allAgents[0]?.name;
       const path = `/api/channels/${channelId}/context${agentName ? `?agent=${encodeURIComponent(agentName)}` : ""}`;
-      const res = await apiJson(path, { token: tokenRef.current });
+      const res = await apiJson(path, { token: t });
+      if (dead(res)) return;
       if (res.ok) { setContextStats(res.data); setContextError(false); }
       else setContextError(true);
     } catch { setContextError(true); }
   }
 
-  async function loadTeams() {
-    if (!tokenRef.current) return;
+  async function loadTeams(t = tokenRef.current) {
+    if (!t) return;
     try {
-      const res = await apiJson("/api/teams", { token: tokenRef.current, cacheTtl: CACHE_TTL.list });
+      const res = await apiJson("/api/teams", { token: t, cacheTtl: CACHE_TTL.list });
+      if (dead(res)) return;
       setTeams(res.ok ? res.data : []);
     } catch { setTeams([]); }
   }
 
-  async function loadHistory(channelId, beforeId) {
+  async function loadHistory(channelId, beforeId, t = tokenRef.current) {
     // 401-shaped throw: loadChannelMessages branches on e.status, so a missing
     // token has to carry one or the user sees "Failed to load messages" for
     // what is actually an expired session.
-    if (!tokenRef.current) throw authError("history", 401);
+    if (!t) throw authError("history", 401);
     const params = new URLSearchParams({ limit: String(HISTORY_LIMIT) });
     if (beforeId) params.set("before_id", String(beforeId));
-    const res = await apiJson(`/api/channels/${channelId}/messages?${params}`, { token: tokenRef.current });
+    const res = await apiJson(`/api/channels/${channelId}/messages?${params}`, { token: t });
     if (!res.ok) throw authError("history", res.status);
     return res.data;
   }
@@ -344,7 +378,7 @@ export default function App() {
     });
   }
 
-  async function loadChannelMessages(channelId) {
+  async function loadChannelMessages(channelId, t = tokenRef.current) {
     const req = ++loadReq.current;
     const fresh = () => req === loadReq.current;
     setLoadingLog(true);
@@ -355,27 +389,27 @@ export default function App() {
     setThreadId(null);
     setThreadReplies([]);
     try {
-      const history = await loadHistory(channelId);
+      const history = await loadHistory(channelId, undefined, t);
       if (!fresh()) return; // channel switched mid-flight — drop stale data
       applyHistory(channelId, history);
-      await Promise.all([loadAgents(channelId), loadComputer(), loadApprovals()]);
+      await Promise.all([loadAgents(channelId, t), loadComputer(t), loadApprovals(t)]);
       if (!fresh()) return;
-      loadContextStats(channelId);
+      loadContextStats(channelId, t);
     } catch (e) {
       if (!fresh()) return;
-      if (e?.status === 401) {
-        flash("Session expired — please sign in again", "warning");
-        handleLogout();
-      } else {
-        flash("Failed to load messages", "error");
-      }
+      if (isUnauthorized(e)) sessionExpired();
+      else flash("Failed to load messages", "error");
     } finally { if (fresh()) setLoadingLog(false); }
   }
 
   // ── WebSocket ──
   function connectWs() {
-    if (!tokenRef.current) return;
+    // The handshake is the only place a token is sent, so it must be the token
+    // in hand right now: a reconnect fired by a timer scheduled before a
+    // sign-out would otherwise have re-handshaked with the retired token and
+    // been closed with 4001 on every attempt.
     const t = tokenRef.current;
+    if (!t) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const url = `${proto}://${location.host}/ws/${encodeURIComponent(channelRef.current)}`;
     intentionalClose.current = false;
@@ -400,9 +434,11 @@ export default function App() {
       else if (WS_APPROVAL_FRAME_TYPES.has(msg.type)) { loadApprovals(); refreshWork(); }
       else if (WS_ROSTER_FRAME_TYPES.has(msg.type)) {
         loadAllAgents();
-        if (msg.type === "bot_archived") loadChannels();
+        // These run on the socket, not in a try block: a rejected reload used
+        // to escape as an unhandled rejection with nothing on screen.
+        if (msg.type === "bot_archived") loadChannels().catch(() => {});
         if (msg.type === "agents_changed") {
-          loadChannels(); loadTeams();
+          loadChannels().catch(() => {}); loadTeams();
           flash("New bot is ready — check the sidebar", "success");
         }
       }
@@ -427,6 +463,9 @@ export default function App() {
       if (gen !== wsGen.current) return; // superseded by a newer connection
       if (intentionalClose.current || ev.code === 4001) { setWsStatus("offline"); return; }
       setWsStatus("offline");
+      // Nothing to re-handshake with: the token is gone, so a retry loop would
+      // just spin against a server that closes it the instant it opens.
+      if (!tokenRef.current) return;
       const delay = Math.min(1000 * 2 ** reconnectAttempt.current, 15000);
       reconnectAttempt.current++;
       reconnectTimer.current = setTimeout(connectWs, delay);
@@ -437,7 +476,8 @@ export default function App() {
   function disconnectWs() {
     intentionalClose.current = true;
     wsGen.current++; // invalidate in-flight socket callbacks
-    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; }
+    reconnectAttempt.current = 0; // the next session starts its backoff fresh
     if (wsRef.current) wsRef.current.close();
   }
 
@@ -446,59 +486,107 @@ export default function App() {
   // For an existing handle it returns a fresh token (login); for a new
   // handle it creates the user (first user becomes admin). There is no
   // separate /api/login route.
-  async function handleLogin(handle, password) {
-    const res = await apiJson("/api/register", { method: "POST", body: { handle, password } });
-    if (!res.ok) throw new Error(res.data.detail || "Login failed");
-    setUser({ handle }); setToken(res.data.token);
-    localStorage.setItem("swarm_token", res.data.token);
-    localStorage.setItem("swarm_handle", handle);
+
+  /** Everything that belongs to exactly one signed-in session. Sign-in,
+   *  sign-out and an expired token all start here, so the next session can
+   *  never inherit the last one's roster, approvals or open thread. */
+  function clearSessionState() {
+    loadReq.current++; // abandon loads still in flight for the old token
+    lastSeenId.current = {};
+    setChannels([]); setAgents([]); setAllAgents([]); setTeams([]); setApprovals([]);
+    setComputer(null); setMessages({}); setOrder([]); setReactions({}); setReplyCounts({});
+    setTyping(""); setStreamText({}); setStreamingAgents({});
+    setContextStats(null); setContextError(false); setShowContext(false);
+    setThreadId(null); setThreadReplies([]); setSendFailure(null);
+    setSelectedRun(null); setSelectedWork(null); setComposerPrefill("");
+    setApprovalError(null); setApprovalBusyId(null); setRetryingId(null);
+    setMeRole("member"); setWsStatus("offline");
   }
 
-  async function handleSetup(handle, password) {
-    const res = await apiJson("/api/register", { method: "POST", body: { handle, password } });
-    if (!res.ok) throw new Error(res.data.detail || "Setup failed");
-    setUser({ handle }); setToken(res.data.token);
-    localStorage.setItem("swarm_token", res.data.token);
-    localStorage.setItem("swarm_handle", handle);
-  }
-
+  /** The single end of a session: socket down, cache dropped, credentials
+   *  gone. The token was cleared but the cache was not, so a second user on the
+   *  same browser could be served the first user's cached reads. */
   function handleLogout() {
     disconnectWs();
-    localStorage.removeItem("swarm_token");
-    localStorage.removeItem("swarm_handle");
-    setUser(null); setToken(null); setChannels([]); setAllAgents([]); setMessages({}); setOrder([]);
-    setWsStatus("offline");
+    bustCache();
+    clearSessionState();
+    persistOutbox({}); // unsent messages belong to the session that queued them
+    try {
+      localStorage.removeItem("swarm_token");
+      localStorage.removeItem("swarm_handle");
+    } catch { /* private mode */ }
+    setUser(null); setToken(null);
   }
+
+  async function authenticate(handle, password, failMessage = "Sign-in failed") {
+    // handleLogin and handleSetup were two copies of this same POST with
+    // different error strings, so a fix applied to one left the other wrong.
+    const res = await apiJson("/api/register", { method: "POST", body: { handle, password } });
+    if (!res.ok) throw new Error(res.data?.detail || failMessage);
+    disconnectWs();
+    bustCache(); // everything cached was fetched under the previous token
+    clearSessionState();
+    // The outbox survives a dropped connection on purpose — that is what
+    // "queued, will send on reconnect" promises. It does not survive a change
+    // of person: entries typed as somebody else must never be sent from this
+    // session.
+    pruneOutbox(handle);
+    try {
+      localStorage.setItem("swarm_token", res.data.token);
+      localStorage.setItem("swarm_handle", handle);
+    } catch { /* private mode: the session simply will not survive a reload */ }
+    setUser({ handle });
+    setToken(res.data.token);
+  }
+
+  const handleLogin = (handle, password) => authenticate(handle, password);
+  const handleSetup = (handle, password) => authenticate(handle, password, "Could not create the account");
 
   // ── Effects ──
   useEffect(() => {
-    const savedToken = localStorage.getItem("swarm_token");
-    const savedHandle = localStorage.getItem("swarm_handle");
+    let savedToken = "", savedHandle = "";
+    try {
+      savedToken = localStorage.getItem("swarm_token") || "";
+      savedHandle = localStorage.getItem("swarm_handle") || "";
+    } catch { /* private mode */ }
     if (savedToken && savedHandle) { setToken(savedToken); setUser({ handle: savedHandle }); }
-    loadGroqStatus();
+    loadGroqStatus(); // public probe: the relay lamp and the demo desk button
   }, []);
 
   useEffect(() => {
-    if (token) {
-      (async () => {
-        try {
-          await Promise.all([loadChannels(), loadAllAgents(), loadTeams()]);
-          await loadChannelMessages(channelRef.current);
-          connectWs();
-        } catch (e) {
-          if (e?.status === 401) {
-            // Stored token is stale (rotated or DB reset) — drop it and
-            // send the user back to sign-in instead of a dead error state.
-            flash("Session expired — please sign in again", "warning");
-            handleLogout();
-          } else {
-            flash("Failed to initialize", "error");
-          }
-        }
-      })();
-    }
-    return () => disconnectWs();
-  }, [token]);
+    if (!token) return;
+    const mine = token;
+    let live = true;
+    (async () => {
+      try {
+        // The role gate (Admin pill, moderation) lives in /api/status, and the
+        // boot effect only applies the stored token before this one runs — so
+        // without this a page reload came back as "member" whoever was signed
+        // in, and the admin-only affordances vanished until the next sign-in.
+        await loadGroqStatus();
+        const [listed] = await Promise.all([loadChannels(mine), loadAllAgents(mine), loadTeams(mine)]);
+        // Nothing below may run for a session this one no longer owns: an
+        // init that resolved after a sign-out used to open a socket for the
+        // token that had just been thrown away.
+        if (!live || tokenRef.current !== mine) return;
+        // The default channel used to be "dm-swarm", which assumes a bot named
+        // swarm exists. A fresh install seeds only general/agents/code, so the
+        // first load 404'd and flashed "Failed to load messages". Fall back to
+        // a channel the server actually listed.
+        setChannel(current => (listed || []).some(c => c.id === current) ? current : (listed?.[0]?.id || current));
+        await loadChannelMessages(channelRef.current, mine);
+        if (!live || tokenRef.current !== mine) return;
+        connectWs();
+      } catch (e) {
+        if (!live || tokenRef.current !== mine) return;
+        // Stored token is stale (rotated or DB reset) — drop it and send the
+        // user back to sign-in instead of a dead error state.
+        if (isUnauthorized(e)) sessionExpired();
+        else flash("Failed to initialize", "error");
+      }
+    })();
+    return () => { live = false; disconnectWs(); };
+  }, [token, flash, sessionExpired]);
 
   useEffect(() => {
     if (token && channel) {
@@ -508,6 +596,10 @@ export default function App() {
       disconnectWs();
       connectWs();
     }
+    // A channel switch has to take the socket with it even when the token never
+    // changes; without the cleanup a switch followed by a sign-out left the
+    // previous channel's socket open behind the login screen.
+    return () => disconnectWs();
   }, [channel]);
 
   // ── Keyboard shortcuts ──
@@ -521,15 +613,31 @@ export default function App() {
         e.preventDefault();
         setWorkRailOpen(o => { localStorage.setItem("swarm_work_rail", o ? "0" : "1"); return !o; });
       }
-      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); setSelectedWork(null); setSidebarOpen(false); }
+      if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); setSelectedRun(null); setSelectedWork(null); setSidebarOpen(false); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [user]);
 
   function persistOutbox(next) {
-    setOutbox(next);
-    try { localStorage.setItem("swarm.outbox", JSON.stringify(next)); } catch { /* private mode */ }
+    // Callers pass updater functions (queueMessage/pruneOutbox/flush drain),
+    // so resolve inside setOutbox: stringifying the function itself stored
+    // "undefined" and lost the queue on reload.
+    setOutbox(prev => {
+      const value = typeof next === "function" ? next(prev) : next;
+      try { localStorage.setItem("swarm.outbox", JSON.stringify(value)); } catch { /* private mode */ }
+      return value;
+    });
+  }
+
+  /** Drop queued messages that were typed as somebody else. Signing out of one
+   *  account and into another on the same browser used to replay the first
+   *  account's unsent messages into the second one's channels. */
+  function pruneOutbox(handle) {
+    persistOutbox(prev => Object.fromEntries(
+      Object.entries(prev).filter(([, list]) =>
+        (list || []).length > 0 && (list || []).every(e => e.author === handle)),
+    ));
   }
 
   function queueMessage(channelId, entry) {
@@ -661,7 +769,27 @@ export default function App() {
     setThreadId(parentId);
     try {
       const res = await apiJson(`/api/messages/${parentId}/thread`, { token: tokenRef.current });
-      if (res.ok) setThreadReplies(res.data.replies || []);
+      if (!res.ok) { setThreadReplies([]); return; }
+      // The endpoint answers { parent, replies }, and MessageList resolves every
+      // row through messages[id]. Replies that were not already in the channel
+      // log therefore came back undefined and were filtered out, so opening a
+      // thread on an older message showed an empty panel. Merge all of them in.
+      const replies = res.data.replies || [];
+      const parent = res.data.parent;
+      const rows = parent ? [parent, ...replies] : replies;
+      setThreadReplies(replies);
+      setMessages(prev => {
+        const next = { ...prev };
+        for (const r of rows) next[r.id] = r;
+        return next;
+      });
+      setReactions(prev => {
+        let next = prev;
+        for (const r of rows) {
+          if (r.reactions && !next[r.id]) next = { ...next, [r.id]: r.reactions.slice() };
+        }
+        return next;
+      });
     } catch { setThreadReplies([]); }
   }
   async function onReact(messageId, target) {
@@ -719,13 +847,25 @@ export default function App() {
     }
   }
 
-  async function onResolveApproval(id, decision) {
+  /** One resolver for the inbox, the work rail and the run sheet. Three copies
+   *  of the same POST had already drifted: only one of them surfaced the
+   *  backend's reason, and a rejected token in any of them was read as "your
+   *  decision failed" rather than "this session is over". */
+  async function resolveApproval(id, decision) {
     setApprovalBusyId(id);
     setApprovalError(null);
-    const res = await apiJson(`/api/approvals/${id}/resolve`, { token: tokenRef.current, method: "POST", body: { status: decision } });
-    setApprovalBusyId(null);
-    if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); refreshWork(); }
-    else { setApprovalError(res.data?.detail || "Approval failed"); flash(res.data?.detail || "Approval failed", "error"); }
+    try {
+      const res = await apiJson(`/api/approvals/${id}/resolve`, {
+        token: tokenRef.current, method: "POST", body: { status: decision },
+      });
+      if (dead(res)) return;
+      if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); refreshWork(); }
+      else { setApprovalError(res.data?.detail || "Approval failed"); flash(res.data?.detail || "Approval failed", "error"); }
+    } catch {
+      flash("Could not record the decision — check your connection", "error");
+    } finally {
+      setApprovalBusyId(null);
+    }
   }
 
   // ── Command palette commands ──
@@ -745,7 +885,7 @@ export default function App() {
 
   // ── Render ──
   if (!user || !token) {
-    return <LoginScreen onLogin={handleLogin} onSetup={handleSetup} status={wsStatus} demoMode={demoMode} />;
+    return <LoginScreen onLogin={handleLogin} onSetup={handleSetup} relayReady={serverUp} onboarded={onboarded} demoMode={demoMode} />;
   }
 
   return (
@@ -795,7 +935,7 @@ export default function App() {
           currentView={mainView}
           approvals={approvals}
           wsStatus={wsStatus}
-          workActive={activeWorkHere}
+          workActive={activeWork}
           workAttention={workAttention}
           workConnected={workConnected}
           workRailOpen={workRailOpen}
@@ -891,7 +1031,7 @@ export default function App() {
                 auditByWork={auditByWork}
                 runs={approvalRuns}
                 agents={allAgents}
-                onResolve={onResolveApproval}
+                onResolve={resolveApproval}
                 busyId={approvalBusyId}
                 error={approvalError}
                 onRetry={() => { setApprovalError(null); loadApprovals(); }}
@@ -961,15 +1101,7 @@ export default function App() {
         selectedWork={selectedWork}
         onSelectWork={setSelectedWork}
         onCancelWork={refreshWork}
-        onResolveApproval={async (approvalId, decision) => {
-          if (approvalId) {
-            const res = await apiJson(`/api/approvals/${approvalId}/resolve`, {
-              token: tokenRef.current, method: "POST", body: { status: decision },
-            });
-            if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); refreshWork(); }
-            else flash(res.data?.detail || "Approval failed", "error");
-          }
-        }}
+        onResolveApproval={resolveApproval}
         onOpenThread={onReply}
         collapsed={!workRailOpen}
         connected={workConnected}
@@ -1004,13 +1136,9 @@ export default function App() {
                 try { await cancelWork(tokenRef.current, detail.id); refreshWork(); }
                 catch { flash("Could not cancel work", "error"); }
               }}
-              onResolveApproval={async (approvalId, decision, session) => {
+              onResolveApproval={async (approvalId, decision) => {
                 if (!approvalId) return;
-                const res = await apiJson(`/api/approvals/${approvalId}/resolve`, {
-                  token: tokenRef.current, method: "POST", body: { status: decision },
-                });
-                if (res.ok) { flash(`Approval ${decision}`, decision === "approved" ? "success" : "warning"); loadApprovals(); refreshWork(); }
-                else flash(res.data?.detail || "Approval failed", "error");
+                await resolveApproval(approvalId, decision);
               }}
               onOpenThread={onReply}
               onClose={() => setSelectedWork(null)}
@@ -1089,9 +1217,12 @@ function PaperView({ messages, title }) {
         <p className="paper-kicker">swarm preprint</p>
         <h1>{title}</h1>
         <p className="paper-meta">
+          {/* Three register items on one line, not a middle-dot meta string (8a).
+              The counts are machine data, so they are set in the machine
+              register; the sentence stays in the interface face. */}
           {code.length + math.length === 0
-            ? "A compiled view of this channel · talk stays in Talk"
-            : `${code.length} code listing${code.length === 1 ? "" : "s"} · ${math.length} math note${math.length === 1 ? "" : "s"} · talk stays in Talk`}
+            ? "A compiled view of this channel. Talk stays in Talk."
+            : `${code.length} code listing${code.length === 1 ? "" : "s"}, ${math.length} math note${math.length === 1 ? "" : "s"}, and the talk that stays in Talk.`}
         </p>
         <section aria-label="Code listings">
           <h2>Code</h2>
@@ -1099,7 +1230,7 @@ function PaperView({ messages, title }) {
           {code.map(c => (
             <div key={c.id} className="paper-item">
               <CodeBlock lang={c.lang} text={c.text} />
-              <p className="paper-item-meta text-mono-xs text-subtle">from {c.author}</p>
+              <p className="paper-item-meta mono muted">from {c.author}</p>
             </div>
           ))}
         </section>
@@ -1111,7 +1242,7 @@ function PaperView({ messages, title }) {
               {math.map(m => (
                 <li key={m.id} className="paper-math-row">
                   <code className="math-fallback">{m.tex}</code>
-                  <span className="paper-item-meta text-mono-xs text-subtle">from {m.author}</span>
+                  <span className="paper-item-meta mono muted">from {m.author}</span>
                 </li>
               ))}
             </ul>
@@ -1142,8 +1273,9 @@ function FilesView({ computer }) {
     <div id="log" className="files-view">
       <div className="files-header">
         <div className="files-header-main">
-          <span className="text-mono-xs text-subtle" title={computer.cwd}>{computer.cwd}</span>
-          <span className="text-mono-xs text-subtle">· {files.length} item{files.length === 1 ? "" : "s"}</span>
+          <span className="mono muted" title={computer.cwd}>{computer.cwd}</span>
+          {/* Two register items, not a middle-dot meta string (8a). */}
+          <span className="reg">{files.length} item{files.length === 1 ? "" : "s"}</span>
         </div>
         {files.length > 4 && (
           <input
@@ -1156,7 +1288,10 @@ function FilesView({ computer }) {
           />
         )}
       </div>
-      <ScrollArea className="files-list">
+      {/* role="list": the rows below are list items, not controls. They used
+          to carry tabIndex={0} with no click or key handler, so a keyboard
+          user could focus each one and nothing would happen. */}
+      <ScrollArea className="files-list" role="list">
         {visible.length === 0 && (
           <EmptyState
             kind="folder"
@@ -1165,11 +1300,11 @@ function FilesView({ computer }) {
           />
         )}
         {visible.map(f => (
-          <div key={f.path || f.name} className="file-row" role="listitem" tabIndex={0}>
+          <div key={f.path || f.name} className="file-row" role="listitem">
             <span className="file-icon" aria-hidden>{f.is_dir ? <Folder size={14} /> : <FileText size={14} />}</span>
             <span className="file-info">
               <span className="file-name">{f.path || f.name}</span>
-              {f.size != null && <span className="file-size text-mono-xs text-subtle">{fmtBytes(f.size)}</span>}
+              {f.size != null && <span className="file-size mono muted">{fmtBytes(f.size)}</span>}
             </span>
           </div>
         ))}
@@ -1179,7 +1314,7 @@ function FilesView({ computer }) {
 }
 
 function agentFlap(status) {
-  if (status === "working" || status === "running") return { value: "Work", tone: "amber" };
+  if (status === "working" || status === "running") return { value: "Work", tone: "go" };
   if (status === "needs_approval" || status === "waiting_for_approval") return { value: "Hold", tone: "hold" };
   if (status === "idle" || status === "online") return { value: "Ready", tone: "go" };
   return { value: "Off", tone: "unlit" };
@@ -1197,7 +1332,7 @@ function AgentsView({ agents, onOpenChannel }) {
       <header className="agents-view-head">
         <div>
           <h2 className="agents-view-title">Roster</h2>
-          <p className="agents-view-sub">{agents.length} teammate{agents.length === 1 ? "" : "s"} · open a 1:1 to work</p>
+          <p className="agents-view-sub">{agents.length} teammate{agents.length === 1 ? "" : "s"}. Open a 1:1 to work.</p>
         </div>
         <input
           type="search"
@@ -1394,14 +1529,18 @@ function QuickCreateModal({ action, token, agents, flash, onClose, onCreated }) 
           {isAgent && <Input value={avatar} onChange={e => setAvatar(e.target.value)} placeholder="Avatar — an emoji or image URL (optional)" aria-label="Bot avatar" />}
           {needsDetail && <Textarea value={detail} onChange={e => { setDetail(e.target.value); setSelectedTemplate(null); }} placeholder={action === "agent" ? "What should this agent specialize in?" : "Description or topic (optional)"} rows={3} />}
           {needsMembers && (
-            <label className="quick-members">
+            /* A fieldset with one label per checkbox. The single <label> that
+               wrapped the whole group activated only the first input on click,
+               so picking any teammate but the first was impossible by pointer. */
+            <fieldset className="quick-members">
+              <legend className="sr-only">Members</legend>
               {agents.map(agent => (
-                <span key={agent.name}>
+                <label key={agent.name} className="quick-member">
                   <input type="checkbox" checked={members.includes(agent.name)} onChange={e => setMembers(value => e.target.checked ? [...value, agent.name] : value.filter(item => item !== agent.name))} />
-                  {" "}{agent.display_name || agent.name}
-                </span>
+                  {agent.display_name || agent.name}
+                </label>
               ))}
-            </label>
+            </fieldset>
           )}
           <footer className="workflow-editor-actions">
             <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>

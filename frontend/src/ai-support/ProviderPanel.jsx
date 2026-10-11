@@ -12,7 +12,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
     if (!token) return;
     try {
       const res = await apiJson("/api/v2/providers", { token, cacheTtl: CACHE_TTL.catalog });
-      setProviders(res.ok ? res.data : []);
+      setProviders(res.ok ? res.data || [] : []);
     } catch {
       setProviders([]);
     }
@@ -77,10 +77,16 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
     // A model is only claimed active once the save succeeds: a failed save
     // reverts the draft to whatever the provider is already using, so an
     // unsaved pick never masquerades as the active model (defect 3).
-    const commit = (ok) => setDrafts((d) => ({
-      ...d,
-      [provider.id]: { ...draftFor(provider), ...draftAfterSave({ requested: model, saved: model, ok, serverModel: provider.model || "" }) },
-    }));
+    // Defect: the updater read `draftFor(provider)`, which closes over the
+    // `drafts` snapshot of the render that created it, not the `d` the updater
+    // was handed — so two saves in one tick rewrote the second onto the first.
+    const commit = (ok) => setDrafts((d) => {
+      const previous = d[provider.id] || { key: "", model: provider.model || provider.default_model || "" };
+      return {
+        ...d,
+        [provider.id]: { ...previous, ...draftAfterSave({ requested: model, saved: model, ok, serverModel: provider.model || "" }) },
+      };
+    });
     try {
       const res = await api(`/api/ai-support/connect/${provider.id}`, {
         token,
@@ -127,7 +133,9 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
         Env vars still work as fallbacks.
       </p>
       <ul className="provider-list">
-        {!providers.length && <li className="empty-state">Loading providers…</li>}
+        {/* Defect: an empty list read as "still loading" even when the catalog
+            request failed and setProviders([]) — say which one it is. */}
+        {!providers.length && <li className="empty-state">{token ? "No providers available." : "Sign in to see providers."}</li>}
         {providers.map((p) => {
           if (p.id === "custom") return <CustomProviderCard key="custom" provider={p} token={token} draft={draftFor(p)} busy={busy} setBusy={setBusy} setDrafts={setDrafts} draftFor={draftFor} flash={flash} load={load} onStatusChange={onStatusChange} />;
           const draft = draftFor(p);
@@ -136,8 +144,8 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
               <div className="provider-head">
                 <span className="provider-name">{p.name}</span>
                 <span className="provider-meta">{p.kind || "OpenAI compatible"}</span>
-                <span className="provider-meta">{(p.auth_methods || ["api_key"]).join(" · ")}</span>
-                <span className={`provider-badge${p.connected ? " on" : ""}`}>
+                <span className="provider-meta">{(p.auth_methods || ["api_key"]).join(", ")}</span>
+                <span className={`provider-badge${p.connected ? " ready" : " missing"}`}>
                   {p.connected ? (p.via === "env" ? "Env" : "Connected") : "Not connected"}
                 </span>
               </div>
@@ -276,8 +284,8 @@ function CustomProviderCard({ provider: p, token, draft, busy, setBusy, setDraft
     <li className={`provider-card${p.connected ? " connected" : ""}`}>
       <div className="provider-head">
         <span className="provider-name">{p.name}</span>
-        <span className="provider-meta">Ollama · LM Studio · vLLM · any OpenAI-compatible server</span>
-        <span className={`provider-badge${p.connected ? " on" : ""}`}>
+        <span className="provider-meta">Ollama, LM Studio, vLLM, any OpenAI-compatible server</span>
+        <span className={`provider-badge${p.connected ? " ready" : " missing"}`}>
           {p.connected ? (p.via === "env" ? "Env" : "Connected") : "Not connected"}
         </span>
       </div>

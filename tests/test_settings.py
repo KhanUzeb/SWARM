@@ -6,6 +6,10 @@ operator who learned "on works" got a silent no-op from the other flag with no
 error anywhere — so the tests here are written to pin *one* vocabulary, one
 default per flag, and one loud failure at startup, rather than to pin any
 particular parse of any one file.
+
+Every table below is a loop inside one test on purpose: the contract is "the
+whole vocabulary means the same thing everywhere", and splitting it across
+dozens of near-identical functions made that harder to read, not easier.
 """
 
 from __future__ import annotations
@@ -18,7 +22,6 @@ from backend import settings as settings_mod
 from backend.settings import (
     FALSY_VALUES,
     TRUTHY_VALUES,
-    SettingProblem,
     Settings,
     SettingsError,
     get_settings,
@@ -26,6 +29,11 @@ from backend.settings import (
     truthy,
     validate_settings,
 )
+
+# The vocabularies must stay a superset of these — widening is fine, silently
+# dropping a spelling is not.
+_TRUTHY = ("1", "true", "TRUE", "True", "yes", "YES", "on", "ON", "t", "y")
+_FALSY = ("0", "false", "FALSE", "no", "NO", "off", "OFF", "f", "n")
 
 
 @pytest.fixture(autouse=True)
@@ -44,75 +52,62 @@ def _clean_settings_env(monkeypatch):
 
 # --------------------------------------------------------------- truthy --
 
-@pytest.mark.parametrize("raw", ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON", "t", "y"])
-def test_every_accepted_spelling_reads_true(raw):
-    """One vocabulary for every flag, so `on` cannot be a silent no-op."""
-    assert truthy(raw, default=False) is True
-    assert truthy(raw, default=True) is True
+def test_truthy_vocabulary_is_one_shared_vocabulary():
+    """One vocabulary for every flag, so `on` cannot be a silent no-op.
 
-
-@pytest.mark.parametrize("raw", ["0", "false", "FALSE", "no", "NO", "off", "OFF", "f", "n"])
-def test_the_negatives_read_false(raw):
-    assert truthy(raw, default=False) is False
-    assert truthy(raw, default=True) is False
-
-
-def test_unset_and_blank_take_the_caller_default():
-    """An unset flag must keep its documented default, not the parse's.
-
-    SWARM_SYSTEM's default is off and SWARM_BROWSER's is on; both are unset in
-    the environment, and polarity must not decide the answer.
+    A spelling that is both true and false would be a coin flip, so the two
+    sets are also checked for overlap.
     """
-    assert truthy(None, default=False) is False
-    assert truthy(None, default=True) is True
-    assert truthy("", default=True) is True
-    assert truthy("   ", default=False) is False
+    assert {v.lower() for v in _TRUTHY} <= TRUTHY_VALUES, (
+        "a spelling the product accepts went missing"
+    )
+    assert {v.lower() for v in _FALSY} <= FALSY_VALUES, (
+        "a spelling the product accepts went missing"
+    )
+    assert not (TRUTHY_VALUES & FALSY_VALUES), "a spelling reads both true and false"
 
-
-def test_an_unrecognised_value_falls_back_to_the_default():
-    """`enabled` is not a spelling. It must not silently read as true."""
+    for raw in _TRUTHY:
+        assert truthy(raw, default=False) is True, raw
+        assert truthy(raw, default=True) is True, raw
+    for raw in _FALSY:
+        assert truthy(raw, default=False) is False, raw
+        assert truthy(raw, default=True) is False, raw
+    # Unset and blank take the caller default, not the parse's.
+    for raw in (None, "", "   "):
+        assert truthy(raw, default=True) is True, repr(raw)
+        assert truthy(raw, default=False) is False, repr(raw)
+    # An unrecognised value must not silently read as true.
     assert truthy("enabled", default=False) is False
     assert truthy("enabled", default=True) is True
 
 
-def test_the_two_vocabularies_do_not_overlap():
-    """A spelling that is both true and false would be a coin flip."""
-    assert not (TRUTHY_VALUES & FALSY_VALUES)
+def test_every_boolean_flag_agrees_on_every_spelling(monkeypatch):
+    """The exact regression: `on` worked for one flag and not the other.
 
-
-# ------------------------------------------------------ the old bug, fixed --
-
-def test_on_means_on_for_both_system_and_demo(monkeypatch):
-    """The exact regression: `on` worked for one flag and not the other."""
+    Polarisation must not decide the answer — both flags are off by default
+    and both must honour the same spellings.
+    """
     monkeypatch.setenv("SWARM_SYSTEM", "on")
     monkeypatch.setenv("SWARM_DEMO", "on")
-    parsed = get_settings()
-    assert parsed.system_enabled() is True
-    assert parsed.demo_mode() is True
-
-
-@pytest.mark.parametrize("raw", ["1", "true", "yes", "on", "t", "y"])
-def test_every_prior_spelling_still_works_for_system_and_demo(monkeypatch, raw):
-    """Widen, never narrow: everything that worked before still works."""
-    monkeypatch.setenv("SWARM_SYSTEM", raw)
-    monkeypatch.setenv("SWARM_DEMO", raw)
     reset_settings_cache()
     parsed = get_settings()
     assert parsed.system_enabled() is True
     assert parsed.demo_mode() is True
 
+    for flag in ("SWARM_SYSTEM", "SWARM_DEMO"):
+        for raw in _TRUTHY + _FALSY + ("",):
+            for name in ("SWARM_SYSTEM", "SWARM_DEMO"):
+                # Both flags carry the same spelling, so a per-flag parse
+                # difference cannot hide behind the other flag's value.
+                monkeypatch.setenv(name, raw)
+            reset_settings_cache()
+            parsed = get_settings()
+            expected = truthy(raw, default=False)
+            assert parsed.system_enabled() is expected, (flag, raw)
+            assert parsed.demo_mode() is expected, (flag, raw)
 
-@pytest.mark.parametrize("raw", ["0", "false", "no", "off", ""])
-def test_the_off_values_agree_across_both_flags(monkeypatch, raw):
-    monkeypatch.setenv("SWARM_SYSTEM", raw)
-    monkeypatch.setenv("SWARM_DEMO", raw)
-    reset_settings_cache()
-    parsed = get_settings()
-    assert parsed.system_enabled() is False, raw
-    assert parsed.demo_mode() is False, raw
 
-
-def test_defaults_unchanged_when_nothing_is_set():
+def test_the_shipped_defaults_are_a_contract():
     """The shipped defaults are a contract, not an opinion."""
     parsed = get_settings()
     assert parsed.system_enabled() is False      # host tools opt-in
@@ -131,59 +126,73 @@ def test_defaults_unchanged_when_nothing_is_set():
 
 # ---------------------------------------------------------- validation --
 
-@pytest.mark.parametrize("name", ["SWARM_SYSTEM", "SWARM_DEMO", "SWARM_SYSTEM_UNRESTRICTED"])
-def test_a_bad_variable_is_reported_by_name(monkeypatch, name):
-    monkeypatch.setenv(name, "enabled")
-    problems = get_settings().problems()
-    assert [p.variable for p in problems] == [name]
-    assert "1/0" in problems[0].message
-    # The problem object quotes the offending value, which is what makes the
-    # message actionable, and SWARM_SECRET is never one of these fields.
+_STRICT_FLAGS = ("SWARM_SYSTEM", "SWARM_DEMO", "SWARM_SYSTEM_UNRESTRICTED")
+
+
+def test_a_bad_variable_is_reported_by_name_with_its_options(monkeypatch):
+    """The problem names itself, quotes the value, and lists the real options.
+
+    The quoted value is what makes the message actionable, and SWARM_SECRET is
+    never one of these fields (it has no vocabulary, so any value passes).
+    """
+    for name in _STRICT_FLAGS:
+        for other in _STRICT_FLAGS + ("SWARM_COMPUTER_PROVIDER",):
+            if other != name:
+                monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv(name, "enabled")
+        reset_settings_cache()
+        problems = get_settings().problems()
+        assert [p.variable for p in problems] == [name], problems
+        assert "1/0" in problems[0].message, problems[0].message
+        # The value is quoted on the object, which is what makes the message
+        # actionable without the operator guessing which spelling they used.
+        assert problems[0].value == "enabled", problems[0]
+
+    for name in _STRICT_FLAGS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "cloud")
+    reset_settings_cache()
+    problem = get_settings().problems()[0]
+    assert problem.variable == "SWARM_COMPUTER_PROVIDER"
+    for option in ("local", "none", "fake"):
+        assert option in problem.message, problem.message
 
 
 def test_every_bad_variable_is_reported_at_once(monkeypatch):
-    """One boot should say everything wrong, not one thing per restart."""
+    """One boot should say everything wrong, not one thing per restart.
+
+    The same error text the operator reads is asserted here: it must name the
+    variable, quote the offending value, and offer the vocabulary.
+    """
     monkeypatch.setenv("SWARM_SYSTEM", "enabled")
     monkeypatch.setenv("SWARM_DEMO", "sometimes")
     monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "cloud")
+    reset_settings_cache()
     with pytest.raises(SettingsError) as excinfo:
         validate_settings()
     names = {p.variable for p in excinfo.value.problems}
     assert names == {"SWARM_SYSTEM", "SWARM_DEMO", "SWARM_COMPUTER_PROVIDER"}
-
-
-def test_the_error_text_tells_the_operator_what_to_type():
-    error = SettingsError([SettingProblem("SWARM_DEMO", "enabled", "not a boolean — use 1/0, true/false, yes/no, on/off")])
-    text = str(error)
+    text = str(excinfo.value)
     assert "SWARM_DEMO" in text
     assert "enabled" in text
     assert "yes/no" in text
 
 
-def test_an_unknown_enum_lists_the_real_options(monkeypatch):
-    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "cloud")
-    problem = get_settings().problems()[0]
-    assert problem.variable == "SWARM_COMPUTER_PROVIDER"
-    for option in ("local", "none", "fake"):
-        assert option in problem.message
+def test_blank_and_secret_values_never_stop_the_boot(monkeypatch):
+    """An empty env var is what a copied `.env.example` produces.
 
+    SWARM_SECRET has no vocabulary either, so any value must pass.
+    """
+    for raw in ("", "   "):
+        monkeypatch.setenv("SWARM_SYSTEM", raw)
+        monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", raw)
+        reset_settings_cache()
+        assert get_settings().problems() == [], raw
 
-@pytest.mark.parametrize("raw", ["", "   "])
-def test_blank_is_not_a_problem(monkeypatch, raw):
-    """An empty env var is what a copied `.env.example` produces."""
-    monkeypatch.setenv("SWARM_SYSTEM", raw)
-    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", raw)
-    assert get_settings().problems() == []
-
-
-def test_validation_passes_when_nothing_is_set():
-    assert validate_settings() is get_settings()
-
-
-def test_a_secret_value_is_never_reported_as_a_problem(monkeypatch):
-    """SWARM_SECRET has no vocabulary, so any value must pass validation."""
     monkeypatch.setenv("SWARM_SECRET", "not a boolean")
+    reset_settings_cache()
     assert get_settings().problems() == []
+    assert validate_settings() is get_settings()
 
 
 def test_startup_actually_stops_on_a_bad_value():
@@ -216,59 +225,35 @@ def test_startup_actually_stops_on_a_bad_value():
 
 # ------------------------------------------------------------- lenient --
 
-@pytest.mark.parametrize("raw", ["", "  ", "abc", "0", "-5", "1e400"])
-def test_retention_keeps_everything_on_nonsense(monkeypatch, raw):
-    """A typo must never read as "delete my transcript".
+def test_lenient_settings_never_read_nonsense_as_a_bound(monkeypatch):
+    """A typo must never read as "delete my transcript" or "wait zero seconds".
 
-    This is the one setting where a lenient fallback *is* the safety property,
-    so it must not be tightened into a boot failure.
+    This is the one place where a lenient fallback *is* the safety property,
+    so it must not be tightened into a boot failure. The GC caps get the same
+    treatment for a sharper reason: `sweep_oversize` deletes until the total
+    fits, so a negative cap makes every file in the sandbox qualify and a zero
+    age deletes all of them.
     """
-    monkeypatch.setenv("SWARM_RETENTION_DAYS", raw)
-    reset_settings_cache()
-    assert get_settings().effective_retention_days() is None, raw
-    assert get_settings().problems() == [], raw
-
-
-def test_retention_accepts_a_positive_number(monkeypatch):
+    for raw in ("", "  ", "abc", "0", "-5", "1e400"):
+        monkeypatch.setenv("SWARM_RETENTION_DAYS", raw)
+        reset_settings_cache()
+        assert get_settings().effective_retention_days() is None, raw
+        assert get_settings().problems() == [], raw
     monkeypatch.setenv("SWARM_RETENTION_DAYS", "7")
     reset_settings_cache()
     assert get_settings().effective_retention_days() == 7
 
+    for raw, expected in (("not-a-number", 5000), ("-1", 0), ("1234", 1234)):
+        monkeypatch.setenv("SWARM_SQLITE_BUSY_TIMEOUT_MS", raw)
+        reset_settings_cache()
+        assert get_settings().busy_timeout_ms() == expected, raw
 
-def test_busy_timeout_falls_back_and_never_goes_negative(monkeypatch):
-    monkeypatch.setenv("SWARM_SQLITE_BUSY_TIMEOUT_MS", "not-a-number")
-    reset_settings_cache()
-    assert get_settings().busy_timeout_ms() == 5000
-    monkeypatch.setenv("SWARM_SQLITE_BUSY_TIMEOUT_MS", "-1")
-    reset_settings_cache()
-    assert get_settings().busy_timeout_ms() == 0
-    monkeypatch.setenv("SWARM_SQLITE_BUSY_TIMEOUT_MS", "1234")
-    reset_settings_cache()
-    assert get_settings().busy_timeout_ms() == 1234
-
-
-@pytest.mark.parametrize("raw", ["", "abc"])
-def test_gc_caps_keep_their_defaults_on_nonsense(monkeypatch, raw):
-    monkeypatch.setenv("SWARM_GC_MAX_MB", raw)
-    monkeypatch.setenv("SWARM_GC_MAX_AGE_HOURS", raw)
-    reset_settings_cache()
-    assert get_settings().effective_gc_max_mb() == 512.0
-    assert get_settings().effective_gc_max_age_hours() == 72.0
-
-
-@pytest.mark.parametrize("raw", ["-3", "0"])
-def test_a_non_positive_gc_cap_is_refused(monkeypatch, raw):
-    """These are deletion bounds, not preferences.
-
-    `sweep_oversize` deletes until the total fits, so a negative cap makes
-    every file in the sandbox qualify and a zero age deletes all of them. An
-    unusable value therefore keeps the default instead of being obeyed.
-    """
-    monkeypatch.setenv("SWARM_GC_MAX_MB", raw)
-    monkeypatch.setenv("SWARM_GC_MAX_AGE_HOURS", raw)
-    reset_settings_cache()
-    assert get_settings().effective_gc_max_mb() == 512.0, raw
-    assert get_settings().effective_gc_max_age_hours() == 72.0, raw
+    for raw in ("", "abc", "-3", "0"):
+        monkeypatch.setenv("SWARM_GC_MAX_MB", raw)
+        monkeypatch.setenv("SWARM_GC_MAX_AGE_HOURS", raw)
+        reset_settings_cache()
+        assert get_settings().effective_gc_max_mb() == 512.0, raw
+        assert get_settings().effective_gc_max_age_hours() == 72.0, raw
 
 
 def test_browser_keeps_its_inverted_lenient_contract(monkeypatch):
@@ -290,45 +275,37 @@ def test_browser_keeps_its_inverted_lenient_contract(monkeypatch):
 
 # ---------------------------------------------------------- db / gc reads --
 
-def test_db_reads_go_through_the_settings_object(monkeypatch):
-    """The migrated call sites must agree with the object, not with a copy."""
+def test_the_migrated_call_sites_read_the_settings_object(monkeypatch):
+    """The migrated call sites must agree with the object, not with a copy.
+
+    db, gc and the computer-provider fallback each own a value the operator
+    set; if any of them parsed it a second way, `swarm doctor` would report
+    one thing while the code did another.
+    """
+    from backend import computer_providers as computers
     from backend import db as db_mod
     from backend import gc as gc_mod
 
     monkeypatch.setenv("SWARM_SQLITE_BUSY_TIMEOUT_MS", "1234")
     monkeypatch.setenv("SWARM_RETENTION_DAYS", "9")
     monkeypatch.setenv("SWARM_GC_MAX_MB", "7")
+    monkeypatch.setenv("SWARM_DEMO", "on")
+    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "cloud")
     reset_settings_cache()
     assert db_mod.busy_timeout_ms() == 1234
     assert db_mod.retention_days() == 9
     assert gc_mod._max_bytes() == 7 * 1024 * 1024
-
-
-def test_demo_mode_agrees_across_every_reader(monkeypatch):
-    """db and settings must not disagree about whether demo is on."""
-    from backend import db as db_mod
-
-    monkeypatch.setenv("SWARM_DEMO", "on")
-    reset_settings_cache()
     assert db_mod._demo_mode() is True
-    assert get_settings().demo_mode() is True
-
-
-def test_computer_provider_falls_back_to_local(monkeypatch):
-    """An unknown provider must not quietly boot without a computer host."""
-    from backend import computer_providers as computers
-
-    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "cloud")
-    reset_settings_cache()
+    # An unknown provider must not quietly boot without a computer host.
     assert computers.get_provider() == "local"
     assert [p.variable for p in get_settings().problems()] == ["SWARM_COMPUTER_PROVIDER"]
 
 
 # ------------------------------------------------------------- origins --
 
-def test_allowed_origins_drops_a_bare_wildcard(monkeypatch):
+def test_allowed_origins_drops_a_wildcard_and_defaults_to_localhost(monkeypatch):
     """The guard and CORSMiddleware must agree: "*" reaches neither."""
-    from backend.security import allowed_origins
+    from backend.security import DEFAULT_ALLOWED_ORIGINS, allowed_origins
 
     monkeypatch.setenv("SWARM_ALLOWED_ORIGINS", "*")
     reset_settings_cache()
@@ -338,15 +315,18 @@ def test_allowed_origins_drops_a_bare_wildcard(monkeypatch):
     reset_settings_cache()
     assert allowed_origins() == {"http://a.example", "http://b.example"}
 
-
-def test_allowed_origins_defaults_to_localhost_when_unset():
-    from backend.security import DEFAULT_ALLOWED_ORIGINS, allowed_origins
-
+    monkeypatch.delenv("SWARM_ALLOWED_ORIGINS", raising=False)
+    reset_settings_cache()
     assert allowed_origins() == set(DEFAULT_ALLOWED_ORIGINS)
 
 
-def test_exposure_detection(monkeypatch):
-    """Unset means loopback-only, because that is uvicorn's own default."""
+def test_exposure_detection_and_every_documented_computer_provider(monkeypatch):
+    """Unset means loopback-only, because that is uvicorn's own default.
+
+    The three documented computer providers must all stay bootable.
+    """
+    from backend import computer_providers as computers
+
     assert get_settings().exposed_on_non_loopback() is False
     for host in ("127.0.0.1", "localhost", "::1"):
         monkeypatch.setenv("SWARM_HOST", host)
@@ -356,40 +336,33 @@ def test_exposure_detection(monkeypatch):
     reset_settings_cache()
     assert get_settings().exposed_on_non_loopback() is True
 
-
-@pytest.mark.parametrize("value", ["local", "none", "fake"])
-def test_every_documented_computer_provider_still_works(monkeypatch, value):
-    from backend import computer_providers as computers
-
-    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", value)
-    reset_settings_cache()
-    assert computers.get_provider() == value
-    assert get_settings().problems() == []
+    for value in ("local", "none", "fake"):
+        monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", value)
+        reset_settings_cache()
+        assert computers.get_provider() == value, value
+        assert get_settings().problems() == [], value
 
 
 # -------------------------------------------------------------- caching --
 
 def test_the_cache_follows_the_environment_not_the_import(monkeypatch):
     """Tests and operators change the environment after import; the object
-    must not serve a stale parse."""
+    must not serve a stale parse, and repeated reads stay the same object."""
     assert get_settings().system_enabled() is False
     monkeypatch.setenv("SWARM_SYSTEM", "1")
     assert get_settings().system_enabled() is True
     monkeypatch.setenv("SWARM_SYSTEM", "0")
     assert get_settings().system_enabled() is False
-
-
-def test_repeated_reads_return_the_same_object():
     assert get_settings() is get_settings()
 
 
-def test_settings_is_instantiable_without_any_environment():
-    """`Settings()` must not require SWARM_* to exist at all."""
+def test_settings_is_instantiable_and_its_snapshot_never_carries_a_secret(monkeypatch):
+    """`Settings()` must not require SWARM_* to exist at all.
+
+    The snapshot is designed to be pasted into a public issue, so a secret
+    reports set/not-set only.
+    """
     assert Settings().problems() == []
-
-
-def test_settings_snapshot_never_carries_a_secret(monkeypatch):
-    """The snapshot is designed to be pasted into a public issue."""
     monkeypatch.setenv("SWARM_SECRET", "the-real-secret-value")
     reset_settings_cache()
     snapshot = settings_mod.settings_snapshot()

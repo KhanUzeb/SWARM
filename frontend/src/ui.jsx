@@ -105,6 +105,12 @@ function RichBody({ body }) {
  */
 function CodeBlock({ lang, text }) {
   const [copied, setCopied] = useState(false);
+  const copyTimer = useRef(null);
+  // Defect: the "copied" timer was never cleared, so unmounting the block
+  // inside those 1.4s set state on a component that is gone.
+  useEffect(() => () => {
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+  }, []);
   return (
     <div className="code-block">
       <div className="code-block-head">
@@ -116,7 +122,8 @@ function CodeBlock({ lang, text }) {
             try {
               await navigator.clipboard.writeText(text);
               setCopied(true);
-              setTimeout(() => setCopied(false), 1400);
+              if (copyTimer.current) clearTimeout(copyTimer.current);
+              copyTimer.current = setTimeout(() => setCopied(false), 1400);
             } catch { /* ignore */ }
           }}
         >
@@ -134,7 +141,7 @@ function CodeBlock({ lang, text }) {
 // ── UI Primitives ──
 
 function Avatar({ name, kind = "human", size = "md", src, avatar }) {
-  const sizes = { sm: "avatar-sm", md: "", lg: "avatar-lg", xl: "avatar-xl" };
+  const sizes = { xs: "avatar-xs", sm: "avatar-sm", md: "", lg: "avatar-lg", xl: "avatar-xl" };
   const kindClass = avatarKindClass(kind);
   const pfp = (avatar || src || "").trim();
   const isImage = /^https?:\/\//i.test(pfp) || pfp.startsWith("data:image");
@@ -248,7 +255,7 @@ function Dropdown({ trigger, items, align = "right", label = "Menu" }) {
               >
                 {item.icon && <span>{item.icon}</span>}
                 {item.label}
-                {item.shortcut && <span className="text-mono-xs text-subtle ml-auto">{item.shortcut}</span>}
+                {item.shortcut && <span className="mono muted ml-auto">{item.shortcut}</span>}
               </button>
             );
           })}
@@ -264,11 +271,28 @@ function Tooltip({ children, content }) {
 
 function ToastContainer() {
   const [toasts, setToasts] = useState([]);
-  
+  const nextId = useRef(0);
+  const timers = useRef(new Map());
+
   const addToast = useCallback((message, type = "info", title) => {
-    const id = Date.now();
+    // Defect: `Date.now()` ids collided inside one millisecond, which is two
+    // React keys on one toast and one dismissal filter that removed both.
+    const id = ++nextId.current;
     setToasts(prev => [...prev, { id, message, type, title }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+    timers.current.set(id, setTimeout(() => {
+      timers.current.delete(id);
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000));
+  }, []);
+
+  // Defect: dismissal timers were never cleared, so every toast still on
+  // screen when the container unmounted set state on a gone component.
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending.values()) clearTimeout(timer);
+      pending.clear();
+    };
   }, []);
   
   if (toasts.length === 0) return null;
@@ -281,7 +305,11 @@ function ToastContainer() {
             {t.title && <div className="toast-title">{t.title}</div>}
             <div className="toast-message">{t.message}</div>
           </div>
-          <button className="toast-close" onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}><X size={14} /></button>
+          <button className="toast-close" aria-label="Dismiss toast" onClick={() => {
+            const timer = timers.current.get(t.id);
+            if (timer) { clearTimeout(timer); timers.current.delete(t.id); }
+            setToasts(prev => prev.filter(x => x.id !== t.id));
+          }}><X size={14} /></button>
         </div>
       ))}
     </div>

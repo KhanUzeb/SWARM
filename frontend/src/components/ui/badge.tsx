@@ -6,8 +6,12 @@ const VARIANT: Record<string, string> = {
   neutral: "",
   brand: "badge-go",
   success: "badge-go",
-  warning: "badge-amber",
+  // Two signal hues (8a): needs-you is hold, live/cleared is go. Amber was the
+  // third hue this system does not have.
+  warning: "badge-hold",
   error: "badge-hold",
+  danger: "badge-hold",
+  intelligence: "badge-go",
   subtle: "",
   outline: "",
 };

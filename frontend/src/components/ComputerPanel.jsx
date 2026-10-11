@@ -1,5 +1,5 @@
-import { useCallback, useState } from "react";
-import { X, FileText } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Monitor, RefreshCw, X, FileText } from "lucide-react";
 import { apiJson, Button, EmptyState, ScrollArea, Tooltip } from "../ui.jsx";
 import { fmtBytes } from "../lib.js";
 import SystemPanel from "../ai-support/SystemPanel.jsx";
@@ -32,31 +32,33 @@ export function ComputerPanel({ computer, token, meRole, onRefresh, flash, group
   const destination = PANEL_GROUPS.find(g => g.id === group) || PANEL_GROUPS[0];
   const [activeTab, setActiveTab] = useState(initialTab || destination.tabs[0].id);
 
+  // Defect: the tab was seeded from `initialTab` once and never re-derived, so
+  // arriving at Connect from Places kept the "files" id that Connect does not
+  // own and the panel body rendered nothing at all.
+  useEffect(() => {
+    setActiveTab((current) => {
+      if (initialTab && destination.tabs.some(t => t.id === initialTab)) return initialTab;
+      if (destination.tabs.some(t => t.id === current)) return current;
+      return destination.tabs[0].id;
+    });
+  }, [group, initialTab]);
+
   const panelFlash = useCallback((message, error) => {
     flash?.(message, error ? "error" : "success");
   }, [flash]);
 
-  if (!computer && activeTab === "files") {
-    return (
-      <section className="computer-embedded" aria-label={destination.label}>
-        <PanelChrome
-          title={destination.label}
-          subtitle="Shared workspace offline"
-          onRefresh={onRefresh}
-        />
-        <EmptyState kind="sandbox" title="Sandbox offline" message="Could not load workspace data. Agents can still use tools when configured." />
-      </section>
-    );
-  }
-
+  // No early return here. The offline state used to short-circuit before the
+  // tab strip rendered, so with the sandbox down the user was locked out of
+  // System and Browser permanently — the only way out was a page reload. The
+  // strip always renders; the offline message lives inside the sandbox body.
   return (
     <section className="computer-embedded" aria-label={destination.label}>
       <PanelChrome
         title={destination.label}
-        subtitle={[
-          computer?.provider?.provider && `Computer: ${computer.provider.provider}`,
-          computer?.workspace || computer?.note?.slice(0, 48) || "Shared workspace",
-        ].filter(Boolean).join(" · ")}
+        // Defect: the two facts were joined with a middle-dot meta string (8a).
+        subtitle={computer?.provider?.provider
+          ? `Computer ${computer.provider.provider}, ${computer?.workspace || computer?.note?.slice(0, 48) || "shared workspace"}`
+          : (computer?.workspace || computer?.note?.slice(0, 48) || "Shared workspace")}
         onRefresh={onRefresh}
       />
 
@@ -91,9 +93,9 @@ function PanelChrome({ title, subtitle, onRefresh }) {
   return (
     <div className="panel-header">
       <div className="panel-header-main">
-        <span className="panel-icon" aria-hidden>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        </span>
+        {/* Defect: these two were hand-rolled <svg> paths outside the lucide
+            set, so the panel carried a second icon weight (AGENTS.md 8a). */}
+        <span className="panel-icon" aria-hidden><Monitor size={18} /></span>
         <div>
           <h2 className="panel-title">{title}</h2>
           <span className="panel-subtitle">{subtitle}</span>
@@ -102,7 +104,7 @@ function PanelChrome({ title, subtitle, onRefresh }) {
       <div className="panel-header-actions">
         <Tooltip content="Refresh">
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onRefresh} aria-label="Refresh">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            <RefreshCw size={16} />
           </button>
         </Tooltip>
       </div>
@@ -115,6 +117,16 @@ function SandboxView({ computer, token, flash }) {
   const [previewPath, setPreviewPath] = useState("");
   const [busy, setBusy] = useState(false);
   const files = computer?.files || [];
+
+  // The offline state belongs inside the body, not above the tab strip: with
+  // the sandbox down the strip still has to let you reach System and Browser.
+  if (!computer) {
+    return (
+      <div className="panel-body sandbox-panel">
+        <EmptyState kind="sandbox" title="Sandbox offline" message="Could not load workspace data. Agents can still use tools when configured." />
+      </div>
+    );
+  }
 
   async function openFile(path) {
     setBusy(true);
@@ -143,7 +155,7 @@ function SandboxView({ computer, token, flash }) {
                 <span className="file-icon"><FileText size={13} /></span>
                 <div className="file-info">
                   <span className="file-name">{f.path}</span>
-                  <span className="file-size text-mono-xs text-subtle">{fmtBytes(f.size)}</span>
+                  <span className="file-size mono muted">{fmtBytes(f.size)}</span>
                 </div>
               </button>
             </li>
@@ -190,19 +202,20 @@ function TerminalView({ token, flash }) {
     <div className="terminal-view">
       <div className="mem-title">Sandbox terminal</div>
       <ScrollArea className="terminal-output">
-        {history.length === 0 && <pre className="terminal-line text-subtle">Run commands in the shared sandbox…</pre>}
+        {history.length === 0 && <pre className="terminal-line muted">Run commands in the shared sandbox…</pre>}
         {history.map((line, i) => (
-          <pre key={i} className="terminal-line text-mono-xs">{line}</pre>
+          <pre key={i} className="terminal-line">{line}</pre>
         ))}
       </ScrollArea>
       <form className="terminal-input-row" onSubmit={runCommand}>
-        <span className="terminal-prompt text-mono-xs">$</span>
+        <span className="terminal-prompt" aria-hidden>$</span>
         <input
-          className="terminal-input text-mono-xs"
+          className="terminal-input"
           value={cmd}
           onChange={e => setCmd(e.target.value)}
           placeholder="ls, cat README.md, python script.py…"
           disabled={busy}
+          aria-label="Sandbox command"
         />
         <Button type="submit" size="sm" variant="secondary" disabled={busy || !cmd.trim()}>{busy ? "…" : "Run"}</Button>
       </form>

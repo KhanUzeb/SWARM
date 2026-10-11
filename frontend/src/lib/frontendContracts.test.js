@@ -84,11 +84,13 @@ describe("badge and avatar classes exist in styles.css", () => {
       if (cls) expect(css).toContain(`.${cls} `);
     }
     expect(badgeClass("success")).toBe("badge-go");
-    expect(badgeClass("warning")).toBe("badge-amber");
+    // Two signal hues only (8a): needs-you is hold, live is go. badge-amber
+    // was the third hue and no longer exists in styles.css.
+    expect(badgeClass("warning")).toBe("badge-hold");
     expect(badgeClass("error")).toBe("badge-hold");
     // Work-rail tones used to render as `badge undefined`.
     expect(badgeClass("danger")).toBe("badge-hold");
-    expect(badgeClass("intelligence")).toBe("badge-amber");
+    expect(badgeClass("intelligence")).toBe("badge-go");
   });
 
   test("avatar kinds resolve to the machined-square classes", async () => {
@@ -99,6 +101,92 @@ describe("badge and avatar classes exist in styles.css", () => {
     expect(avatarKindClass("unknown")).toBe("avatar-user");
     for (const cls of ["avatar-user", "avatar-agent", "avatar-system"]) {
       expect(css).toContain(`.${cls} `);
+    }
+  });
+});
+
+describe("the two-signal-hue rule (AGENTS.md 8a)", () => {
+  test("no third signal hue survives anywhere", async () => {
+    // Exactly two signal hues exist: --go (live/cleared) and --hold
+    // (needs-you). Amber was a third one. Neither the tokens nor the tone
+    // classes nor the components may name it again.
+    const css = await src("styles.css");
+    expect(css).not.toContain("--lamp-hold");
+    expect(css).not.toContain(".chip-amber");
+    expect(css).not.toContain(".flap-amber");
+    expect(css).not.toContain(".badge-amber");
+    expect(css).not.toContain(".reg-amber");
+    expect(css).not.toContain(".is-amber");
+    for (const f of [
+      "components/Flap.tsx",
+      "components/TopBar.tsx",
+      "components/Composer.tsx",
+      "components/CommandCenter.jsx",
+      "components/MessageList.tsx",
+      "components/Sidebar.tsx",
+      "components/Status.jsx",
+      "work/inspectorModel.ts",
+      "work/approvalsModel.ts",
+      "App.jsx",
+      "lib.js",
+      "components/ui/badge.tsx",
+    ]) {
+      const text = await src(f);
+      // Comments may name amber to document the defect that was removed; the
+      // rule is about the interface, not the prose about it.
+      const lines = text.split("\n").filter(l => !l.trimStart().startsWith("//") && !l.trimStart().startsWith("*") && !l.trimStart().startsWith("/*"));
+      expect(lines.filter(l => l.includes("amber") || l.includes("lamp-hold")).join("\n")).toBe("");
+    }
+  });
+
+  test("every badge variant resolves to a class styles.css defines", async () => {
+    const css = await src("styles.css");
+    for (const v of ["neutral", "subtle", "brand", "success", "warning", "error", "danger", "intelligence", "nope"]) {
+      const cls = badgeClass(v);
+      expect(cls).not.toContain("undefined");
+      if (cls) expect(css).toContain(`.${cls} {`);
+    }
+  });
+
+  test("status dots map to the three tones that exist", async () => {
+    // StatusDot emitted .status-running / .status-warning / .status-danger,
+    // none of which are defined, so every work status dot was invisible.
+    const status = await src("components/Status.jsx");
+    expect(status).not.toContain("status-${");
+    const css = await src("styles.css");
+    for (const cls of ["status-dot.go", "status-dot.hold", "status-dot.idle"]) {
+      expect(css).toContain(`.${cls} `);
+    }
+  });
+
+  test("no dead text-mono-xs / text-subtle classes remain", async () => {
+    // Neither class is defined in styles.css, so both were no-ops that read
+    // as styling while doing nothing.
+    const files = [
+      "App.jsx", "ui.jsx", "components/ComputerPanel.jsx",
+      "components/CommandCenter.jsx", "components/Status.jsx",
+    ];
+    for (const f of files) {
+      const text = await src(f);
+      expect(text).not.toContain("text-mono-xs");
+      expect(text).not.toContain("text-subtle");
+    }
+  });
+
+  test("no middle-dot meta strings in the interface", async () => {
+    // 8a forbids them outright. Comments in styles.css and the RunInspector
+    // docblock are prose, not interface copy, so they are not counted here.
+    for (const f of [
+      "App.jsx", "components/ComputerPanel.jsx", "components/Composer.tsx",
+      "components/CommandCenter.jsx", "components/WorkRail.jsx",
+      "components/WorkHome.jsx", "components/ArtifactCard.jsx",
+      "components/ContextDrawer.jsx", "components/LoginScreen.tsx",
+      "ai-support/AppsPanel.jsx", "ai-support/ModelPicker.tsx",
+      "ai-support/ProviderPanel.jsx",
+    ]) {
+      const text = await src(f);
+      const lines = text.split("\n").filter(l => !l.trimStart().startsWith("//") && !l.trimStart().startsWith("*"));
+      expect(lines.filter(l => l.includes("·")).join("\n")).toBe("");
     }
   });
 });

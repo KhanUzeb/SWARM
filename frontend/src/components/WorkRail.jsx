@@ -136,7 +136,7 @@ function WorkCard({ session, events, agents, approvals, selected, onSelect, onCa
         </span>
         <span className="work-objective">{session.objective || "Working…"}</span>
         <span className="work-meta-line">
-          {workElapsed(session)}{uniqueTools(tools).length > 0 && ` · ${uniqueTools(tools).length} tool${uniqueTools(tools).length === 1 ? "" : "s"}`}
+          {workElapsed(session)}{uniqueTools(tools).length > 0 && `, ${uniqueTools(tools).length} tool${uniqueTools(tools).length === 1 ? "" : "s"}`}
         </span>
         {agentName && (
           <span className="work-agent">
@@ -245,7 +245,7 @@ function eventDetail(e) {
   if (e.type === "tool_started" || e.type === "tool_finished") {
     return [p.tool || e.step_id, p.result ? `→ ${String(p.result).slice(0, 160)}` : ""].filter(Boolean).join(" ");
   }
-  if (e.type === "agent_started") return p.role ? `${p.agent || ""} · ${p.role}` : (p.agent || "");
+  if (e.type === "agent_started") return p.role ? `${p.agent || ""}, ${p.role}` : (p.agent || "");
   if (e.type === "approval_requested") return p.label || "";
   if (e.type === "approval_resolved") return p.decision || "";
   if (e.type === "work_failed") return (p.error || "").slice(0, 200);
@@ -334,10 +334,16 @@ export function WorkDetail({ session, events, token, agents, approvals, busy, on
 }
 
 export function WorkRailSheet({ open, onClose, children }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    function onKey(e) { if (e.key === "Escape") onClose?.(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
   if (!open) return null;
   return (
     <div className="work-sheet-backdrop" onClick={onClose}>
-      <div className="work-sheet" role="dialog" aria-label="Work details" onClick={e => e.stopPropagation()}>
+      <div className="work-sheet" role="dialog" aria-modal="true" aria-label="Work details" onClick={e => e.stopPropagation()}>
         <button className="panel-close" onClick={onClose} aria-label="Close work details"><X size={14} /></button>
         {children}
       </div>

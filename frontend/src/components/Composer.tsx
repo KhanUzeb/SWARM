@@ -259,7 +259,9 @@ export function Composer({
     if (!text || sending) return;
     setSending(true);
     try {
-      const ok = await onSend(text, { model: model || null });
+      // Defect: a throwing `onSend` escaped as an unhandled rejection from the
+      // click/keydown handler and left the draft with no reason for surviving.
+      const ok = await Promise.resolve(onSend(text, { model: model || null })).catch(() => false);
       if (ok === false) return;
       // Do not erase text typed while an earlier send was in flight.
       setDraft((current) => current.trim() === text ? "" : current);
@@ -312,7 +314,7 @@ export function Composer({
         {threadParent && <span className="chip">Replying in thread</span>}
 
         {workingWith.length > 0 && (
-          <span className="chip chip-amber">
+          <span className="chip chip-go">
             {workingWith.slice(0, 3).join(", ")}
             {workingWith.length > 3 && ` +${workingWith.length - 3}`} working
           </span>
@@ -323,7 +325,8 @@ export function Composer({
             <button
               type="button"
               onClick={onRefreshContext}
-              title={`Context ${contextStats?.total_chars || 0} of ${contextStats?.budget_chars || 0} characters · ${contextStats?.messages || 0} messages`}
+              // Defect: a middle-dot meta string in the tooltip (AGENTS.md 8a).
+              title={`Context ${contextStats?.total_chars || 0} of ${contextStats?.budget_chars || 0} characters, ${contextStats?.messages || 0} messages`}
               className={`chip ${ctxPct >= 80 ? "chip-hold" : ""}`}
             >
               <span className="progress-track" style={{ width: 44 }}>
@@ -355,7 +358,10 @@ export function Composer({
       </div>
 
       {offline && (
-        <div id="composer-offline-note" role="status" className="send-failure-banner" style={{ borderColor: "rgba(240,180,41,0.45)", background: "var(--lamp-hold-wash)" }}>
+        // Defect: the held-message banner carried a hard-coded amber hex, a
+        // third signal hue outside :root. `.send-failure-banner` already
+        // declares the hold wash these words actually mean.
+        <div id="composer-offline-note" role="status" className="send-failure-banner">
           <AlertCircle size={14} className="shrink-0" />
           <span className="send-failure-text">
             No link to the workspace. This message is held and sent when the link comes back.

@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
-type Tone = "plain" | "unlit" | "go" | "hold" | "amber" | "reverse";
+// Two signal hues, and nothing else: `go` is live or cleared, `hold` needs you.
+// Everything else is neutral — `plain`, `unlit` and `reverse` carry no hue at
+// all, so a transient or unknown state is neutral rather than a third colour.
+// Amber used to be that third colour; "running" reads live now, and the flap
+// face plus the lamp tell a live run from a cleared one.
+type Tone = "plain" | "unlit" | "go" | "hold" | "reverse";
 
 const TONE_CLASS: Record<Tone, string> = {
   plain: "",
   unlit: "flap-unlit",
   go: "flap-go",
   hold: "flap-hold",
-  amber: "flap-amber",
   reverse: "flap-reverse",
 };
 
@@ -118,7 +122,7 @@ export function Lamp({
   tone = "off",
   title,
 }: {
-  tone?: "go" | "hold" | "amber" | "off";
+  tone?: "go" | "hold" | "off";
   title?: string;
 }) {
   const color =
@@ -126,9 +130,7 @@ export function Lamp({
       ? "var(--go-lit)"
       : tone === "hold"
         ? "var(--hold-lit)"
-        : tone === "amber"
-          ? "var(--lamp-hold)"
-          : "var(--ink-3)";
+        : "var(--ink-3)";
   return (
     <span
       aria-hidden="true"

@@ -7,11 +7,16 @@ import { Shield } from "lucide-react";
 interface LoginScreenProps {
   onLogin: (handle: string, pass: string) => Promise<void> | void;
   onSetup: (handle: string, pass: string) => Promise<void> | void;
-  status?: string;
+  /** Whether the backend answered the public status probe. This screen never
+   *  has a chat socket — the lamp used to read that and so sat on "Relay not
+   *  ready" over a perfectly healthy server, for ever. */
+  relayReady?: boolean;
+  /** From GET /api/status: has this workspace been set up yet? */
+  onboarded?: boolean | null;
   demoMode?: boolean;
 }
 
-export function LoginScreen({ onLogin, onSetup, status, demoMode }: LoginScreenProps) {
+export function LoginScreen({ onLogin, onSetup, relayReady, onboarded, demoMode }: LoginScreenProps) {
   const [handle, setHandle] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [mode, setMode] = React.useState<"login" | "setup">("login");
@@ -39,18 +44,38 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }: LoginScreenP
     }
   }
 
-  const ready = status === "connected";
+  // The demo desk was the one button here that could not report a failure: it
+  // called onLogin straight from onClick, so a refused or offline server threw
+  // into nothing and the screen sat there looking untouched.
+  async function openDemo() {
+    setBusy(true);
+    setError("");
+    try {
+      await onLogin("demo", "");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "The demo desk could not be opened.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // There is one endpoint behind both modes, so "Create the workspace" and "The
+  // first account you create administers it" were only ever true for the very
+  // first handle. Once the workspace exists a new handle joins as a member.
+  const firstAccount = onboarded === false;
 
   return (
     <div id="login">
       <div className="login-card">
         <div className="login-head">
           <span className="login-mark">Swarm</span>
-          <h1>{mode === "login" ? "Sign in to the desk" : "Create the workspace"}</h1>
+          <h1>{mode === "login" ? "Sign in to the desk" : firstAccount ? "Create the workspace" : "Add an account"}</h1>
           <p>
             {mode === "login"
               ? "Your teammates and their audit trail are waiting on the other side of this."
-              : "The first account you create administers the workspace."}
+              : firstAccount
+                ? "The first account you create administers the workspace."
+                : "This workspace already has accounts. A new handle joins as a member."}
           </p>
         </div>
 
@@ -72,7 +97,10 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }: LoginScreenP
           <div className="login-row">
             <label className="field-label" htmlFor="login-pass">
               Password
-              {mode === "setup" && <span style={{ color: "var(--lamp-hold)" }}> · required</span>}
+              {/* The backend only asks for a minimum length, and only on the
+                  first account — "required" was true for neither of the two
+                  paths it was shown on. */}
+              {mode === "setup" && <span className="reg reg-hold"> optional, 4 characters or more</span>}
             </label>
             <Input
               id="login-pass"
@@ -110,13 +138,13 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }: LoginScreenP
         <div className="login-foot" style={{ borderTop: "1px solid var(--rule)", paddingTop: 12 }}>
           <span>Self-hosted</span>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <Lamp tone={ready ? "go" : "off"} />
-            {ready ? "Relay ready" : "Relay not ready"}
+            <Lamp tone={relayReady ? "go" : "off"} />
+            {relayReady ? "Relay ready" : "Relay not ready"}
           </span>
         </div>
 
         {demoMode && (
-          <Button variant="secondary" onClick={() => onLogin("demo", "")} style={{ width: "100%" }}>
+          <Button variant="secondary" onClick={openDemo} disabled={busy} loading={busy} style={{ width: "100%" }}>
             Open the demo desk
           </Button>
         )}
@@ -124,7 +152,7 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }: LoginScreenP
         <p className="panel-note" style={{ textAlign: "center" }}>
           {mode === "login" ? (
             <>
-              No workspace yet?{" "}
+              No handle yet?{" "}
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -133,7 +161,7 @@ export function LoginScreen({ onLogin, onSetup, status, demoMode }: LoginScreenP
                   setError("");
                 }}
               >
-                Create one
+                {firstAccount ? "Create the workspace" : "Add an account"}
               </button>
             </>
           ) : (

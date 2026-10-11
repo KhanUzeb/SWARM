@@ -1855,12 +1855,14 @@ async def api_computer_system_root(
 
     # A place id is resolved here so the binding and the list stay in the
     # backend; a raw path still goes straight through for older clients.
-    target = (payload.path or "").strip()
-    if payload.place_id and not target:
+    # place_id wins when both arrive: the model documents that order.
+    if payload.place_id:
         resolved = await system_mod.resolve_place(payload.place_id)
         if resolved is None:
             raise HTTPException(404, "no such place")
         target = str(resolved)
+    else:
+        target = (payload.path or "").strip()
     if not target:
         raise HTTPException(400, "invalid path")
     result = await system_mod.set_root(target)

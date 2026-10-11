@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiJson, EmptyState } from "../ui.jsx";
 import { WorkStatusBadge, ProgressBar, FailureState } from "./Status.jsx";
 import { ArtifactCard } from "./ArtifactCard.jsx";
@@ -17,22 +17,39 @@ export function WorkHome({ token, onOpenRun, flash }) {
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("all");
 
-  async function load() {
+  const load = useCallback(async (isLive = () => true) => {
     if (!token) return;
     try {
       const res = await apiJson("/api/v2/runs", { token });
-      if (res.ok) setRuns(res.data);
+      // Defect: a null body was stored straight into `runs`, and the next
+      // render's `runs.filter` threw on it.
+      if (!isLive()) return;
+      if (res.ok) { setRuns(res.data || []); setError(""); }
       else setError(res.data?.detail || "Could not load work");
     } catch (e) {
-      setError(e.message || "Could not load work");
+      if (isLive()) setError(e.message || "Could not load work");
     }
-  }
+  }, [token]);
 
-  useEffect(() => { load(); }, [token]);
+  useEffect(() => {
+    let alive = true;
+    // Defect: the load was never cancelled, so leaving the view mid-flight set
+    // state on an unmounted WorkHome.
+    void load(() => alive);
+    return () => { alive = false; };
+  }, [load]);
 
   async function startWork(text, { mode }) {
     const body = { objective: mode === "ask" ? text : `[${mode}] ${text}`, policy: "supervised" };
-    const res = await apiJson("/api/v2/runs", { token, method: "POST", body });
+    let res;
+    try {
+      res = await apiJson("/api/v2/runs", { token, method: "POST", body });
+    } catch (e) {
+      // Defect: a transport failure rejected out of the submit handler and
+      // left the brief on screen with nothing said about why.
+      flash?.(e.message || "Could not start work", "error");
+      return false;
+    }
     if (res.ok) {
       flash?.("Work queued", "success");
       load();
@@ -64,7 +81,7 @@ export function WorkHome({ token, onOpenRun, flash }) {
         </div>
       </header>
 
-      {error && <p className="error-text" role="alert">{error}. <button className="btn btn-ghost btn-sm" onClick={() => window.location.reload()}>Retry</button></p>}
+      {error && <p className="error-text" role="alert">{error}. <button className="btn btn-ghost btn-sm" onClick={load}>Retry</button></p>}
 
       {needsYou.length > 0 && filter === "all" && (
         <div className="needs-you" aria-label="Needs you">
@@ -84,10 +101,14 @@ export function WorkHome({ token, onOpenRun, flash }) {
 }
 
 function elapsed(run) {
-  const start = run.started_at || run.created_at;
-  const end = run.finished_at || Date.now() / 1000;
+  // Defect: created_at/finished_at arrive as epoch seconds from v2.create_run
+  // but as ISO strings from the work tables, and the raw subtraction printed
+  // "NaNm NaNs" for the string case. Normalise both before doing arithmetic.
+  const toMs = (t) => (t == null ? 0 : (typeof t === "number" ? t * 1000 : Date.parse(t)) || 0);
+  const start = toMs(run.started_at || run.created_at);
   if (!start) return "";
-  const s = Math.max(0, Math.floor(end - start));
+  const end = toMs(run.finished_at) || Date.now();
+  const s = Math.max(0, Math.floor((end - start) / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}m ${String(s % 60).padStart(2, "0")}s`;
 }
 
@@ -95,9 +116,13 @@ export function WorkCard({ run, hero, onOpen, token }) {
   const [progress, setProgress] = useState(null);
   useEffect(() => {
     if (!token || !run?.id) return;
+    let alive = true;
     apiJson(`/api/v2/runs/${run.id}/progress`, { token })
-      .then((res) => { if (res.ok) setProgress(res.data); })
+      // Defect: the progress poll resolved into an unmounted card and set
+      // state there; the card list unmounts wholesale on every refresh.
+      .then((res) => { if (alive && res.ok) setProgress(res.data); })
       .catch(() => {});
+    return () => { alive = false; };
   }, [token, run?.id]);
   const stepsDone = progress?.evidence_count || 0;
   return (
@@ -107,7 +132,11 @@ export function WorkCard({ run, hero, onOpen, token }) {
         <h4 className="truncate">{run.objective}</h4>
         <WorkStatusBadge status={run.status} />
       </div>
-      <p className="muted small">{elapsed(run)} {progress?.current_step ? `· now: ${progress.current_step}` : ""}</p>
+      <p className="muted small">
+        {elapsed(run)}
+        {/* Defect: middle-dot meta string (AGENTS.md 8a). */}
+        {progress?.current_step ? `, now on ${progress.current_step}` : ""}
+      </p>
       <ProgressBar done={stepsDone} total={Math.max(stepsDone, (progress?.plan || []).length, 1)} />
       <div className="work-card-actions">
         <button className="btn btn-secondary btn-sm" onClick={onOpen}>Open</button>
@@ -129,6 +158,9 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
   const [approvalMsg, setApprovalMsg] = useState("");
 
   useEffect(() => { setCurrent(run); }, [run?.id]);
+
+  const statusRef = useRef(null);
+  statusRef.current = current?.status;
 
   useEffect(() => {
     if (!token || !run?.id) return;
@@ -152,11 +184,14 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
       } catch { /* polling continues */ }
     }
     refresh();
+    // Defect: the timer read `current.status` from the render that created it
+    // and listed it as a dependency, so every status change tore the interval
+    // down and fired an extra immediate poll. Read it through a ref instead.
     const timer = setInterval(() => {
-      if (["queued", "running", "waiting_for_approval"].includes(current?.status)) refresh();
+      if (["queued", "running", "waiting_for_approval"].includes(statusRef.current)) refresh();
     }, 2500);
     return () => { alive = false; clearInterval(timer); };
-  }, [token, run?.id, current?.status]);
+  }, [token, run?.id]);
 
   const agents = useMemo(() => {
     const names = new Set();
@@ -168,7 +203,12 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
   }, [events]);
 
   const failure = progress?.failures?.[0];
-  const pendingGate = [...events].reverse().find((e) => e.event_type === "approval_requested");
+  // Defect: this took the newest `approval_requested` whether or not it had
+  // already been answered, so a run that had cleared an earlier gate had its
+  // Approve/Deny POST aimed at that settled step_id. v2 keys the resume on
+  // `approval_resolved` per step_id (backend/v2.py), so a settled gate can
+  // never advance and the run stalls on the gate it is actually held at.
+  const pendingGate = newestUnresolvedGate(events);
 
   async function resolve(decision) {
     if (onApprove && decision === "approved") return onApprove(run);
@@ -228,8 +268,14 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
         token,
         body: { passed, checks: ["result-review"], summary: passed ? "Human verified the result." : "Human flagged an issue.", confidence: passed ? 0.9 : 0.2 },
       });
-      if (res.ok) setVerifyMsg(`Verification recorded: ${res.data.event} (confidence ${res.data.result.confidence})`);
-      else setVerifyMsg(res.data?.detail || "Verification failed");
+      if (res.ok) {
+        // Defect: `res.data.result.confidence` was read unguarded, so any
+        // success body without the contract threw and lost the confirmation.
+        const confidence = Number(res.data?.result?.confidence);
+        setVerifyMsg(Number.isFinite(confidence)
+          ? `Verification recorded as ${res.data?.event || "verification"} at ${Math.round(confidence * 100)}% confidence`
+          : "Verification recorded");
+      } else setVerifyMsg(res.data?.detail || "Verification failed");
     } catch (e) {
       setVerifyMsg(e.message || "Verification failed");
     } finally {
@@ -253,17 +299,17 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
 
       {tab === "Overview" && (
         <div className="work-overview">
-          <PlanList plan={progress?.plan || []} current={progress?.current_step} />
+          <PlanList plan={progress?.plan || []} current={progress?.current_step} status={current?.status} />
           {current?.report?.summary && (
             <div className="report-card">
               <h4>Result</h4>
               <p>{current.report.summary}</p>
-              <p className="muted small">{current.report.steps?.length || 0} steps · {(current.report.artifacts || []).length} artifacts</p>
+              <p className="muted small">{current.report.steps?.length || 0} steps, {(current.report.artifacts || []).length} artifacts</p>
             </div>
           )}
           {current?.status === "waiting_for_approval" && (
             <div className="approval-card rich">
-              <h4>Needs your approval{pendingGate?.step_id ? ` · ${pendingGate.step_id}` : ""}</h4>
+              <h4>Needs your approval{pendingGate?.step_id ? ` — gate ${pendingGate.step_id}` : ""}</h4>
               <p className="muted">Review scope, impact and reversibility before deciding.</p>
               <div className="row">
                 <button className="btn btn-primary btn-sm" disabled={approvalBusy} onClick={() => resolve("approved")}>Approve</button>
@@ -294,7 +340,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
           {events.map((e) => (
             <li key={e.seq ?? e.id} className="activity-row">
               <span className="activity-type">{e.event_type}</span>
-              <span className="muted small">{e.step_id || ""} · {e.payload?.agent || ""}</span>
+              <span className="muted small">{[e.step_id, e.payload?.agent].filter(Boolean).join(", ") || "run"}</span>
             </li>
           ))}
           {events.length === 0 && <EmptyState title="No activity yet" message="Events will stream here as agents work." />}
@@ -319,7 +365,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
 
       {tab === "Context" && (
         <div className="context-summary">
-          <p className="muted">Evidence: {progress?.evidence_count || 0} · Decisions: {(progress?.decisions || []).length}</p>
+          <p className="muted">Evidence {progress?.evidence_count || 0}, decisions {(progress?.decisions || []).length}</p>
           <ul>
             {(progress?.decisions || []).map((d, i) => <li key={i} className="small">{d.type}: {JSON.stringify(d.payload).slice(0, 160)}</li>)}
           </ul>
@@ -329,12 +375,33 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
   );
 }
 
-function PlanList({ plan, current }) {
+/**
+ * The gate the run is actually held at: the newest `approval_requested` whose
+ * step_id has no matching `approval_resolved` yet.
+ */
+function newestUnresolvedGate(events) {
+  const settled = new Set();
+  for (const e of events || []) {
+    if (e.event_type === "approval_resolved" && e.step_id) settled.add(e.step_id);
+  }
+  for (let i = (events || []).length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.event_type !== "approval_requested") continue;
+    if (!e.step_id || !settled.has(e.step_id)) return e;
+  }
+  return undefined;
+}
+
+function PlanList({ plan, current, status }) {
   if (!plan.length) return <p className="muted">Plan appears here once the run starts.</p>;
+  // Defect: with no current_step every step but the last was painted done, so
+  // a queued run showed a plan already executed. Only a finished run may say
+  // the whole plan is behind us.
+  const allDone = !current && status === "completed";
   return (
     <ol className="plan-list">
       {plan.map((step, i) => {
-        const done = current ? plan.indexOf(current) > i : i < plan.length - 1;
+        const done = current ? plan.indexOf(current) > i : allDone;
         return <li key={i} className={done ? "done" : step === current ? "current" : "todo"}>{done ? "✓ " : step === current ? "● " : "○ "}{step}</li>;
       })}
     </ol>

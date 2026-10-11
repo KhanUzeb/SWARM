@@ -18,14 +18,34 @@ export const STATUS_META = {
   needs_approval: { label: "Needs you", tone: "warning" },
 };
 
+/** Unified status language (plan §2.1 rule 5 + §10). One dot/badge system.
+ *
+ *  Tones resolve to the three the station board actually has: `go` (live or
+ *  cleared), `hold` (needs you) and `idle` (nothing to report). StatusDot used
+ *  to emit `.status-dot.status-running`, `.status-warning` and friends, none of
+ *  which styles.css defines — and `.status-dot` itself sets no background — so
+ *  every work status dot rendered completely invisible. */
+const TONE_CLASS = {
+  idle: "idle",
+  running: "go",
+  warning: "hold",
+  info: "idle",
+  success: "go",
+  danger: "hold",
+};
+
+function toneClass(tone) {
+  return TONE_CLASS[tone] || "idle";
+}
+
 export function StatusDot({ status, size = 8 }) {
-  const tone = STATUS_META[status]?.tone || "idle";
+  const meta = STATUS_META[status] || STATUS_META.idle;
   return (
     <span
-      className={`status-dot status-${tone}`}
+      className={`status-dot ${toneClass(meta.tone)}`}
       style={{ width: size, height: size }}
       role="img"
-      aria-label={STATUS_META[status]?.label || status}
+      aria-label={meta.label}
     />
   );
 }
@@ -33,7 +53,7 @@ export function StatusDot({ status, size = 8 }) {
 export function WorkStatusBadge({ status }) {
   const meta = STATUS_META[status] || STATUS_META.idle;
   return (
-    <span className={`status-chip status-${meta.tone}`} role="status">
+    <span className={`status-chip ${toneClass(meta.tone)}`} role="status">
       <StatusDot status={status} />
       {meta.label}
     </span>

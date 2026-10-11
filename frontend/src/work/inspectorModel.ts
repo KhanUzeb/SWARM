@@ -61,7 +61,7 @@ export type WorkSession = {
   finished_at?: number | string | null;
 };
 
-export type LampTone = "go" | "hold" | "amber" | "off";
+export type LampTone = "go" | "hold" | "off";
 
 export type InspectorStep = {
   key: string;
@@ -100,7 +100,8 @@ function toneForEvent(e: WorkEvent): LampTone {
     case "work_started":
     case "agent_started":
     case "tool_started":
-      return "amber";
+      // In flight is live, so green. Amber was the third hue 8a forbids.
+      return "go";
     case "tool_finished":
     case "message_linked":
     case "artifact_created":
@@ -304,12 +305,12 @@ export function usageTotals(events: WorkEvent[] | null | undefined): { prompt: n
 }
 
 /** The run's own flap face: live, done, failed, or held for a human. */
-export function runFlap(status?: string): { value: string; tone: "go" | "hold" | "amber" | "unlit" } {
+export function runFlap(status?: string): { value: string; tone: "go" | "hold" | "unlit" } {
   switch (status) {
     case "waiting_for_approval":
       return { value: "Hold", tone: "hold" };
     case "running":
-      return { value: "Run", tone: "amber" };
+      return { value: "Run", tone: "go" };
     case "queued":
       return { value: "Queue", tone: "unlit" };
     case "completed":

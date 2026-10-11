@@ -103,14 +103,16 @@ function useLatest<T>(value: T) {
   return ref;
 }
 
-function workFlap(status?: string): { value: string; tone: "go" | "amber" | "hold" | "unlit" } {
+function workFlap(status?: string): { value: string; tone: "go" | "hold" | "unlit" } {
   switch (status) {
     case "waiting_for_approval":
     case "needs_approval":
       return { value: "Hold", tone: "hold" };
     case "running":
     case "active":
-      return { value: "Run", tone: "amber" };
+      // A run in flight is live, so it takes the go hue. Amber was the third
+      // signal hue Section 8a does not allow.
+      return { value: "Run", tone: "go" };
     case "completed":
     case "done":
       return { value: "Done", tone: "go" };

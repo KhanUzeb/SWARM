@@ -45,11 +45,13 @@ export function CommandPalette({ open, onClose, commands = [], onCommand }: Comm
   }, [filtered]);
 
   React.useEffect(() => {
-    if (open) {
-      setQuery("");
-      setIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 15);
-    }
+    if (!open) return undefined;
+    setQuery("");
+    setIndex(0);
+    // Defect: the focus timer was never cleared, so closing or unmounting the
+    // palette inside those 15ms pulled focus into a detached input.
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 15);
+    return () => window.clearTimeout(timer);
   }, [open]);
 
   React.useEffect(() => {

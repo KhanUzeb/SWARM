@@ -147,7 +147,7 @@ function pickCommand(raw: string, approval: Approval): string | null {
   return approvalShape(approval) === "command" && action ? action : null;
 }
 
-export function approvalFlap(status?: string): { value: string; tone: "go" | "hold" | "amber" | "unlit" } {
+export function approvalFlap(status?: string): { value: string; tone: "go" | "hold" | "unlit" } {
   if (status === "pending") return { value: "Hold", tone: "hold" };
   if (status === "approved") return { value: "Ok", tone: "go" };
   if (status === "denied") return { value: "No", tone: "hold" };

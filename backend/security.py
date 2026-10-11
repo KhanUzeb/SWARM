@@ -1,6 +1,7 @@
 """Browser-facing API guards: origin allowlist and optional session auth."""
 from __future__ import annotations
 
+import ipaddress
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -84,16 +85,42 @@ def parse_token(raw: object) -> tuple[str, str] | None:
     return handle, token
 
 
+def _peer_is_loopback(host: str) -> bool:
+    """Whole loopback range, not just the four spellings in a literal set."""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # "localhost" never resolves to itself in a peer address, but uvicorn
+        # behind a name-based proxy can report it; keep the string fallback.
+        return host == "localhost"
+
+
 def is_loopback(request: Request) -> bool:
     """True for a browser on this machine (uvicorn on 127.0.0.1 / localhost)."""
     host = (request.client.host if request.client else "") or ""
-    return host in {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
+    if not _peer_is_loopback(host):
+        return False
+    # Defect: a same-host reverse proxy makes every internet client look like
+    # 127.0.0.1, which handed the loopback-only register privilege (reclaim
+    # any handle, including a passwordless admin) to the whole internet. A
+    # forwarding header naming a non-loopback client revokes that trust; it can
+    # never grant it, because the peer still has to be loopback.
+    forwarded = request.headers.get("x-forwarded-for") or ""
+    for entry in forwarded.split(","):
+        candidate = entry.strip()
+        if candidate and not _peer_is_loopback(candidate):
+            return False
+    return True
 
 
 async def optional_auth(authorization: str | None = Header(default=None)) -> str | None:
-    if not authorization or not authorization.startswith("Bearer "):
+    # Defect: the scheme was matched case-sensitively, so a client sending the
+    # RFC 9110-legal "bearer <token>" was silently treated as anonymous.
+    value = (authorization or "").strip()
+    scheme, _, rest = value.partition(" ")
+    if scheme.lower() != "bearer":
         return None
-    parsed = parse_token(authorization.removeprefix("Bearer ").strip())
+    parsed = parse_token(rest.strip())
     if parsed is None:
         return None
     handle, token = parsed
@@ -105,7 +132,14 @@ async def optional_auth(authorization: str | None = Header(default=None)) -> str
 async def require_auth(authorization: str | None = Header(default=None)) -> str:
     handle = await optional_auth(authorization)
     if handle is None:
-        raise HTTPException(401, "missing or invalid bearer token")
+        # Defect: a 401 with no WWW-Authenticate challenge is not a 401 a
+        # client can act on (RFC 9110 15.5.2); the exception handler was
+        # dropping the header with every other one on the exception.
+        raise HTTPException(
+            401,
+            "missing or invalid bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return handle
 
 

@@ -126,10 +126,13 @@ const BADGE_CLASS = {
   subtle: "",
   brand: "badge-go",
   success: "badge-go",
-  warning: "badge-amber",
+  // Two signal hues only (8a). "Needs you" is the hold hue, and work that is
+  // in flight is live, so it takes the go hue — there is no third colour for
+  // "in progress" to sit in.
+  warning: "badge-hold",
   error: "badge-hold",
   danger: "badge-hold",
-  intelligence: "badge-amber",
+  intelligence: "badge-go",
 };
 
 export function badgeClass(variant) {
@@ -272,7 +275,17 @@ export async function apiJson(path, {
 }
 
 export function bustCache(...prefixes) {
+  // A bare bustCache() used to loop over nothing and quietly do nothing, which
+  // is why sign-in and sign-out could not drop what the last session cached.
+  if (!prefixes.length) { cacheInvalidate(); return; }
   for (const p of prefixes) cacheInvalidate(p);
+}
+
+/** True when the backend is saying this token is no longer good. Every loader
+ *  branches on this one predicate instead of inventing its own check, so a
+ *  rejected session can never be quietly answered with empty state. */
+export function isUnauthorized(res) {
+  return !!res && res.status === 401;
 }
 
 /** HTML-escape for interpolated text. Quotes and apostrophes are escaped too,
