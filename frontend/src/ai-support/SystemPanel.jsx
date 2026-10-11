@@ -90,7 +90,7 @@ export default function SystemPanel({ token, flash, onRootChange }) {
       setPreview(res.data.content);
       setPreviewName(name || filePath);
     } catch {
-      flash?.("Couldn't open that file", true);
+      flashRef.current?.("Couldn't open that file", true);
     }
   }
 

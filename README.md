@@ -182,8 +182,10 @@ come from each provider's API with catalog defaults as fallback.
   `private/<agent>` inside the team home. Keep work-in-progress here
   before sharing it.
 - **Host tools** — optional `system_run` / `system_read` / `system_write`
-  on this machine, bound to `SWARM_SYSTEM_ROOT`. Off by default; set
-  `SWARM_SYSTEM=1` to enable.
+  on this machine, bound to a **Place** — any directory on the machine: the
+  repo, Home, a project folder you saved, or one named in
+  `SWARM_SYSTEM_PLACES`. Off by default; set `SWARM_SYSTEM=1` to enable,
+  then point it in Computer → System.
 - **Provider select** — `SWARM_COMPUTER_PROVIDER=local` (default),
   `none` (boot without a computer host), or `fake` (tests only).
 

@@ -345,6 +345,7 @@ def check_exposure() -> list[dict[str, Any]]:
         ))
     else:
         rows.append(_check("host_tools", OK, "host-system tools are off (the default)"))
+    rows.extend(_system_place_checks(settings))
     if settings.system_unrestricted_ok():
         rows.append(_check(
             "system_root", WARN,
@@ -374,6 +375,34 @@ def check_exposure() -> list[dict[str, Any]]:
     else:
         rows.append(_check("browser_tools", OK, "playwright browser tools are off"))
     rows.append(_check("declared_bind", OK, f"declared bind: {bind}"))
+    return rows
+
+
+def _system_place_checks(settings: Any) -> list[dict[str, Any]]:
+    """SWARM_SYSTEM_PLACES spelling check.
+
+    A Place path that is not a directory is silently dropped by
+    `tools.system._env_places` — the panel just never shows it. Doctor is
+    where a typo ("C:/Uers/me") gets named instead of whispered.
+    """
+    rows: list[dict[str, Any]] = []
+    wanted = settings.system_places_list()
+    if not wanted:
+        return rows
+    bad = [p for p in wanted if not Path(p).expanduser().is_dir()]
+    if bad:
+        rows.append(_check(
+            "system_places", WARN,
+            f"SWARM_SYSTEM_PLACES names {len(bad)} path(s) that are not "
+            f"directories: {', '.join(bad)}",
+            "Fix the spelling; a Place the host tools cannot enter is dropped "
+            "from Computer → System.",
+        ))
+    else:
+        rows.append(_check(
+            "system_places", OK,
+            f"{len(wanted)} SWARM_SYSTEM_PLACES path(s) are directories",
+        ))
     return rows
 
 

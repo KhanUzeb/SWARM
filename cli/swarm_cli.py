@@ -16,6 +16,10 @@ Usage:
     swarm_cli.py patch-agent <name> [--prompt TEXT] [--model M] [--scope ID]
                  [--unscoped] [--window N] [--tools a,b,c] [--job JOB]
     swarm_cli.py doctor [--connectivity] [--json]
+    swarm_cli.py places list
+    swarm_cli.py places add <path> [--label L]
+    swarm_cli.py places remove <place-id>
+    swarm_cli.py places bind <path> | --id <place-id>
 
 `doctor` is the odd one out: it runs against the local checkout instead of a
 relay, because what it diagnoses is the install you are standing in. Every
@@ -189,6 +193,32 @@ def cmd_doctor(args) -> None:
     sys.exit(0 if report["ok"] else 1)
 
 
+def cmd_places(args) -> None:
+    """Places: the folders host tools are bound to (Computer → System).
+
+    `list`/`add`/`remove` map to the places endpoints; `bind` is the script
+    form of clicking a chip — it rebinds the system root to a raw path or to
+    a saved place id, which is how a script points bots at work anywhere on
+    the machine.
+    """
+    if args.places_cmd == "list":
+        result = _request("GET", "/api/computer/system/places", auth=True)
+    elif args.places_cmd == "add":
+        payload = {"path": args.path}
+        if args.label:
+            payload["label"] = args.label
+        result = _request("POST", "/api/computer/system/places", payload, auth=True)
+    elif args.places_cmd == "remove":
+        result = _request("DELETE", f"/api/computer/system/places/{args.id}", auth=True)
+    else:  # bind
+        if args.id and args.path:
+            print(json.dumps({"error": "give either a path or --id, not both"}), file=sys.stderr)
+            sys.exit(2)
+        payload = {"path": args.path} if args.path else {"place_id": args.id or ""}
+        result = _request("POST", "/api/computer/system/root", payload, auth=True)
+    print(json.dumps(result, indent=2))
+
+
 def _force_utf8_output() -> None:
     """Windows consoles default to cp1252 and raise on typographic characters.
 
@@ -266,6 +296,23 @@ def main() -> None:
     p_patch.add_argument("--tools", default=None)
     p_patch.add_argument("--job", default="")
     p_patch.set_defaults(func=cmd_patch_agent)
+
+    p_places = sub.add_parser(
+        "places", help="saved folders the host tools can bind to (Computer → System)"
+    )
+    places_sub = p_places.add_subparsers(dest="places_cmd", required=True)
+    places_sub.add_parser("list").set_defaults(func=cmd_places)
+    p_place_add = places_sub.add_parser("add")
+    p_place_add.add_argument("path")
+    p_place_add.add_argument("--label", default=None)
+    p_place_add.set_defaults(func=cmd_places)
+    p_place_rm = places_sub.add_parser("remove")
+    p_place_rm.add_argument("id")
+    p_place_rm.set_defaults(func=cmd_places)
+    p_place_bind = places_sub.add_parser("bind")
+    p_place_bind.add_argument("path", nargs="?", default="")
+    p_place_bind.add_argument("--id", default=None)
+    p_place_bind.set_defaults(func=cmd_places)
 
     p_doctor = sub.add_parser(
         "doctor",

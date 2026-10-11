@@ -130,6 +130,15 @@ Rules (Rakazo-shaped, enforced in review):
   Host-system tools are bound to `SWARM_SYSTEM_ROOT` and are **off by
   default** — enabling them requires an explicit `SWARM_SYSTEM=1`. Never
   claim otherwise in code, UI copy, or docs.
+- **Places.** The host-system root is not the repo — it is a Place picked in
+  Computer → System, and it can be any directory on the machine. Places
+  merge three sources: user-saved folders (persisted in `workspace_meta`),
+  folders named in `SWARM_SYSTEM_PLACES`, and the default guesses
+  (Project/Home/Desktop/Documents/Downloads). Add/remove is admin-only like
+  the root rebind; env and default entries are read-only (removing one is a
+  404 by design — only saved rows are stored). No `system_*` tool rebinds
+  the root, and the schemas say so; a bot that needs a different folder asks
+  a human admin instead of reporting the path unreachable.
 
 ## 6. Agent contract (essentials)
 
