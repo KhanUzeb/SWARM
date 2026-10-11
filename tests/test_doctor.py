@@ -10,12 +10,14 @@ internal shape of each check.
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 
 from backend import doctor as doctor_mod
 from backend import settings as settings_mod
 from backend.settings import reset_settings_cache
+from cli import swarm_cli as cli
 
 
 @pytest.fixture(autouse=True)
@@ -304,6 +306,36 @@ def test_main_exits_nonzero_on_a_bad_variable(monkeypatch, capsys):
     reset_settings_cache()
     assert doctor_mod.main([]) == 1
     assert "SWARM_DEMO" in capsys.readouterr().err
+
+
+def test_the_report_is_printable_on_a_non_utf8_console(monkeypatch, capsys):
+    """A Windows cp1252 console must not kill the doctor on a typographic fix line."""
+    monkeypatch.setenv("SWARM_SYSTEM", "1")  # produces the "→ fix" line
+    reset_settings_cache()
+    report = doctor_mod.run_doctor()
+    text = doctor_mod.format_report(report)
+    assert "→" in text  # the report really does carry a non-ASCII character
+
+    class Cp1252:
+        """Stands in for a cp1252 stdout: reconfigure exists, encoding is not UTF-8."""
+
+        def __init__(self) -> None:
+            self.written: list[str] = []
+            self.encoding = "cp1252"
+
+        def reconfigure(self, **kwargs: object) -> None:
+            self.encoding = "utf-8"
+
+        def write(self, value: str) -> int:
+            self.written.append(value)
+            return len(value)
+
+    stream = Cp1252()
+    monkeypatch.setattr(sys, "stdout", stream)
+    cli._force_utf8_output()
+    print(text)  # would raise UnicodeEncodeError if we had not reconfigured
+    assert stream.encoding == "utf-8"
+    assert stream.written
 
 
 def test_main_exits_zero_on_a_usable_install(monkeypatch, capsys):

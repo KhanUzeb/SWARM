@@ -189,7 +189,24 @@ def cmd_doctor(args) -> None:
     sys.exit(0 if report["ok"] else 1)
 
 
+def _force_utf8_output() -> None:
+    """Windows consoles default to cp1252 and raise on typographic characters.
+
+    `swarm doctor` reports fixes with an arrow, which is not encodable there.
+    Ask for UTF-8 and fall back to replacement so no command ever dies on a
+    print, whatever the host code page is.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main() -> None:
+    _force_utf8_output()
     parser = argparse.ArgumentParser(prog="swarm-cli", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
