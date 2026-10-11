@@ -202,7 +202,7 @@ Every Swarm claim in this document maps to code in this repository:
 | Agent replies persist as `author_kind='agent'` with the model | `backend/main.py::_run_agent` → `db.add_message(channel_id, name, result["reply"], "agent", model=...)` |
 | Streaming is WS-only until the turn ends; cutoff markers | `backend/agent.py::_complete_stream` (`CUTOFF_MARKER`, `CUTOFF_NOTE`), `backend/main.py::_run_agent` cancellation branch |
 | Handoff depth 3 / delegation depth 2 | `HANDOFF_DEPTH` in `backend/main.py`, `DELEGATE_DEPTH_CAP` in `backend/agent.py` |
-| 16-provider catalog + generic `custom` endpoint | `backend/ai_support/providers.py`, `backend/ai_support/resolver.py` |
+| 31-provider catalog + generic `custom` endpoint | `backend/ai_support/providers.py`, `backend/ai_support/resolver.py` |
 | Sealed credentials, key hints only | `backend/ai_support/store.py::_seal`, `backend/db.py::upsert_ai_provider` |
 | Approval row + in-channel approve/deny message | `backend/agent.py::_run_approval_tool`, `backend/main.py::api_resolve_approval` |
 | Durable runs, approval nodes, artifacts, recovery | `backend/v2.py` (`execute_run`, `recoverable_runs`, `start_run`) |

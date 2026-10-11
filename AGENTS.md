@@ -24,7 +24,7 @@
 | Layer | Choice |
 | ----- | ------ |
 | Backend | FastAPI + Uvicorn, SQLite via `aiosqlite`, native WebSocket hub |
-| LLM | Groq (primary) + 14 more via `backend/ai_support/` + Custom OpenAI-compatible (Ollama/LM Studio/vLLM) |
+| LLM | Groq (primary) + 31 more via `backend/ai_support/` + Custom OpenAI-compatible (Ollama/LM Studio/vLLM/llama.cpp) |
 | Frontend | React 19 + Vite 8, built with `bun`; FastAPI serves `frontend/dist` |
 | Tracing | Langfuse (no-op when unconfigured) |
 | Deploy | Docker Compose, SQLite on a named volume, `GET /health` probe, `swarm doctor` |

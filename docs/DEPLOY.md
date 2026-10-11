@@ -136,6 +136,7 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 | `SWARM_SANDBOX_DIR` | no | set by the Dockerfile, don't override unless you know why |
 | `SWARM_SYSTEM` | no | defaults to `0`; set `1` to enable host-system tools (see below) |
 | `SWARM_SYSTEM_ROOT` | no | host path Bots may read/write (Dockerfile sets `/app`) |
+| `SWARM_SYSTEM_PLACES` | no | extra paths offered as Places in Computer → System; any folder on the machine, read-only entries |
 | `SWARM_DB_PATH` | no | set by the Dockerfile to `/app/data/swarm.db` |
 | `OPENAI_API_KEY` | no | OpenAI direct |
 | `ANTHROPIC_API_KEY` | no | Anthropic direct |

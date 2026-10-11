@@ -246,6 +246,48 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model_aliases": {},
     },
+    # More OpenAI-compatible cloud endpoints. Same auth/api_key contract as the
+    # entries above: the resolver reads the stored key, then env_fallback.
+    "sambanova": {
+        "id": "sambanova", "name": "SambaNova Cloud", "kind": "openai_compatible", "auth": "api_key", "priority": 22,
+        "key_url": "https://cloud.sambanova.ai/apis",
+        "models": ["gpt-oss-120b", "Meta-Llama-3.3-70B-Instruct", "DeepSeek-V3.1"],
+        "default_model": "Meta-Llama-3.3-70B-Instruct", "env_fallback": "SAMBANOVA_API_KEY", "base_url": "https://api.sambanova.ai/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "gpt-oss-120b", "openai/gpt-oss-20b": "Meta-Llama-3.3-70B-Instruct"},
+    },
+    "cerebras": {
+        "id": "cerebras", "name": "Cerebras", "kind": "openai_compatible", "auth": "api_key", "priority": 23,
+        "key_url": "https://cloud.cerebras.ai/", "models": ["gpt-oss-120b", "qwen-3.8-27b"],
+        "default_model": "gpt-oss-120b", "env_fallback": "CEREBRAS_API_KEY", "base_url": "https://api.cerebras.ai/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "gpt-oss-120b", "openai/gpt-oss-20b": "qwen-3.8-27b"},
+    },
+    "nebius": {
+        "id": "nebius", "name": "Nebius Token Factory", "kind": "openai_compatible", "auth": "api_key", "priority": 24,
+        "key_url": "https://tokenfactory.nebius.com/project/api-keys",
+        "models": ["meta-llama/Llama-3.3-70B-Instruct", "Qwen/Qwen3-30B-A3B-Instruct-2507", "deepseek-ai/DeepSeek-V4-Flash"],
+        "default_model": "meta-llama/Llama-3.3-70B-Instruct", "env_fallback": "NEBIUS_API_KEY", "base_url": "https://api.tokenfactory.nebius.com/v1",
+        "model_aliases": {},
+        "note": "Serverless endpoints have no fixed region; deploy a dedicated endpoint if you need one.",
+    },
+    "novita": {
+        "id": "novita", "name": "Novita AI", "kind": "openai_compatible", "auth": "api_key", "priority": 25,
+        "key_url": "https://novita.ai/settings/key-management",
+        "models": ["zai-org/glm-5.3-flash", "deepseek/deepseek-v4.1-flash", "zai-org/glm-5.2"],
+        "default_model": "zai-org/glm-5.3-flash", "env_fallback": "NOVITA_API_KEY", "base_url": "https://api.novita.ai/openai",
+        "model_aliases": {},
+    },
+    "friendli": {
+        "id": "friendli", "name": "FriendliAI", "kind": "openai_compatible", "auth": "api_key", "priority": 26,
+        "key_url": "https://friendli.ai/suite/~/setting/keys",
+        "models": ["zai-org/GLM-5.3", "zai-org/GLM-5.3-Flash", "google/gemma-4-31B-it"],
+        "default_model": "zai-org/GLM-5.3-Flash", "env_fallback": "FRIENDLI_TOKEN", "base_url": "https://inference.friendli.ai/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "zai-org/GLM-5.3", "openai/gpt-oss-20b": "zai-org/GLM-5.3-Flash"},
+    },
+    "ai21": {
+        "id": "ai21", "name": "AI21 Labs (Jamba)", "kind": "openai_compatible", "auth": "api_key", "priority": 27,
+        "key_url": "https://studio.ai21.com/", "models": ["jamba-large", "jamba-mini"],
+        "default_model": "jamba-mini", "env_fallback": "AI21_API_KEY", "base_url": "https://api.ai21.com/studio/v1", "model_aliases": {},
+    },
     "ollama": {
         "id": "ollama",
         "name": "Ollama (local)",
@@ -259,6 +301,32 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "http://127.0.0.1:11434/v1",
         "model_aliases": {},
         "note": "Local server; start Ollama first. Reuses the OpenAI-compatible path.",
+    },
+    # Local, keyless OpenAI-compatible servers. key_url is empty on purpose: the
+    # only setup is starting the server, and any value works as the key.
+    "lmstudio": {
+        "id": "lmstudio", "name": "LM Studio (local)", "kind": "openai_compatible", "auth": "api_key", "priority": 81,
+        "key_url": "",
+        "models": ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "ibm/granite-4-micro"],
+        "default_model": "openai/gpt-oss-20b", "env_fallback": "LMSTUDIO_API_KEY", "base_url": "http://127.0.0.1:1234/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "openai/gpt-oss-120b", "openai/gpt-oss-20b": "openai/gpt-oss-20b"},
+        "note": "Local app; load a model in LM Studio, then start the server. Any value works as key.",
+    },
+    "llamacpp": {
+        "id": "llamacpp", "name": "llama.cpp server (local)", "kind": "openai_compatible", "auth": "api_key", "priority": 82,
+        "key_url": "",
+        "models": ["gpt-oss-120b", "gpt-oss-20b", "ggml-org/GLM-4.7-Flash-GGUF"],
+        "default_model": "gpt-oss-20b", "env_fallback": "LLAMA_API_KEY", "base_url": "http://127.0.0.1:9931/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "gpt-oss-120b", "openai/gpt-oss-20b": "gpt-oss-20b"},
+        "note": "Run llama-server; it listens on port 9931 (8080 in the common Docker mapping). Any value works as key unless --api-key is set.",
+    },
+    "vllm": {
+        "id": "vllm", "name": "vLLM (local)", "kind": "openai_compatible", "auth": "api_key", "priority": 83,
+        "key_url": "",
+        "models": ["Qwen/Qwen2.5-1.5B-Instruct", "zai-org/GLM-5.3-Flash"],
+        "default_model": "Qwen/Qwen2.5-1.5B-Instruct", "env_fallback": "VLLM_API_KEY", "base_url": "http://127.0.0.1:8000/v1",
+        "model_aliases": {},
+        "note": "Run `vllm serve <model>`; the served model's id is whatever you passed. Any value works as key unless --api-key is set.",
     },
     "custom": {
         "id": "custom",
