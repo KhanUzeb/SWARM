@@ -142,6 +142,42 @@ def test_root_with_unknown_place_id_is_404(system_client):
     assert res.status_code == 404
 
 
+def test_root_member_rejection_names_the_admin_gate(system_client, tmp_path):
+    """A member must see *why* Go failed: role, not the folder.
+
+    The panel used to toast one generic line for 403/400/429 alike, which
+    read as "no folder on this machine can be opened".
+    """
+    _register(system_client, "uzeb")
+    member = _register(system_client, "maya")
+    folder = tmp_path / "elsewhere"
+    folder.mkdir()
+    res = system_client.post(
+        "/api/computer/system/root",
+        headers=_auth(member["token"]),
+        json={"path": str(folder)},
+    )
+    assert res.status_code == 403
+    assert "admin" in res.json()["detail"].lower()
+
+
+def test_root_quoted_path_binds(system_client, tmp_path):
+    """Pasted Windows paths arrive wrapped in quotes (copy-as-path).
+
+    Unwrap one layer instead of reporting a real folder as "not a directory".
+    """
+    admin = _register(system_client, "uzeb")
+    folder = tmp_path / "quoted"
+    folder.mkdir()
+    res = system_client.post(
+        "/api/computer/system/root",
+        headers=_auth(admin["token"]),
+        json={"path": f'"{folder}"'},
+    )
+    assert res.status_code == 200
+    assert res.json()["root"] == str(folder)
+
+
 def test_remove_place_and_remove_again(system_client, tmp_path):
     admin = _register(system_client, "uzeb")
     folder = tmp_path / "temp"

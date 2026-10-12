@@ -58,10 +58,13 @@ export default function SystemPanel({ token, flash, onRootChange }) {
         method: "POST",
         body: { path: nextRoot },
       });
-      const data = res.ok ? await res.json() : null;
+      // Read the error body too: 403 (admin only), 400 (not a directory),
+      // and 429 (slow down) each name the problem, and a single generic
+      // toast sent operators looking for a menu that does not exist.
+      const data = await res.json().catch(() => null);
       if (seq !== reqSeq.current) return;
       if (!res.ok || !data) {
-        flashRef.current?.("Couldn't open that folder", true);
+        flashRef.current?.(data?.detail || "Couldn't open that folder", true);
         setBusy(false);
         return;
       }

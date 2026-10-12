@@ -150,6 +150,10 @@ async def set_sandbox_root(path: str) -> dict[str, str]:
     """
     global SANDBOX_DIR
     raw = (path or "").strip()
+    # Same pasted-quote unwrap as system.set_root: copy-as-path output is
+    # wrapped in double quotes on Windows.
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        raw = raw[1:-1].strip()
     if not raw or "\x00" in raw:
         return {"ok": False, "error": "invalid path"}  # type: ignore[return-value]
     try:

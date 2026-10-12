@@ -580,6 +580,11 @@ async def set_root(path: str) -> dict[str, Any]:
     """
     global _active_root
     raw = (path or "").strip()
+    # Pasted Windows paths often arrive wrapped in quotes (copy-as-path,
+    # terminal quoting). A quoted string is never a directory, so unwrap
+    # one layer before validating instead of reporting "not a directory".
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        raw = raw[1:-1].strip()
     if not raw or "\x00" in raw:
         return {"ok": False, "error": "invalid path"}
     resolved = _validate_root(Path(raw))

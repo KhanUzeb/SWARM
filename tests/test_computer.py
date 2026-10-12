@@ -247,3 +247,63 @@ def test_connectors_catalog_exa_and_cli_key(client, auth, monkeypatch):
         headers=auth,
     )
     assert bad.status_code == 400
+
+
+def test_sandbox_root_rebind_and_report(client, auth, tmp_path):
+    """Places → Sandbox: an admin can point the sandbox at any folder.
+
+    The binding persists (GET /api/computer reports it) and the global is
+    restored afterwards so later tests keep the default sandbox.
+    """
+    import backend.agent as agent_mod
+
+    target = tmp_path / "work"
+    target.mkdir()
+    previous = agent_mod.SANDBOX_DIR
+    try:
+        _clear_rate()
+        res = client.post(
+            "/api/computer/sandbox/root",
+            json={"path": str(target)},
+            headers=auth,
+        )
+        assert res.status_code == 200
+        assert Path(res.json()["root"]) == target.resolve()
+
+        data = client.get("/api/computer", headers=auth).json()
+        assert Path(data["sandbox"]["root"]) == target.resolve()
+        assert Path(data["workspace"]) == target.resolve()
+    finally:
+        agent_mod.SANDBOX_DIR = previous
+
+
+def test_sandbox_root_member_rejection_names_the_admin_gate(client, auth):
+    # Second handle on the same client is a member; the first (auth) is admin.
+    second = client.post("/api/register", json={"handle": "zoe"}).json()["token"]
+    _clear_rate()
+    res = client.post(
+        "/api/computer/sandbox/root",
+        json={"path": str(Path.cwd())},
+        headers={"Authorization": f"Bearer {second}"},
+    )
+    assert res.status_code == 403
+    assert "admin" in res.json()["detail"].lower()
+
+
+def test_sandbox_root_quoted_path_binds(client, auth, tmp_path):
+    import backend.agent as agent_mod
+
+    target = tmp_path / "quoted"
+    target.mkdir()
+    previous = agent_mod.SANDBOX_DIR
+    try:
+        _clear_rate()
+        res = client.post(
+            "/api/computer/sandbox/root",
+            json={"path": f'"{target}"'},
+            headers=auth,
+        )
+        assert res.status_code == 200
+        assert Path(res.json()["root"]) == target.resolve()
+    finally:
+        agent_mod.SANDBOX_DIR = previous
