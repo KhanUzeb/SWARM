@@ -1767,7 +1767,7 @@ select.input { cursor: pointer; }
 }
 .panel-tab:hover { color: var(--ink-on-housing); }
 .panel-tab.active { color: var(--ink-on-housing); background: var(--housing-raised); }
-.panel-body-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.panel-body-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .panel-section { padding: var(--s3) var(--s3) var(--s4); }
 .panel-section-head { margin-bottom: var(--s2); }
 .panel-list { display: flex; flex-direction: column; gap: var(--s2); }
@@ -1879,6 +1879,9 @@ select.input { cursor: pointer; }
 .agent-card-handle, .agent-msg-name { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.07em; color: var(--go-lit); }
 .agent-card-job, .agent-msg-job, .agent-card-model { font-size: var(--t-sm); color: var(--ink-3); }
 .provider-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+/* The Connect → AI search row reuses the provider-actions flex grammar so no
+   second control system appears: both controls grow like place-add inputs. */
+.provider-actions[role="search"] .input { flex: 1 1 160px; min-width: 0; }
 .provider-advanced { margin-top: var(--s2); padding-top: var(--s3); border-top: 1px solid var(--rule); }
 .provider-list { display: flex; flex-direction: column; gap: var(--s2); }
 

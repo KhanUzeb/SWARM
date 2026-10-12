@@ -133,10 +133,11 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 | `OPENROUTER_API_KEY` | no | fallback if Groq is down or unset |
 | `OPENROUTER_MODEL` | no | OpenRouter model slug; mapped from the agent model if unset |
 | `SWARM_AGENT_MODEL` | no | overrides every agent; use `openai/gpt-oss-120b` or `openai/gpt-oss-20b` |
-| `SWARM_SANDBOX_DIR` | no | set by the Dockerfile, don't override unless you know why |
+| `SWARM_SANDBOX_DIR` | no | default `/tmp/swarm-sandbox` (POSIX) / `%TEMP%\swarm-sandbox` (Windows); rebind at runtime from Places → Sandbox (`POST /api/computer/sandbox/root`, admin) |
 | `SWARM_SYSTEM` | no | defaults to `0`; set `1` to enable host-system tools (see below) |
 | `SWARM_SYSTEM_ROOT` | no | host path Bots may read/write (Dockerfile sets `/app`) |
-| `SWARM_SYSTEM_PLACES` | no | extra paths offered as Places in Computer → System; any folder on the machine, read-only entries |
+| `SWARM_SYSTEM_PLACES` | no | extra paths offered as Places in Places → System; any folder on the machine, read-only entries |
+| `SWARM_SYSTEM_UNRESTRICTED` | no | set `1` to allow filesystem root as System or Sandbox root (entire PC) |
 | `SWARM_DB_PATH` | no | set by the Dockerfile to `/app/data/swarm.db` |
 | `OPENAI_API_KEY` | no | OpenAI direct |
 | `ANTHROPIC_API_KEY` | no | Anthropic direct |
@@ -149,6 +150,15 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 | `NVIDIA_API_KEY` | no | NVIDIA NIM |
 | `OPENCODE_API_KEY` | no | OpenCode |
 | `ZEN_API_KEY` | no | Zen |
+| `GITHUB_TOKEN` | no | GitHub Models |
+| `AZURE_OPENAI_API_KEY` | no | Azure OpenAI (use Custom with your deployment URL) |
+| `LLAMA_API_KEY` | no | Meta Llama API (llama.cpp server shares this name in code — prefer Custom or a distinct key for one of them) |
+| `CLOUDFLARE_API_KEY` | no | Cloudflare Workers AI |
+| `VERCEL_AI_GATEWAY_API_KEY` | no | Vercel AI Gateway |
+| `OLLAMA_CLOUD_API_KEY` | no | Ollama Cloud |
+| `MINIMAX_API_KEY` / `QIANFAN_API_KEY` / `TENCENT_HUNYUAN_API_KEY` / `ARK_API_KEY` / `YI_API_KEY` / `STEPFUN_API_KEY` | no | China / regional (MiniMax, Baidu Qianfan, Tencent Hunyuan, Doubao Ark, 01.AI Yi, StepFun) |
+| `UPSTAGE_API_KEY` / `WATSONX_API_KEY` | no | Upstage Solar / IBM watsonx.ai |
+| `SWARM_GC_MAX_AGE_HOURS` / `SWARM_GC_MAX_MB` | no | sandbox GC bounds (72h / 512MB); refuses filesystem roots, home, repo checkouts |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | no | tracing degrades silently if unset |
 
 An unusable value in `SWARM_SYSTEM`, `SWARM_DEMO`, `SWARM_SYSTEM_UNRESTRICTED`

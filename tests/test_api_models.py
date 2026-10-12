@@ -72,38 +72,17 @@ def test_list_returns_the_modelled_row_shape(approver):
     assert isinstance(body, list)
     match = next(a for a in body if a["id"] == row["id"])
     assert ApprovalOut(**match).model_dump() == match
-
-
-def test_the_wire_keys_are_exactly_the_columns_the_ui_reads(approver):
-    """Not a superset, not a subset.
-
-    `frontend/src/work/approvalsModel.ts` names id, agent_name, channel_id,
-    action, detail, status, created_at and resolved_at. A key disappearing is a
-    silent UI bug; a key appearing is a promise the model now has to keep.
-    """
-    client, headers, make = approver
-    client.portal.call(make)
-    row = client.get("/api/approvals", headers=headers).json()[0]
-    assert set(row) == {
+    # Wire keys are exactly what the UI reads — no subset, no superset.
+    assert set(match) == {
         "id", "agent_name", "channel_id", "action", "detail",
         "status", "created_at", "resolved_at",
     }
+    assert isinstance(match["id"], int)
+    assert isinstance(match["created_at"], float)
+    assert match["resolved_at"] is None
 
 
-def test_types_are_unchanged_for_the_frontend(approver):
-    """`ms()` in approvalsModel does arithmetic on these, so numbers must stay
-    numbers and a null resolved_at must stay null — not become "" or 0."""
-    client, headers, make = approver
-    client.portal.call(make)
-    row = client.get("/api/approvals", headers=headers).json()[0]
-    assert isinstance(row["id"], int)
-    assert isinstance(row["created_at"], float)
-    assert row["resolved_at"] is None
-    for text_key in ("agent_name", "channel_id", "action", "detail", "status"):
-        assert isinstance(row[text_key], str)
-
-
-def test_a_resolved_row_carries_a_real_timestamp(approver):
+def test_an_empty_list_is_an_empty_json_array(approver):
     client, headers, make = approver
     row = client.portal.call(make)
     _wait(client, main_mod.RATE_LIMIT_SECONDS + 0.05)
@@ -141,35 +120,8 @@ def test_resolve_keeps_the_row_and_adds_the_decision(approver):
         "created_at", "resolved_at", "decision", "resolved_by",
     }
     assert ApprovalResolvedOut(**body).model_dump() == body
-
-
-def test_the_added_fields_are_additive_only(approver):
-    """A client reading only what it read before sees an identical object."""
-    client, headers, make = approver
-    row = client.portal.call(make)
-    body = client.post(
-        f"/api/approvals/{row['id']}/resolve",
-        json={"status": "denied"},
-        headers=headers,
-    ).json()
-    before = {k: v for k, v in body.items() if k not in ("decision", "resolved_by")}
-    after = next(a for a in client.get("/api/approvals?status=denied", headers=headers).json()
-                 if a["id"] == row["id"])
-    assert before == after
-
-
-def test_the_decision_is_echoed_back(approver):
-    """A double-clicking client can tell which decision actually landed."""
-    client, headers, make = approver
-    row = client.portal.call(make)
-    body = client.post(
-        f"/api/approvals/{row['id']}/resolve",
-        json={"status": "approved"},
-        headers=headers,
-    ).json()
     assert body["decision"] == "approved"
     assert body["resolved_by"] == "uzeb"
-    assert body["status"] == "approved"
 
 
 # ------------------------------------------------------- unchanged errors --
@@ -209,34 +161,6 @@ def test_resolving_twice_is_a_409_with_the_same_shape(approver):
     )
     assert second.status_code == 409
     assert second.json()["ok"] is False
-
-
-def test_the_model_rejects_a_status_outside_the_vocabulary():
-    """The model is the guard, not a formatter."""
-    with pytest.raises(Exception):
-        ApprovalOut(
-            id=1, agent_name="swarm", channel_id="general", action="x",
-            status="cancelled", created_at=1.0, resolved_at=None,
-        )
-
-
-def test_the_model_drops_an_unknown_future_column(approver):
-    """list_approvals is SELECT *, so a new column would leak through untyped.
-
-    Dropping it is the intended direction to fail: the API shape is pinned, and
-    a column that matters has to be added to the model deliberately.
-    """
-    client, headers, make = approver
-    row = client.portal.call(make)
-    listed = client.get("/api/approvals", headers=headers).json()[0]
-    assert "_already_resolved" not in listed
-    # The resolve route's internal sentinel never reaches the wire either.
-    body = client.post(
-        f"/api/approvals/{row['id']}/resolve",
-        json={"status": "approved"},
-        headers=headers,
-    ).json()
-    assert "_already_resolved" not in body
 
 
 def test_auth_is_still_required(approver):

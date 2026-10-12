@@ -102,15 +102,37 @@ def computer_screenshot() -> str:
     if shot:
         return shot
     cwd = sandbox_dir()
+    # Bounded walk like agent.list_workspace_files: the sandbox can point at
+    # any folder now, so sorted(rglob("*")) would stall on a drive root.
     files = []
-    for path in sorted(cwd.rglob("*")):
-        if path.is_file():
-            rel = path.relative_to(cwd).as_posix()
+    visited = 0
+    for dirpath, dirnames, filenames in os.walk(cwd):
+        dirnames[:] = [d for d in dirnames if d != ".git" and not d.startswith(".")]
+        dirnames.sort()
+        for name in sorted(filenames):
+            visited += 1
+            if visited > 2000:
+                break
+            if name.startswith("."):
+                continue
+            p = Path(dirpath) / name
+            try:
+                rel = p.relative_to(cwd).as_posix()
+            except ValueError:
+                continue
             if rel.startswith("."):
                 continue
-            files.append(f"{rel}  {path.stat().st_size}B")
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            if not p.is_file():
+                continue
+            files.append(f"{rel}  {size}B")
             if len(files) >= 40:
                 break
+        if len(files) >= 40 or visited > 2000:
+            break
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = (
         f"swarm computer snapshot @ {stamp}\n"

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Monitor, RefreshCw, X, FileText } from "lucide-react";
 import { apiJson, Button, EmptyState, ScrollArea, Tooltip } from "../ui.jsx";
-import { fmtBytes } from "../lib.js";
+import { api, fmtBytes } from "../lib.js";
 import SystemPanel from "../ai-support/SystemPanel.jsx";
 import BrowserPanel from "../ai-support/BrowserPanel.jsx";
 import ToolsPanel from "../ai-support/ToolsPanel.jsx";
@@ -77,7 +77,7 @@ export function ComputerPanel({ computer, token, meRole, onRefresh, flash, group
       </div>
 
       <ScrollArea className="panel-body-wrap">
-        {activeTab === "files" && <SandboxView computer={computer} token={token} flash={panelFlash} />}
+        {activeTab === "files" && <SandboxView computer={computer} token={token} flash={panelFlash} onRootChange={onRefresh} />}
         {activeTab === "system" && <SystemPanel token={token} flash={panelFlash} onRootChange={onRefresh} />}
         {activeTab === "browser" && <BrowserPanel token={token} flash={panelFlash} />}
         {activeTab === "ai" && <ProviderPanel token={token} flash={panelFlash} onStatusChange={onRefresh} />}
@@ -112,11 +112,14 @@ function PanelChrome({ title, subtitle, onRefresh }) {
   );
 }
 
-function SandboxView({ computer, token, flash }) {
+function SandboxView({ computer, token, flash, onRootChange }) {
   const [preview, setPreview] = useState("");
   const [previewPath, setPreviewPath] = useState("");
   const [busy, setBusy] = useState(false);
+  const [rootDraft, setRootDraft] = useState("");
+  const [rootBusy, setRootBusy] = useState(false);
   const files = computer?.files || [];
+  const root = computer?.sandbox?.root || computer?.workspace || "";
 
   // The offline state belongs inside the body, not above the tab strip: with
   // the sandbox down the strip still has to let you reach System and Browser.
@@ -142,9 +145,51 @@ function SandboxView({ computer, token, flash }) {
     setBusy(false);
   }
 
+  async function bindSandboxRoot(ev) {
+    ev?.preventDefault();
+    const next = (rootDraft || "").trim() || root;
+    if (!next || rootBusy) return;
+    setRootBusy(true);
+    try {
+      const res = await api("/api/computer/sandbox/root", {
+        token,
+        method: "POST",
+        body: { path: next },
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        flash?.(`Sandbox now in ${data?.root || next}`);
+        setRootDraft("");
+        setPreview("");
+        setPreviewPath("");
+        onRootChange?.();
+      } else {
+        const data = await res.json().catch(() => null);
+        flash?.(data?.detail || "Couldn't open that folder (admin only)", true);
+      }
+    } catch {
+      flash?.("Couldn't open that folder", true);
+    }
+    setRootBusy(false);
+  }
+
   return (
     <div className="panel-body sandbox-panel">
-      <p className="panel-note">{computer?.note || "Shared sandbox files for every bot."}</p>
+      <p className="panel-note">{computer?.sandbox?.note || computer?.note || "Shared sandbox files for every bot."}</p>
+      <form className="place-add" onSubmit={bindSandboxRoot}>
+        <input
+          className="input mono"
+          value={rootDraft}
+          onChange={(e) => setRootDraft(e.target.value)}
+          placeholder={root || "Type a folder to work in"}
+          aria-label="Sandbox folder"
+          spellCheck={false}
+        />
+        <button type="submit" className="btn btn-secondary btn-sm" disabled={rootBusy}>
+          {rootBusy ? "…" : "Open folder"}
+        </button>
+      </form>
+      {root && <p className="hint">Sandbox: <span className="mono">{root}</span>. Point it at any folder — a project, a drive, a worktree. Admin only.</p>}
       {files.length === 0 ? (
         <EmptyState kind="folder" title="Empty sandbox" message="Agents can write files here with write_workspace." />
       ) : (

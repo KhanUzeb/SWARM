@@ -288,6 +288,127 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "key_url": "https://studio.ai21.com/", "models": ["jamba-large", "jamba-mini"],
         "default_model": "jamba-mini", "env_fallback": "AI21_API_KEY", "base_url": "https://api.ai21.com/studio/v1", "model_aliases": {},
     },
+    # Second wave: gateway + regional + enterprise OpenAI-compatible endpoints.
+    # Same contract as above (stored key, then env_fallback). Entries that need
+    # a per-account URL carry the placeholder in base_url and say so in note —
+    # use Custom with SWARM_OPENAI_COMPAT_BASE_URL for the real deployment.
+    "github_models": {
+        "id": "github_models", "name": "GitHub Models", "kind": "openai_compatible", "auth": "api_key", "priority": 28,
+        "key_url": "https://github.com/settings/personal-access-tokens",
+        "models": ["openai/gpt-4o-mini", "meta-llama/Llama-3.3-70B-Instruct", "deepseek/DeepSeek-V3"],
+        "default_model": "openai/gpt-4o-mini", "env_fallback": "GITHUB_TOKEN", "base_url": "https://models.github.ai/inference",
+        "model_aliases": {"openai/gpt-oss-120b": "openai/gpt-4o", "openai/gpt-oss-20b": "openai/gpt-4o-mini"},
+        "category": "gateway",
+    },
+    "azure_openai": {
+        "id": "azure_openai", "name": "Azure OpenAI", "kind": "openai_compatible", "auth": "api_key", "priority": 29,
+        "key_url": "https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/OpenAI",
+        "models": ["gpt-4o-mini", "gpt-4o"], "default_model": "gpt-4o-mini",
+        "env_fallback": "AZURE_OPENAI_API_KEY", "base_url": "https://YOUR-RESOURCE.openai.azure.com/openai/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "gpt-4o", "openai/gpt-oss-20b": "gpt-4o-mini"},
+        "note": "Needs your deployment URL — point Custom at https://YOUR-RESOURCE.openai.azure.com/openai/v1 with your deployment id as model.",
+        "category": "enterprise",
+    },
+    "meta_llama": {
+        "id": "meta_llama", "name": "Meta Llama API", "kind": "openai_compatible", "auth": "api_key", "priority": 30,
+        "key_url": "https://llama.developer.meta.com/api-keys",
+        "models": ["Llama-4-Maverick-17B-128E-Instruct-FP8", "Llama-3.3-70B-Instruct"],
+        "default_model": "Llama-3.3-70B-Instruct", "env_fallback": "LLAMA_API_KEY", "base_url": "https://api.llama.com/compat/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "Llama-4-Maverick-17B-128E-Instruct-FP8", "openai/gpt-oss-20b": "Llama-3.3-70B-Instruct"},
+        "category": "frontier",
+    },
+    "cloudflare": {
+        "id": "cloudflare", "name": "Cloudflare Workers AI", "kind": "openai_compatible", "auth": "api_key", "priority": 31,
+        "key_url": "https://dash.cloudflare.com/?to=/:account/ai",
+        "models": ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/qwen/qwen2.5-72b-instruct"],
+        "default_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "env_fallback": "CLOUDFLARE_API_KEY",
+        "base_url": "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT/ai/v1",
+        "model_aliases": {},
+        "note": "Replace YOUR_ACCOUNT with your Cloudflare account id, or use Custom with the full gateway URL.",
+        "category": "gateway",
+    },
+    "vercel_gateway": {
+        "id": "vercel_gateway", "name": "Vercel AI Gateway", "kind": "openai_compatible", "auth": "api_key", "priority": 32,
+        "key_url": "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%2Fapi-keys&title=AI+Gateway+API+Keys",
+        "models": ["openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet"], "default_model": "openai/gpt-4o-mini",
+        "env_fallback": "VERCEL_AI_GATEWAY_API_KEY", "base_url": "https://ai-gateway.vercel.sh/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "openai/gpt-4o", "openai/gpt-oss-20b": "openai/gpt-4o-mini"},
+        "category": "gateway",
+    },
+    "ollama_cloud": {
+        "id": "ollama_cloud", "name": "Ollama Cloud", "kind": "openai_compatible", "auth": "api_key", "priority": 33,
+        "key_url": "https://ollama.com/settings/keys",
+        "models": ["gpt-oss:120b-cloud", "gpt-oss:20b-cloud", "qwen3:235b-cloud"],
+        "default_model": "gpt-oss:20b-cloud", "env_fallback": "OLLAMA_CLOUD_API_KEY", "base_url": "https://ollama.com/v1",
+        "model_aliases": {"openai/gpt-oss-120b": "gpt-oss:120b-cloud", "openai/gpt-oss-20b": "gpt-oss:20b-cloud"},
+        "category": "gateway",
+    },
+    "minimax": {
+        "id": "minimax", "name": "MiniMax", "kind": "openai_compatible", "auth": "api_key", "priority": 34,
+        "key_url": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+        "models": ["MiniMax-M2", "MiniMax-M1"], "default_model": "MiniMax-M2",
+        "env_fallback": "MINIMAX_API_KEY", "base_url": "https://api.minimax.io/v1",
+        "model_aliases": {},
+        "category": "china",
+    },
+    "baidu_qianfan": {
+        "id": "baidu_qianfan", "name": "Baidu Qianfan", "kind": "openai_compatible", "auth": "api_key", "priority": 35,
+        "key_url": "https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application",
+        "models": ["ernie-4.0-turbo-8k", "ernie-speed-8k"], "default_model": "ernie-4.0-turbo-8k",
+        "env_fallback": "QIANFAN_API_KEY", "base_url": "https://qianfan.baidubce.com/v2",
+        "model_aliases": {},
+        "category": "china",
+    },
+    "tencent_hunyuan": {
+        "id": "tencent_hunyuan", "name": "Tencent Hunyuan", "kind": "openai_compatible", "auth": "api_key", "priority": 36,
+        "key_url": "https://console.cloud.tencent.com/hunyuan/api-key",
+        "models": ["hunyuan-large", "hunyuan-turbo"], "default_model": "hunyuan-turbo",
+        "env_fallback": "TENCENT_HUNYUAN_API_KEY", "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
+        "model_aliases": {},
+        "category": "china",
+    },
+    "doubao": {
+        "id": "doubao", "name": "ByteDance Doubao (Ark)", "kind": "openai_compatible", "auth": "api_key", "priority": 37,
+        "key_url": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+        "models": ["doubao-seed-1-6-flash-250615", "doubao-seed-1-6-250615"], "default_model": "doubao-seed-1-6-flash-250615",
+        "env_fallback": "ARK_API_KEY", "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "model_aliases": {},
+        "category": "china",
+    },
+    "yi_01": {
+        "id": "yi_01", "name": "01.AI (Yi)", "kind": "openai_compatible", "auth": "api_key", "priority": 38,
+        "key_url": "https://platform.lingyiwanwu.com/apikeys",
+        "models": ["yi-lightning", "yi-large"], "default_model": "yi-lightning",
+        "env_fallback": "YI_API_KEY", "base_url": "https://api.lingyiwanwu.com/v1",
+        "model_aliases": {},
+        "category": "china",
+    },
+    "stepfun": {
+        "id": "stepfun", "name": "StepFun", "kind": "openai_compatible", "auth": "api_key", "priority": 39,
+        "key_url": "https://platform.stepfun.com/interface-keys",
+        "models": ["step-2-mini", "step-1-8k"], "default_model": "step-2-mini",
+        "env_fallback": "STEPFUN_API_KEY", "base_url": "https://api.stepfun.com/v1",
+        "model_aliases": {},
+        "category": "china",
+    },
+    "upstage": {
+        "id": "upstage", "name": "Upstage Solar", "kind": "openai_compatible", "auth": "api_key", "priority": 40,
+        "key_url": "https://console.upstage.ai/api-keys",
+        "models": ["solar-pro2", "solar-mini"], "default_model": "solar-mini",
+        "env_fallback": "UPSTAGE_API_KEY", "base_url": "https://api.upstage.ai/v1/solar",
+        "model_aliases": {"openai/gpt-oss-120b": "solar-pro2", "openai/gpt-oss-20b": "solar-mini"},
+        "category": "frontier",
+    },
+    "ibm_watsonx": {
+        "id": "ibm_watsonx", "name": "IBM watsonx.ai", "kind": "openai_compatible", "auth": "api_key", "priority": 41,
+        "key_url": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-api-key.html",
+        "models": ["ibm/granite-3-8b-instruct", "meta-llama/llama-3-3-70b-instruct"],
+        "default_model": "ibm/granite-3-8b-instruct", "env_fallback": "WATSONX_API_KEY",
+        "base_url": "https://us-south.ml.cloud.ibm.com/ml/v1/text/chat",
+        "model_aliases": {},
+        "note": "Uses the OpenAI-compatible chat proxy; pick the region that holds your project.",
+        "category": "enterprise",
+    },
     "ollama": {
         "id": "ollama",
         "name": "Ollama (local)",
@@ -349,13 +470,67 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 
 _PUBLIC_KEYS = frozenset({
     "id", "name", "kind", "auth", "priority", "key_url", "models",
-    "default_model", "oauth_label", "auth_methods", "note",
+    "default_model", "oauth_label", "auth_methods", "note", "category",
+    "base_url_hint",
 })
+
+
+# Product grouping for the Connect tab. Stored specs stay provider-neutral
+# (id/name/kind/auth/priority/key_url/models/default/env/base_url); the
+# category is derived here so the UI can filter without a second copy.
+# Frontend must branch on category, never on id.
+_CATEGORY_BY_ID = {
+    "groq": "featured",
+    "openrouter": "featured",
+    "openai": "featured",
+    "anthropic": "featured",
+    "google": "featured",
+    "huggingface": "open",
+    "together": "open",
+    "fireworks": "open",
+    "deepinfra": "open",
+    "nebius": "open",
+    "novita": "open",
+    "friendli": "open",
+    "sambanova": "fast",
+    "cerebras": "fast",
+    "mistral": "frontier",
+    "deepseek": "frontier",
+    "xai": "frontier",
+    "perplexity": "frontier",
+    "nvidia": "frontier",
+    "opencode": "gateway",
+    "zen": "gateway",
+    "cohere": "enterprise",
+    "moonshot": "china",
+    "zhipu": "china",
+    "siliconflow": "china",
+    "alibaba": "china",
+    "ai21": "enterprise",
+}
+
+
+def provider_category(spec: dict[str, Any]) -> str:
+    explicit = str(spec.get("category") or "").strip()
+    if explicit:
+        return explicit
+    pid = str(spec.get("id") or "")
+    if pid in _CATEGORY_BY_ID:
+        return _CATEGORY_BY_ID[pid]
+    prio = int(spec.get("priority", 99))
+    if prio >= 80:
+        return "local"
+    return "cloud"
 
 
 def list_providers() -> list[dict[str, Any]]:
     ordered = sorted(PROVIDERS.values(), key=lambda p: (p.get("priority", 99), p["id"]))
-    return [{k: v for k, v in p.items() if k in _PUBLIC_KEYS} for p in ordered]
+    out: list[dict[str, Any]] = []
+    for p in ordered:
+        row = {k: v for k, v in p.items() if k in _PUBLIC_KEYS}
+        row["category"] = provider_category(p)
+        out.append(row)
+    return out
 
 
 def get_provider(provider_id: str) -> dict[str, Any] | None:

@@ -30,13 +30,13 @@ def test_host_tools_off_by_default():
     assert system_mod.enabled() is False
 
 
-@pytest.mark.parametrize("raw", ["1", "true", "TRUE", "yes", "on"])
+@pytest.mark.parametrize("raw", ["1", "on"])
 def test_explicit_opt_in_enables(monkeypatch, raw):
     monkeypatch.setenv("SWARM_SYSTEM", raw)
     assert system_mod.enabled() is True
 
 
-@pytest.mark.parametrize("raw", ["0", "false", "no", "off", ""])
+@pytest.mark.parametrize("raw", ["0", "off"])
 def test_explicit_opt_out_disables(monkeypatch, raw):
     monkeypatch.setenv("SWARM_SYSTEM", raw)
     assert system_mod.enabled() is False

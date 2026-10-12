@@ -107,6 +107,75 @@ def _default_sandbox_dir() -> str:
 
 SANDBOX_DIR = _default_sandbox_dir()
 
+_SANDBOX_META_KEY = "sandbox_root"
+
+
+def get_sandbox_dir() -> str:
+    """Current shared sandbox root (runtime-rebindable, persisted)."""
+    return SANDBOX_DIR
+
+
+async def hydrate_sandbox_root() -> str:
+    """Apply a persisted sandbox root if one is stored; otherwise env/default.
+
+    Mirrors system.hydrate_root: the UI can rebind the sandbox to any folder
+    (Places → Sandbox), and the binding survives restarts. Invalid stored
+    values fall back to the env/default without raising.
+    """
+    global SANDBOX_DIR
+    try:
+        from . import db as _db
+
+        stored = await _db.get_workspace_meta(_SANDBOX_META_KEY)
+    except Exception:  # noqa: BLE001 - boot must never fail on a bad meta row
+        return SANDBOX_DIR
+    if stored:
+        try:
+            candidate = Path(str(stored).strip()).expanduser()
+            resolved = candidate.resolve()
+            if resolved.is_dir() and resolved.parent != resolved:
+                SANDBOX_DIR = str(resolved)
+                return SANDBOX_DIR
+        except OSError:
+            pass
+    return SANDBOX_DIR
+
+
+async def set_sandbox_root(path: str) -> dict[str, str]:
+    """Point the shared sandbox at another folder. Admin-only via the route.
+
+    Any directory works — a project folder, a drive, a worktree. Filesystem
+    root needs SWARM_SYSTEM_UNRESTRICTED=1, same rule as the System root, so
+    pointing at an entire PC is explicit. Persists to workspace_meta.
+    """
+    global SANDBOX_DIR
+    raw = (path or "").strip()
+    if not raw or "\x00" in raw:
+        return {"ok": False, "error": "invalid path"}  # type: ignore[return-value]
+    try:
+        resolved = Path(raw).expanduser().resolve()
+    except OSError:
+        return {"ok": False, "error": "invalid path"}  # type: ignore[return-value]
+    if not resolved.is_dir():
+        return {"ok": False, "error": "not a directory"}  # type: ignore[return-value]
+    try:
+        if resolved.parent == resolved:
+            from .settings import get_settings as _get_settings
+
+            unrestricted = _get_settings().system_unrestricted_ok()
+            if not unrestricted:
+                return {"ok": False, "error": "filesystem root needs SWARM_SYSTEM_UNRESTRICTED=1"}  # type: ignore[return-value]
+    except Exception:  # noqa: BLE001
+        pass
+    SANDBOX_DIR = str(resolved)
+    try:
+        from . import db as _db
+
+        await _db.set_workspace_meta(_SANDBOX_META_KEY, str(resolved))
+    except Exception:  # noqa: BLE001 - binding works for this boot even if persist fails
+        pass
+    return {"ok": True, "root": str(resolved)}  # type: ignore[return-value]
+
 # Fast Groq models (e.g. openai/gpt-oss-20b) call tools on "hi" unless
 # we withhold the tool schema. Tools are offered on every work-like turn;
 # only clear smalltalk in a shared room gets a text-only reply, so asking
@@ -316,19 +385,43 @@ def _run_shell_tool(command: str) -> str:
 
 
 def list_workspace_files(limit: int = 100) -> list[dict[str, Any]]:
+    # Bounded walk: the sandbox can now point at any folder (even a drive),
+    # so sorted(base.rglob("*")) would materialize millions of entries before
+    # the limit applied. Walk top-down, cap visited entries, stop early.
     os.makedirs(SANDBOX_DIR, exist_ok=True)
     base = Path(SANDBOX_DIR)
     files: list[dict[str, Any]] = []
-    for path in sorted(base.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(base).as_posix()
-        if rel.startswith("."):
-            continue
-        stat = path.stat()
-        files.append({"path": rel, "size": stat.st_size, "modified": stat.st_mtime})
-        if len(files) >= limit:
-            break
+    visited = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(base):
+            # Keep the walk cheap and out of metadata dirs.
+            dirnames[:] = [d for d in dirnames if d != ".git" and not d.startswith(".")]
+            # Deterministic order without materializing the whole tree.
+            dirnames.sort()
+            for name in sorted(filenames):
+                visited += 1
+                if visited > 5000:
+                    return files
+                if name.startswith("."):
+                    continue
+                p = Path(dirpath) / name
+                try:
+                    rel = p.relative_to(base).as_posix()
+                except ValueError:
+                    continue
+                if rel.startswith("."):
+                    continue
+                try:
+                    stat = p.stat()
+                except OSError:
+                    continue
+                if not p.is_file():
+                    continue
+                files.append({"path": rel, "size": stat.st_size, "modified": stat.st_mtime})
+                if len(files) >= limit:
+                    return files
+    except OSError:
+        return files
     return files
 
 
@@ -336,14 +429,31 @@ async def _run_list_workspace() -> str:
     os.makedirs(SANDBOX_DIR, exist_ok=True)
     base = Path(SANDBOX_DIR)
     files: list[str] = []
-    for path in sorted(base.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(base).as_posix()
-        if rel.startswith("."):
-            continue
-        files.append(f"{rel} ({path.stat().st_size} bytes)")
-        if len(files) >= 100:
+    visited = 0
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d != ".git" and not d.startswith(".")]
+        dirnames.sort()
+        for name in sorted(filenames):
+            visited += 1
+            if visited > 5000:
+                break
+            if name.startswith("."):
+                continue
+            p = Path(dirpath) / name
+            try:
+                rel = p.relative_to(base).as_posix()
+            except ValueError:
+                continue
+            if rel.startswith("."):
+                continue
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            files.append(f"{rel} ({size} bytes)")
+            if len(files) >= 100:
+                break
+        if len(files) >= 100 or visited > 5000:
             break
     return "\n".join(files) if files else "(workspace empty)"
 

@@ -380,3 +380,14 @@ class RunCreate(BaseModel):
 
 class ComputerRunRequest(BaseModel):
     command: str = Field(min_length=1, max_length=4000)
+
+
+class SandboxRootSet(BaseModel):
+    """Rebind the shared sandbox root. Same shape as SystemRootSet.
+
+    The sandbox is fluid like System Places now: any directory on the
+    machine, including a drive root with SWARM_SYSTEM_UNRESTRICTED=1.
+    The backend validates; the frontend only expresses intent.
+    """
+
+    path: str = Field(min_length=1, max_length=1024)

@@ -1448,7 +1448,8 @@ async def verify_token(handle: str, token: str) -> bool:
         row = await cur.fetchone()
         if row is None:
             return False
-        return row[0] == hash_token(token)
+        # Constant-time compare: == leaks prefix timing on the SHA-256 hex.
+        return hmac.compare_digest(str(row[0]), hash_token(token))
 
 
 def generate_token() -> str:

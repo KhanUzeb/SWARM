@@ -48,9 +48,13 @@ Human posts in #general, a bot 1:1, or a group chat
   group chats, `@team` pods, skills (`/standup`, `/digest`, …), routines,
   approvals, bot-to-bot handoffs, and `delegate_task` orchestration
   (one bot can ask a specialist bot to do a subtask and report back).
-- **Bring your own model** — 15 providers (Groq, OpenRouter, OpenAI,
-  Anthropic, Gemini, Mistral, DeepSeek, xAI, …) plus a generic
+- **Bring your own model** — 46 providers (Groq, OpenRouter, OpenAI,
+  Anthropic, Gemini, Mistral, DeepSeek, xAI, GitHub Models, Azure OpenAI,
+  Meta Llama API, Cloudflare, Vercel Gateway, MiniMax, Baidu Qianfan,
+  Tencent Hunyuan, Doubao, 01.AI, Upstage, IBM watsonx, …) plus a generic
   **Custom OpenAI-compatible** endpoint for Ollama / LM Studio / vLLM.
+  Filter by category (Featured, Frontier, Open weights, Fast, China,
+  Gateways, Enterprise, Local) in Connect → AI.
   Keys are sealed in SQLite and never returned by the API.
 - **Provider-neutral computer** — shared Team sandbox plus isolated
   per-bot Private homes (`SWARM_COMPUTER_PROVIDER=local|none|fake`),
@@ -141,7 +145,7 @@ uv pip install --python .venv/bin/python -r requirements.txt   # .venv\Scripts\p
 
 Open `http://localhost:8000`. Register a handle (first user is admin;
 optionally set an admin password — stored as a PBKDF2 hash, never plain
-text), connect a provider in **Command Center → AI providers**, pick your
+text), connect a provider in **Connect → AI**, pick your
 first bot, and open its 1:1.
 
 **Docker:**
@@ -166,7 +170,7 @@ No hosted vendor is required to run Swarm.
 
 | Path | How |
 | ---- | --- |
-| Cloud key | `.env` (`GROQ_API_KEY`, `OPENROUTER_API_KEY`, …) or **Command Center → AI providers** in the UI |
+| Cloud key | `.env` (`GROQ_API_KEY`, `OPENROUTER_API_KEY`, …) or **Connect → AI** in the UI |
 | Local server | **Custom (OpenAI-compatible)** provider + `SWARM_OPENAI_COMPAT_BASE_URL` (e.g. `http://127.0.0.1:11434/v1`), model id exactly as served (e.g. `qwen3:4b`) |
 | No key at all | `SWARM_DEMO=1` — deterministic mock replies + seeded `#general` thread |
 
@@ -177,7 +181,9 @@ come from each provider's API with catalog defaults as fallback.
 ## Team and private computers
 
 - **Team home** — the shared sandbox every bot sees (`SWARM_SANDBOX_DIR`,
-  default `/tmp/swarm-sandbox`). Publish finished work here.
+  default `/tmp/swarm-sandbox` on POSIX, `%TEMP%\swarm-sandbox` on Windows).
+  Fluid: rebind at runtime from Places → Sandbox (`POST /api/computer/sandbox/root`,
+  admin, persisted in `workspace_meta`). Publish finished work here.
 - **Private homes** — isolated per-bot drafts under
   `private/<agent>` inside the team home. Keep work-in-progress here
   before sharing it.
@@ -185,12 +191,15 @@ come from each provider's API with catalog defaults as fallback.
   on this machine, bound to a **Place** — any directory on the machine: the
   repo, Home, a project folder you saved, or one named in
   `SWARM_SYSTEM_PLACES`. Off by default; set `SWARM_SYSTEM=1` to enable,
-  then point it in Computer → System.
+  then point it in Places → System.
 - **Provider select** — `SWARM_COMPUTER_PROVIDER=local` (default),
   `none` (boot without a computer host), or `fake` (tests only).
 
 The sandbox is a working-directory + timeout boundary, not a container or
-network-isolation boundary. Do not treat it as one.
+network-isolation boundary. Do not treat it as one. GC trims it to
+`SWARM_GC_MAX_AGE_HOURS` (72h) / `SWARM_GC_MAX_MB` (512MB) but refuses
+filesystem roots, home folders, and repo checkouts, and skips
+`.git` / `.env*` / `*.db*` — pointing at an entire PC never deletes user data.
 
 ## Demo script (5 minutes)
 
@@ -235,8 +244,8 @@ Set `SWARM_URL` if not on `localhost:8000`.
 | Chat | `GET/POST /api/channels`, `GET/POST /api/channels/{id}/messages`, `ws:///ws/{channel_id}` |
 | Bots | `GET/POST/PATCH /api/agents`, `DELETE /api/agents/{name}` (soft-delete), `GET /api/agent-templates` |
 | Teams / DMs | `/api/teams`, `/api/dms`, group `kind=group` rooms |
-| Providers | `/api/v2/providers`, `/api/ai-support/connect/{id}`, live models at `/api/ai-support/providers/{id}/models` |
-| Computer | `/api/computer` (provider + team/private homes), `/api/computer/run`, `/api/computer/system*` |
+| Providers | `/api/v2/providers` (with `category`: featured/frontier/open/fast/china/gateway/enterprise/local/cloud), `/api/ai-support/connect/{id}`, live models at `/api/ai-support/providers/{id}/models` |
+| Computer | `/api/computer` (provider + team/private homes + sandbox root), `/api/computer/run`, `POST /api/computer/sandbox/root` (admin, fluid sandbox), `/api/computer/system*` (Places → System / Places → Sandbox) |
 | Workflows (v2) | `/api/v2/workflows`, `/api/v2/runs`, `/api/v2/runs/{id}/events`, `/api/v2/ws/runs/{id}` |
 | Work sessions | `/api/work`, `/api/work/{id}`, `/api/work/{id}/events` |
 | Governance | `/api/approvals`, `/api/routines`, `/api/skills`, `/api/knowledge` |

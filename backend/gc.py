@@ -45,13 +45,56 @@ def _sandbox_root() -> Path:
 
 def _iter_files(root: Path):
     for dirpath, _dirnames, filenames in os.walk(root):
+        # Never descend into version-control metadata, even when the sandbox
+        # was rebound to a worktree: deleting .git objects to fit 512MB would
+        # corrupt the repo the product runs from.
+        if ".git" in Path(dirpath).parts:
+            continue
         for name in filenames:
+            lowered = name.lower()
+            # Secrets and databases are never GC candidates. When the sandbox
+            # points at an entire PC these names are user data, not drafts.
+            if lowered.startswith(".env") or lowered in {"swarm.db", ".env"} or lowered.endswith(".db-wal") or lowered.endswith(".db-shm"):
+                continue
             p = Path(dirpath) / name
             try:
                 stat = p.stat()
             except OSError:
                 continue
             yield p, stat
+
+
+def _refuse_gc_reason(root: Path) -> str | None:
+    """Why GC must not sweep this root, or None when sweeping is safe.
+
+    The sandbox is fluid now (Places → Sandbox can point it at any folder,
+    even an entire drive). The sweeper deletes by age/size, which is only
+    sane inside a drafts directory. Filesystem roots, home folders, and
+    repo checkouts are refused so a 72h/512MB policy can never eat user data.
+    """
+    try:
+        resolved = root.resolve()
+    except OSError:
+        return "unresolvable root"
+    # Filesystem / drive root: C:\\, /, //.
+    try:
+        if resolved.parent == resolved:
+            return "filesystem root is never garbage-collected"
+    except Exception:  # noqa: BLE001
+        return "unresolvable root"
+    try:
+        home = Path.home().resolve()
+        if resolved == home:
+            return "home folder is never garbage-collected"
+    except OSError:
+        pass
+    # Repo checkout markers: never sweep the product itself.
+    try:
+        if (resolved / ".git").is_dir() and (resolved / "backend" / "main.py").is_file():
+            return "repo checkout is never garbage-collected"
+    except OSError:
+        pass
+    return None
 
 
 def sweep_stale(root: Path, max_age_hours: float) -> int:
@@ -97,6 +140,9 @@ def gc_sweep() -> dict[str, Any]:
     root = _sandbox_root()
     if not root.exists():
         return {"root": str(root), "skipped": "sandbox missing", "deleted": 0}
+    refused = _refuse_gc_reason(root)
+    if refused:
+        return {"root": str(root), "skipped": refused, "deleted": 0}
     age_h = _max_age_hours()
     cap_b = _max_bytes()
     try:

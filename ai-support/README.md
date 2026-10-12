@@ -1,6 +1,6 @@
 # ai-support
 
-User-facing AI provider settings live in the **Computer → AI** panel and **onboarding step 1**.
+User-facing AI provider settings live in the **Connect → AI** panel and **onboarding step 1**.
 
 Implementation lives in `backend/ai_support/`, modeled after [Hugging Face tau `src/tau_ai`](https://github.com/huggingface/tau/tree/main/src/tau_ai):
 
@@ -14,6 +14,6 @@ Implementation lives in `backend/ai_support/`, modeled after [Hugging Face tau `
 
 Connect a provider in the UI to store an encrypted API key in SQLite. Environment variables remain available as fallbacks.
 
-**Providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together AI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen, Cohere, Moonshot AI (Kimi), Zhipu GLM, SiliconFlow, DeepInfra, Alibaba Cloud (DashScope), SambaNova, Cerebras, Nebius, Novita AI, FriendliAI, AI21 Labs (Jamba), Ollama (local), LM Studio (local), llama.cpp server (local), vLLM (local), plus **Custom (OpenAI-compatible)** for any self-hosted endpoint via `SWARM_OPENAI_COMPAT_BASE_URL`. Every cloud entry takes a key in the UI or its `*_API_KEY` env var; local servers accept any value as the key.
+**Providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together AI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen, Cohere, Moonshot AI (Kimi), Zhipu GLM, SiliconFlow, DeepInfra, Alibaba Cloud (DashScope), SambaNova, Cerebras, Nebius, Novita AI, FriendliAI, AI21 Labs (Jamba), GitHub Models, Azure OpenAI, Meta Llama API, Cloudflare Workers AI, Vercel AI Gateway, Ollama Cloud, MiniMax, Baidu Qianfan, Tencent Hunyuan, ByteDance Doubao (Ark), 01.AI (Yi), StepFun, Upstage Solar, IBM watsonx.ai, Ollama (local), LM Studio (local), llama.cpp server (local), vLLM (local), plus **Custom (OpenAI-compatible)** for any self-hosted endpoint via `SWARM_OPENAI_COMPAT_BASE_URL`. Every cloud entry takes a key in the UI or its `*_API_KEY` env var; local servers accept any value as the key. Filter by category (Featured, Frontier, Open weights, Fast inference, China, Gateways, Enterprise, Local, Cloud, Connected) in Connect → AI — backend values are singular lowercase (`featured`/`frontier`/`open`/`fast`/`china`/`gateway`/`enterprise`/`local`/`cloud`).
 
-**Apps (not an LLM provider):** Composio lives in Computer → Apps (`/api/composio/*`, `COMPOSIO_API_KEY`). A Composio key does not make an LLM provider ready.
+**Apps (not an LLM provider):** Composio lives in Connect → Apps (`/api/composio/*`, `COMPOSIO_API_KEY`). A Composio key does not make an LLM provider ready.

@@ -53,8 +53,9 @@ IDE-native tools (Cursor skills) are a different surface.
 ## Scope
 
 **Shipped:** admin roles, onboarding, `@team` pods, human DMs, audit
-export, demo mode, sandbox + host-system computer, browser-use, Composio
-apps, durable v2 workflows with approvals, 15 providers + custom
+export, demo mode, fluid sandbox (Places → Sandbox, rebindable) + host-system
+Places (Places → System), browser-use, Composio
+apps, durable v2 workflows with approvals, 46 providers + custom
 OpenAI-compatible endpoints, OAuth + API-key auth.
 
 **Explicitly out:** Nostr signing, git hosting, multi-tenant SaaS, cloud

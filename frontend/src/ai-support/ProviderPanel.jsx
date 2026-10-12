@@ -7,6 +7,8 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
   const [providers, setProviders] = useState([]);
   const [busy, setBusy] = useState(null);
   const [drafts, setDrafts] = useState({});
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -49,7 +51,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
       if (res.ok) {
         flash?.(`Connected ${provider.name}`);
         setDrafts((d) => ({ ...d, [provider.id]: { key: "", model: d[provider.id]?.model } }));
-        bustCache("/api/status", "/api/ai-support");
+        bustCache("/api/status", "/api/ai-support", "/api/v2/providers");
         await load();
         onStatusChange?.();
       } else flash?.(`Couldn't connect ${provider.name}`, true);
@@ -96,7 +98,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
       if (res.ok) {
         flash?.(`Using ${model} on ${provider.name}`);
         commit(true);
-        bustCache("/api/status", "/api/ai-support");
+        bustCache("/api/status", "/api/ai-support", "/api/v2/providers");
         await load();
         onStatusChange?.();
       } else {
@@ -116,7 +118,7 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
       const res = await api(`/api/ai-support/connect/${providerId}`, { token, method: "DELETE", json: false });
       if (res.ok) {
         flash?.(`Disconnected ${name}`);
-        bustCache("/api/status", "/api/ai-support");
+        bustCache("/api/status", "/api/ai-support", "/api/v2/providers");
         await load();
         onStatusChange?.();
       } else flash?.("Couldn't disconnect", true);
@@ -132,18 +134,64 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
         Connect a provider, then pick a live model from their API. Keys stay encrypted in SQLite.
         Env vars still work as fallbacks.
       </p>
-      <ul className="provider-list">
+      <div className="provider-actions" role="search">
+        <input
+          className="input"
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search providers or models"
+          aria-label="Search providers"
+        />
+        <select
+          className="input"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          aria-label="Filter by category"
+        >
+          <option value="all">All providers</option>
+          <option value="connected">Connected</option>
+          <option value="featured">Featured</option>
+          <option value="frontier">Frontier</option>
+          <option value="open">Open weights</option>
+          <option value="fast">Fast inference</option>
+          <option value="china">China</option>
+          <option value="gateway">Gateways</option>
+          <option value="enterprise">Enterprise</option>
+          <option value="local">Local</option>
+          <option value="cloud">Cloud</option>
+        </select>
+      </div>
+      {(() => {
+        const q = query.trim().toLowerCase();
+        const filtered = providers.filter((p) => {
+          if (category === "connected" && !p.connected) return false;
+          if (category !== "all" && category !== "connected" && (p.category || "cloud") !== category) return false;
+          if (!q) return true;
+          const hay = `${p.name} ${p.id} ${(p.models || []).join(" ")} ${p.default_model || ""}`.toLowerCase();
+          return hay.includes(q);
+        });
+        const connected = providers.filter((p) => p.connected).length;
+        return (
+          <>
+            <p className="hint">
+              {filtered.length} of {providers.length} providers
+              {connected ? `, ${connected} connected` : ""}
+              {q ? ` matching "${query.trim()}"` : ""}.
+            </p>
+            <ul className="provider-list">
         {/* Defect: an empty list read as "still loading" even when the catalog
             request failed and setProviders([]) — say which one it is. */}
         {!providers.length && <li className="empty-state">{token ? "No providers available." : "Sign in to see providers."}</li>}
-        {providers.map((p) => {
+        {providers.length > 0 && !filtered.length && <li className="empty-state">No providers match this filter.</li>}
+        {filtered.map((p) => {
           if (p.id === "custom") return <CustomProviderCard key="custom" provider={p} token={token} draft={draftFor(p)} busy={busy} setBusy={setBusy} setDrafts={setDrafts} draftFor={draftFor} flash={flash} load={load} onStatusChange={onStatusChange} />;
           const draft = draftFor(p);
           return (
             <li key={p.id} className={`provider-card${p.connected ? " connected" : ""}`}>
               <div className="provider-head">
                 <span className="provider-name">{p.name}</span>
-                <span className="provider-meta">{p.kind || "OpenAI compatible"}</span>
+                <span className="provider-meta">{p.category || p.kind || "OpenAI compatible"}</span>
                 <span className="provider-meta">{(p.auth_methods || ["api_key"]).join(", ")}</span>
                 <span className={`provider-badge${p.connected ? " ready" : " missing"}`}>
                   {p.connected ? (p.via === "env" ? "Env" : "Connected") : "Not connected"}
@@ -235,6 +283,9 @@ export default function ProviderPanel({ token, onStatusChange, flash }) {
           );
         })}
       </ul>
+            </>
+          );
+        })()}
       <details className="provider-advanced">
         <summary>Advanced: self-hosted endpoints &amp; env fallbacks</summary>
         <p className="hint">
@@ -270,7 +321,7 @@ function CustomProviderCard({ provider: p, token, draft, busy, setBusy, setDraft
       if (res.ok) {
         flash?.(`Custom endpoint using ${model}`);
         setDrafts((d) => ({ ...d, [p.id]: { key: "", model: d[p.id]?.model } }));
-        bustCache("/api/status", "/api/ai-support");
+        bustCache("/api/status", "/api/ai-support", "/api/v2/providers");
         await load();
         onStatusChange?.();
       } else flash?.("Couldn't connect the custom endpoint", true);
@@ -333,7 +384,7 @@ function CustomProviderCard({ provider: p, token, draft, busy, setBusy, setDraft
               setBusy(p.id);
               try {
                 const res = await api(`/api/ai-support/connect/${p.id}`, { token, method: "DELETE", json: false });
-                if (res.ok) { flash?.("Disconnected custom endpoint"); bustCache("/api/status", "/api/ai-support"); await load(); onStatusChange?.(); }
+                if (res.ok) { flash?.("Disconnected custom endpoint"); bustCache("/api/status", "/api/ai-support", "/api/v2/providers"); await load(); onStatusChange?.(); }
                 else flash?.("Couldn't disconnect", true);
               } catch { flash?.("Couldn't disconnect", true); }
               setBusy(null);

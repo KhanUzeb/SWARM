@@ -42,7 +42,7 @@ from .models import (
     CustomToolPatch, DirectMessageCreate, MessageCreate, ReactionCreate,
     RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate, SkillPatch,
     SystemRootSet, SystemPlaceAdd, TeamCreate, TeamPatch, RunCreate, WorkflowCreate, WorkflowPatch,
-    ComputerRunRequest,
+    ComputerRunRequest, SandboxRootSet,
 )
 from .security import (
     allowed_origins, install_api_guard, is_loopback, optional_auth, origin_allowed,
@@ -128,14 +128,21 @@ def _prune_last_write(now: float) -> None:
     majority: an entry older than the TTL cannot throttle anyone. The size cap
     then handles the other shape — a burst of fresh handles inside one TTL —
     by dropping the oldest, which is exactly who has waited longest.
+    Overflow evicts in insertion order (O(k)): monotonic timestamps mean the
+    head of the dict is the best approximation of oldest without sorting
+    4096 entries on every write under a handle-mint flood.
     """
     expired = [h for h, seen in _last_write.items() if now - seen > _LAST_WRITE_TTL_SECONDS]
     for handle in expired:
         _last_write.pop(handle, None)
     overflow = len(_last_write) - _LAST_WRITE_MAX_ENTRIES
     if overflow > 0:
-        for handle, _ in sorted(_last_write.items(), key=lambda kv: kv[1])[:overflow]:
-            _last_write.pop(handle, None)
+        for _ in range(overflow):
+            try:
+                oldest = next(iter(_last_write))
+            except StopIteration:
+                break
+            _last_write.pop(oldest, None)
 
 
 def _rate_limited(handle: str) -> bool:
@@ -196,17 +203,34 @@ class Hub:
         # Defect: iterating the live set across an await let a disconnecting
         # socket's leave() mutate it mid-loop, which is a RuntimeError and a
         # silently truncated fanout; send over a snapshot.
-        for ws in list(self._rooms.get(channel_id, ())):
+        sockets = list(self._rooms.get(channel_id, ()))
+        if not sockets:
+            return
+
+        async def _send(ws: WebSocket) -> WebSocket | None:
             try:
-                await ws.send_json(payload)
+                # One slow client must not stall the room: bound each send.
+                await asyncio.wait_for(ws.send_json(payload), timeout=5.0)
+                return None
             except Exception:  # noqa: BLE001
+                return ws
+
+        # Concurrent fan-out: sequential await stalled the whole room behind
+        # the slowest socket, and per-token broadcasts amplified it.
+        results = await asyncio.gather(*(_send(ws) for ws in sockets))
+        for ws in results:
+            if ws is not None:
                 dead.append(ws)
         for ws in dead:
             self.leave(channel_id, ws)
 
     async def broadcast_all(self, payload: dict) -> None:
-        for channel_id in list(self._rooms):
-            await self.broadcast(channel_id, payload)
+        # Concurrent across rooms for the same reason as broadcast: a global
+        # agents_changed event must not walk rooms sequentially.
+        await asyncio.gather(*(
+            self.broadcast(channel_id, payload)
+            for channel_id in list(self._rooms)
+        ))
 
 
 hub = Hub()
@@ -230,6 +254,8 @@ async def lifespan(app: FastAPI):
     await v2.init_db()
     await work.init_db()
     await knowledge.init_db()
+    # Sandbox binding first: GC and the computer routes both read it.
+    await agent.hydrate_sandbox_root()
     from . import gc as gc_mod
     # Same rule as the periodic sweep: the startup pass is a blocking
     # filesystem walk, so it runs on the worker thread rather than holding
@@ -1222,9 +1248,13 @@ async def api_remove_reaction(
 ):
     if not await db.message_exists(message_id):
         raise HTTPException(404, "no such message")
+    channel_id = await db.channel_of_message(message_id)
+    if not channel_id:
+        raise HTTPException(404, "no such message")
+    await _require_channel(channel_id, handle)
     removed = await db.remove_reaction(message_id, handle, emoji)
     if removed:
-        await hub.broadcast(await db.channel_of_message(message_id), {
+        await hub.broadcast(channel_id, {
             "type": "reaction_removed", "message_id": message_id,
             "author": handle, "emoji": emoji,
         })
@@ -1785,6 +1815,7 @@ async def api_computer(handle: str = Depends(require_auth)):
     from . import computer_providers as computers
     from .tools import computer as computer_mod
     from .tools import system as system_mod
+    await agent.hydrate_sandbox_root()
     await system_mod.hydrate_root()
     system_info = system_mod.listing("")
     return {
@@ -1799,13 +1830,36 @@ async def api_computer(handle: str = Depends(require_auth)):
         "activity": await db.get_recent_system_messages(20),
         "computer": computer_mod.status(),
         "system": system_info,
+        "sandbox": {
+            "root": agent.SANDBOX_DIR,
+            "note": "Rebind from Places → Sandbox. Any folder works — project, drive, worktree.",
+        },
         "note": (
             "Bots share two places on this host: the sandbox (Sandbox tab) and "
             f"the machine folder {system_info.get('root')} (System tab, system_run). "
-            "Change that folder from Places → System. Optional Playwright, Browser Use "
+            "Change that folder from Places → System. "
+            "Rebind the sandbox from Places → Sandbox. Optional Playwright, Browser Use "
             "CLI, CUA, Exa/Tavily/Firecrawl, and Composio apps live in the other tabs."
         ),
     }
+
+
+@app.post("/api/computer/sandbox/root")
+async def api_computer_sandbox_root(
+    payload: SandboxRootSet, handle: str = Depends(require_admin)
+):
+    """Rebind the shared sandbox root. Admin-only like the System root.
+
+    The sandbox is fluid now: point it at any directory on the machine and
+    keep working there. GC refuses filesystem roots, home folders, and repo
+    checkouts, so pointing at an entire PC never deletes user data.
+    """
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    result = await agent.set_sandbox_root(payload.path)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "invalid path")
+    return {"root": result["root"], "files": agent.list_workspace_files()}
 
 
 @app.get("/api/computer/file")
@@ -2053,14 +2107,12 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
     if _ws_origin and not origin_allowed(_ws_origin, _ws_host):
         await websocket.close(code=4003)
         return
-    channel = await db.get_channel(channel_id)
-    if channel is None:
-        await websocket.close(code=4004)
-        return
 
     await websocket.accept()
 
     # auth handshake — first frame must be {"token": "handle:raw", "last_seen_id": N?}
+    # Auth first, then channel existence: checking the channel before the
+    # token let unauthenticated callers enumerate channel ids via 4004/4001.
     try:
         first = await websocket.receive_json()
     except Exception:  # noqa: BLE001
@@ -2074,6 +2126,10 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
     handle, token = parsed
     if not await db.verify_token(handle, token):
         await websocket.close(code=4001)
+        return
+    channel = await db.get_channel(channel_id)
+    if channel is None:
+        await websocket.close(code=4004)
         return
     if not db.can_view_channel(channel, handle):
         await websocket.close(code=4003)
@@ -2089,10 +2145,15 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
 
         if last_seen_id is not None:
             try:
-                after = int(last_seen_id)
-            except (TypeError, ValueError):
+                after = int(str(last_seen_id).strip())
+            except (TypeError, ValueError, AttributeError):
                 after = None
-            if after is not None:
+            if after is None:
+                try:
+                    await websocket.send_json({"type": "error", "detail": "invalid last_seen_id"})
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
                 # Page through the entire gap. A single 200-row page silently
                 # loses newer replies after a long disconnect.
                 cursor = after
@@ -2125,20 +2186,33 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
             body = raw_body.strip()
             if not body:
                 continue
+            if len(body) > 8000:
+                await websocket.send_json({"type": "error", "detail": "body too long (max 8000 chars)"})
+                continue
             parent_id = data.get("parent_id")
             if parent_id is not None:
-                try:
-                    parent_id = int(parent_id)
-                except (TypeError, ValueError):
-                    await websocket.send_json({"type": "error", "detail": "invalid parent message"})
-                    continue
+                # Strict int: bool and float wire values must not coerce.
+                # int(3.9) == 3 would attach the reply to the wrong parent.
+                if isinstance(parent_id, bool) or not isinstance(parent_id, int):
+                    try:
+                        coerced = int(str(parent_id).strip())
+                        if str(coerced) != str(parent_id).strip():
+                            raise ValueError("not an int")
+                        parent_id = coerced
+                    except (TypeError, ValueError, AttributeError):
+                        await websocket.send_json({"type": "error", "detail": "invalid parent message"})
+                        continue
                 if not await db.message_in_channel(parent_id, channel_id):
                     await websocket.send_json({"type": "error", "detail": "parent message does not exist"})
                     continue
             if _rate_limited(handle):
                 await websocket.send_json({"type": "error", "detail": "slow down"})
                 continue
-            msg = await db.add_message(channel_id, handle, body, "human", parent_id)
+            try:
+                msg = await db.add_message(channel_id, handle, body, "human", parent_id)
+            except Exception:  # noqa: BLE001 - channel deleted mid-connection
+                await websocket.send_json({"type": "error", "detail": "channel is gone"})
+                break
             await hub.broadcast(channel_id, {"type": "message", "message": msg})
             await _maybe_trigger_agents(channel_id, msg)
     except WebSocketDisconnect:
@@ -2336,10 +2410,15 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
         await hub.broadcast(channel_id, {"type": "agent_stream_start", "author": name})
 
     streamed: list[str] = []
+    streamed_len = 0
 
     async def on_token(delta: str) -> None:
-        if len("".join(streamed)) < 30000:
+        nonlocal streamed_len
+        # O(1) length gate: len("".join(streamed)) rebuilt the whole prefix
+        # per token (O(T^2)). Track the running total instead.
+        if streamed_len < 30000:
             streamed.append(delta)
+            streamed_len += len(delta)
         await hub.broadcast(channel_id, {"type": "agent_token", "author": name, "delta": delta})
 
     try:

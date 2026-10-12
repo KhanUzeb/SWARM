@@ -24,7 +24,7 @@
 | Layer | Choice |
 | ----- | ------ |
 | Backend | FastAPI + Uvicorn, SQLite via `aiosqlite`, native WebSocket hub |
-| LLM | Groq (primary) + 31 more via `backend/ai_support/` + Custom OpenAI-compatible (Ollama/LM Studio/vLLM/llama.cpp) |
+| LLM | Groq (primary) + 44 more + Custom OpenAI-compatible (46 total via `backend/ai_support/`, Ollama/LM Studio/vLLM/llama.cpp) |
 | Frontend | React 19 + Vite 8, built with `bun`; FastAPI serves `frontend/dist` |
 | Tracing | Langfuse (no-op when unconfigured) |
 | Deploy | Docker Compose, SQLite on a named volume, `GET /health` probe, `swarm doctor` |
@@ -111,7 +111,7 @@ Rules (Rakazo-shaped, enforced in review):
 - Generic endpoint: provider id `custom`, base URL from
   `SWARM_OPENAI_COMPAT_BASE_URL` (default `http://127.0.0.1:11434/v1`),
   key from `SWARM_OPENAI_COMPAT_API_KEY` (any value works for keyless
-  local servers). UI: Command Center → AI providers → Custom card.
+  local servers). UI: Connect → AI → Custom card.
 - Env loading: project-root `.env` then `backend/.env`
   (`override=False`; real process env wins). Tests set
   `PYTHON_DOTENV_DISABLED=1`.
@@ -120,19 +120,23 @@ Rules (Rakazo-shaped, enforced in review):
 
 - `SWARM_COMPUTER_PROVIDER=local|none|fake` (default `local`).
   `none` boots without a computer host; `fake` is a test emulator.
-- **Team home** = shared sandbox (`SWARM_SANDBOX_DIR`). **Private homes**
+- **Team home** = shared sandbox (`SWARM_SANDBOX_DIR`, fluid: rebind at
+  runtime from Places → Sandbox via `POST /api/computer/sandbox/root`,
+  admin-only, persisted in `workspace_meta`). **Private homes**
   = per-bot drafts at `private/<agent>` under the team home. See
   `backend/computer_providers.py`.
-- `/api/computer` returns `provider` + `homes` metadata alongside the
+- `/api/computer` returns `provider` + `homes` + `sandbox.root` metadata alongside the
   legacy `workspace`/`files` keys (backward compatible — do not remove
   legacy keys without a migration note).
 - The sandbox is cwd + timeout, **not** container or network isolation.
-  Host-system tools are bound to `SWARM_SYSTEM_ROOT` and are **off by
+  GC trims it (`SWARM_GC_MAX_AGE_HOURS`/`SWARM_GC_MAX_MB`) but refuses
+  filesystem roots, home folders, and repo checkouts. Host-system tools are bound to `SWARM_SYSTEM_ROOT` and are **off by
   default** — enabling them requires an explicit `SWARM_SYSTEM=1`. Never
   claim otherwise in code, UI copy, or docs.
 - **Places.** The host-system root is not the repo — it is a Place picked in
-  Computer → System, and it can be any directory on the machine. Places
-  merge three sources: user-saved folders (persisted in `workspace_meta`),
+  Places → System, and it can be any directory on the machine. The sandbox
+  root is a Place picked in Places → Sandbox (`POST /api/computer/sandbox/root`).
+  Places merge three sources: user-saved folders (persisted in `workspace_meta`),
   folders named in `SWARM_SYSTEM_PLACES`, and the default guesses
   (Project/Home/Desktop/Documents/Downloads). Add/remove is admin-only like
   the root rebind; env and default entries are read-only (removing one is a

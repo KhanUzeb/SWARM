@@ -168,10 +168,10 @@ flowchart TD
 
 `backend/ai_support/`:
 
-- `providers.py` — priority-ordered catalog of 16 entries: `groq`,
-  `openrouter`, `openai`, `huggingface`, `together`, `google`, `mistral`,
-  `deepseek`, `xai`, `fireworks`, `perplexity`, `nvidia`, `opencode`, `zen`,
-  `anthropic`, `custom`.
+- `providers.py` — priority-ordered catalog of 46 entries (Groq through
+  Custom; see the file). Each row carries a `category`
+  (`featured`/`frontier`/`open`/`fast`/`china`/`gateway`/`enterprise`/`local`/`cloud`)
+  for the Connect → AI filter.
 - `store.py` — API keys and OAuth tokens are sealed with a XOR over
   `sha256(SWARM_SECRET)` before they touch SQLite. Only `key_hint` is ever
   returned by an API.
@@ -219,20 +219,23 @@ list.
 
 `class Hub` in `backend/main.py` is an in-memory room map
 (`dict[channel_id, set[WebSocket]]`) plus a presence counter per handle. It
-holds no history — history is the database's job. `broadcast()` sends to
-every socket in the room and evicts the ones that raise.
-`broadcast_all()` iterates every room, used for cross-channel frames
+holds no history — history is the database's job. `broadcast()` fans out
+concurrently (bounded per-send timeout) and evicts the ones that raise.
+`broadcast_all()` fans out across rooms concurrently, used for cross-channel frames
 (`bot_status`, `approval`, `agents_changed`).
 
 `ws_channel` handshake, in order:
 
-1. `db.get_channel(channel_id)`; missing → close `4004`.
+1. Origin check → close `4003` on a forbidden browser origin.
 2. `await websocket.accept()`, then **the first frame must be**
    `{"token": "<handle>:<raw>", "last_seen_id": N?}`. Unparseable or
-   unverifiable → close `4001`. Not allowed to view the channel → close `4003`.
+   unverifiable → close `4001` (auth first, so unauthenticated callers
+   cannot enumerate channel ids).
+3. `db.get_channel(channel_id)`; missing → close `4004`.
+   Not allowed to view the channel → close `4003`.
    The handle is fixed here; clients never set `author` over WS.
-3. `hub.join()` + `hub.mark_online(handle)`.
-4. If `last_seen_id` was sent, page the whole gap with
+4. `hub.join()` + `hub.mark_online(handle)`.
+5. If `last_seen_id` was sent, page the whole gap with
    `db.get_history_after()` (up to 20 pages of 200), attaching reactions via
    `_with_reactions`, and send each as `{"type": "message", ...}`.
 

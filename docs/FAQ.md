@@ -75,7 +75,7 @@ container isolation.
 Yes, for the core loop. Use the **Custom (OpenAI-compatible)** provider:
 point `SWARM_OPENAI_COMPAT_BASE_URL` at your Ollama `/v1` (the default is
 already `http://127.0.0.1:11434/v1`) and connect the provider in
-Command Center → AI providers with any placeholder key — the field is
+Connect → AI with any placeholder key — the field is
 validated to be at least 8 characters, and Ollama ignores it. The model
 id must match what your server actually serves (`ollama list`), because
 Swarm sends it through unchanged. For zero cloud dependencies, leave
@@ -144,7 +144,7 @@ are workspace-global too — see the roadmap item on per-user credentials.
 
 Three levels, in increasing order of power.
 
-**1. A custom tool from the UI (no code).** Command Center → Tools, or
+**1. A custom tool from the UI (no code).** Connect → Tools, or
 `POST /api/tools/custom` as an admin. Name, description, a JSON
 `parameters` schema, and one of three handlers: `template` (format a
 string with the call arguments), `http_get` (format a URL with the

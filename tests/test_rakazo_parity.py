@@ -74,7 +74,8 @@ def test_provider_apis_never_leak_secrets(client, auth):
         assert res.status_code == 200
         text = res.text.lower()
         assert "sk-" not in text
-        assert "secret" not in text or "refresh_secret" not in text
+        # Both spellings must be absent: `or` passed when either was missing.
+        assert "secret" not in text and "refresh_secret" not in text
         if isinstance(res.json(), list):
             for row in res.json():
                 assert "secret" not in row or row.get("secret") is None

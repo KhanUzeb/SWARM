@@ -263,7 +263,9 @@ Read `docs/DEPLOY.md` for the full table. These are the ones with teeth:
 | --- | --- | --- |
 | `SWARM_SYSTEM` | **off** | `1` enables host `system_run`/`read`/`write`. Warns loudly on a non-loopback bind |
 | `SWARM_SYSTEM_ROOT` | repo / `/app` | The directory host tools may touch |
-| `SWARM_SYSTEM_PLACES` | unset | Comma/`;`-separated paths offered as read-only Places in Computer → System (`:` also splits on POSIX; a Windows drive colon stays part of the path) |
+| `SWARM_SYSTEM_PLACES` | unset | Comma/`;`-separated paths offered as read-only Places in Places → System (`:` also splits on POSIX; a Windows drive colon stays part of the path) |
+| `SWARM_SANDBOX_DIR` | `/tmp/swarm-sandbox` / `%TEMP%\swarm-sandbox` | Shared sandbox root; rebind at runtime from Places → Sandbox (`POST /api/computer/sandbox/root`, admin) |
+| `SWARM_GC_MAX_AGE_HOURS` / `SWARM_GC_MAX_MB` | 72h / 512MB | Sandbox GC bounds; refuses filesystem roots, home, repo checkouts |
 | `SWARM_DEMO` | off | `1` = deterministic mock replies + seeded scene, no key needed |
 | `SWARM_SECRET` | public literal | Seals provider keys. **Set this.** |
 | `SWARM_ALLOWED_ORIGINS` | 4 localhost URLs | Browser origins allowed to call `/api/*` |

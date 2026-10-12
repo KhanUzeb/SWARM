@@ -180,13 +180,32 @@ async def list_provider_models(
 
 
 async def list_all_models() -> dict[str, Any]:
-    groups: list[dict[str, Any]] = []
+    import asyncio
+
     # list_provider_models already resolves auth internally and now reports it
     # on the row. Resolving it a second time here doubled the SQLite reads for
     # every provider on every page load - two queries per provider, sixteen
     # providers, sequential - for an answer the row already carries.
-    for spec in providers_by_priority():
-        groups.append(await list_provider_models(spec["id"]))
+    # Fan out concurrently (bounded): 46 providers sequential was ~N round
+    # trips of SQLite + up to 12s provider timeouts each on the slow path.
+    specs = providers_by_priority()
+    sem = asyncio.Semaphore(8)
+
+    async def _one(spec: dict[str, Any]) -> dict[str, Any]:
+        async with sem:
+            try:
+                return await list_provider_models(spec["id"])
+            except Exception as exc:  # noqa: BLE001 - one provider never breaks the catalog
+                return {
+                    "id": spec["id"], "provider_id": spec["id"],
+                    "name": spec.get("name") or spec["id"],
+                    "live": False, "connected": False, "models": [],
+                    "default_model": spec.get("default_model"),
+                    "note": "Couldn't load this provider.",
+                    "error": str(exc)[:120],
+                }
+
+    groups: list[dict[str, Any]] = list(await asyncio.gather(*(_one(s) for s in specs)))
     models: list[dict[str, Any]] = []
     seen: set[str] = set()
     for group in groups:

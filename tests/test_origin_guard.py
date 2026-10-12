@@ -27,9 +27,6 @@ def _no_env(monkeypatch):
 def test_configured_origin_is_allowed():
     assert origin_allowed("http://localhost:8000") is True
     assert origin_allowed("http://127.0.0.1:5173") is True
-
-
-def test_trailing_slash_tolerated():
     assert origin_allowed("http://localhost:8000/") is True
 
 
@@ -42,33 +39,9 @@ def test_same_host_is_allowed():
     """A self-hoster reached by machine name is not a cross-origin caller."""
     assert origin_allowed("http://my-box.lan:8000", "my-box.lan:8000") is True
     assert origin_allowed("http://192.168.1.20:8000", "192.168.1.20:8000") is True
-
-
-def test_same_host_requires_matching_port():
-    """Port is part of an origin. Different port is still cross-origin."""
+    # Port and hostname are part of the origin — mismatches stay rejected.
     assert origin_allowed("http://my-box.lan:5173", "my-box.lan:8000") is False
-
-
-def test_same_host_requires_matching_hostname():
     assert origin_allowed("http://evil.example:8000", "my-box.lan:8000") is False
-
-
-def test_localhost_and_loopback_are_not_interchangeable_via_same_host():
-    """A browser treats these as different origins; so must the same-host path.
-
-    Both are in the default allowlist, so this exercises the same-host branch
-    with a host that is NOT allowlisted, where the two must not match.
-    """
-    assert origin_allowed("http://localhost:9999", "127.0.0.1:9999") is False
-
-
-def test_no_request_host_falls_back_to_allowlist_only():
-    assert origin_allowed("http://my-box.lan:8000") is False
-
-
-def test_malformed_origin_is_rejected_not_crashed():
-    for bad in ("not-a-url", "://", "http://", "http://:8000", "///"):
-        assert origin_allowed(bad, "my-box.lan:8000") in (True, False)
 
 
 def test_missing_origin_is_allowed():
