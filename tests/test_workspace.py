@@ -37,7 +37,9 @@ def test_first_user_is_admin_second_is_member(client):
 
     gate = client.get("/api/status").json()
     assert gate["onboarded"] is False
-    assert gate["admins"] == ["uzeb"]
+    assert "admins" not in gate, "anonymous status must not enumerate admins"
+    authed_gate = client.get("/api/status", headers=_auth(first["token"])).json()
+    assert authed_gate["admins"] == ["uzeb"]
     marked = client.post("/api/workspace/onboarded", headers=_auth(first["token"]))
     assert marked.status_code == 200
     assert client.get("/api/status").json()["onboarded"] is True

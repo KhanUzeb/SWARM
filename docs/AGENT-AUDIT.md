@@ -9,6 +9,8 @@ a tool result rather than a determined remote attacker.
 Findings are cited to `file:line` and were checked by reading the code and,
 where behaviour was in doubt, by running it. Severity is P0 (fix before
 launch), P1 (two weeks), P2 (roadmap).
+This is a point-in-time audit; for the current security controls, see
+[SECURITY.md](../SECURITY.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 

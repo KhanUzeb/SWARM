@@ -379,7 +379,13 @@ CREATE TABLE IF NOT EXISTS approvals (
     detail      TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'pending',
     created_at  REAL NOT NULL,
-    resolved_at REAL
+    resolved_at REAL,
+    tool        TEXT,
+    args_hash   TEXT,
+    requested_by TEXT,
+    resolved_by TEXT,
+    expires_at  REAL,
+    consumed_at REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_approvals_pending ON approvals(status, channel_id);
@@ -736,6 +742,21 @@ async def _ensure_schema(db: aiosqlite.Connection) -> None:
         await db.execute("ALTER TABLE ai_providers ADD COLUMN refresh_secret TEXT")
     if "expires_at" not in provider_cols:
         await db.execute("ALTER TABLE ai_providers ADD COLUMN expires_at REAL")
+    # Bound approvals: a decision must name the exact tool, canonical argument
+    # hash, and expiry it authorises. Additive so old rows stay readable; an
+    # old row with NULL tool/args_hash deliberately authorises no new call.
+    cur = await db.execute("PRAGMA table_info(approvals)")
+    approval_cols = {row[1] for row in await cur.fetchall()}
+    for column, ddl in (
+        ("tool", "ALTER TABLE approvals ADD COLUMN tool TEXT"),
+        ("args_hash", "ALTER TABLE approvals ADD COLUMN args_hash TEXT"),
+        ("requested_by", "ALTER TABLE approvals ADD COLUMN requested_by TEXT"),
+        ("resolved_by", "ALTER TABLE approvals ADD COLUMN resolved_by TEXT"),
+        ("expires_at", "ALTER TABLE approvals ADD COLUMN expires_at REAL"),
+        ("consumed_at", "ALTER TABLE approvals ADD COLUMN consumed_at REAL"),
+    ):
+        if column not in approval_cols:
+            await db.execute(ddl)
     await _grant_computer_use_tools(db)
     await _seed_bundled_skills(db)
 
@@ -1371,6 +1392,38 @@ async def create_user(
         )
         await db.commit()
     return {"handle": handle, "role": role}
+
+
+async def create_first_user(
+    handle: str, token: str, password: str | None = None,
+) -> dict[str, Any] | None:
+    """Create the sole first administrator, or return None if one exists.
+
+    The old path did `user_count()` and `create_user()` on two connections, so
+    N concurrent first registrations could all observe an empty table and all
+    mint themselves admin. `BEGIN IMMEDIATE` takes the write lock before the
+    count, and the insert is in the same transaction, so exactly one caller
+    wins and the rest see a populated table.
+    """
+    async with open_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute("SELECT COUNT(*) FROM users")
+            (count,) = await cur.fetchone()
+            if int(count) > 0:
+                await db.rollback()
+                return None
+            await db.execute(
+                "INSERT INTO users (handle, token_hash, created_at, role, password_hash) "
+                "VALUES (?, ?, ?, 'admin', ?)",
+                (handle, hash_token(token), time.time(),
+                 hash_password(password) if password else None),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return {"handle": handle, "role": "admin"}
 
 
 async def user_count() -> int:
@@ -2036,22 +2089,116 @@ async def list_routine_runs(routine_id: int, limit: int = 20) -> list[dict[str, 
 # ------------------------------------------------------------ approvals --
 
 async def create_approval(
-    agent_name: str, channel_id: str, action: str, detail: str = ""
+    agent_name: str,
+    channel_id: str,
+    action: str,
+    detail: str = "",
+    *,
+    tool: str | None = None,
+    args_hash: str | None = None,
+    requested_by: str | None = None,
+    expires_at: float | None = None,
 ) -> dict[str, Any]:
     ts = time.time()
     async with open_db() as db:
         cur = await db.execute(
-            "INSERT INTO approvals (agent_name, channel_id, action, detail, status, created_at) "
-            "VALUES (?, ?, ?, ?, 'pending', ?)",
-            (agent_name, channel_id, action, detail, ts),
+            "INSERT INTO approvals (agent_name, channel_id, action, detail, status, "
+            "created_at, tool, args_hash, requested_by, expires_at) "
+            "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+            (agent_name, channel_id, action, detail, ts, tool, args_hash,
+             requested_by, expires_at),
         )
         await db.commit()
         aid = cur.lastrowid
     return {
         "id": aid, "agent_name": agent_name, "channel_id": channel_id,
         "action": action, "detail": detail, "status": "pending",
-        "created_at": ts, "resolved_at": None,
+        "created_at": ts, "resolved_at": None, "tool": tool,
+        "args_hash": args_hash, "requested_by": requested_by,
+        "expires_at": expires_at, "consumed_at": None,
     }
+
+
+async def ensure_bound_approval(
+    agent_name: str,
+    channel_id: str,
+    tool: str,
+    args_hash: str,
+    *,
+    action: str,
+    detail: str = "",
+    requested_by: str | None = None,
+    expires_at: float | None = None,
+) -> dict[str, Any]:
+    """Return the existing pending row for this exact call, or create one.
+
+    Deduplicating on (agent, channel, tool, args_hash) means a model that
+    retries a blocked call does not spam the inbox with identical approvals.
+    """
+    ts = time.time()
+    async with open_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM approvals WHERE agent_name = ? AND channel_id = ? "
+            "AND tool = ? AND args_hash = ? AND status = 'pending' "
+            "AND expires_at IS NOT NULL AND expires_at > ? "
+            "AND (requested_by IS NULL OR ? IS NULL OR requested_by = ?) "
+            "ORDER BY id DESC LIMIT 1",
+            (agent_name, channel_id, tool, args_hash, ts, requested_by, requested_by),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return dict(row)
+    return await create_approval(
+        agent_name, channel_id, action, detail, tool=tool, args_hash=args_hash,
+        requested_by=requested_by, expires_at=expires_at,
+    )
+
+
+async def find_approval_grant(
+    agent_name: str,
+    channel_id: str,
+    tool: str,
+    args_hash: str,
+    *,
+    requested_by: str | None = None,
+) -> dict[str, Any] | None:
+    """An approved, unconsumed, unexpired grant for this exact call.
+
+    A grant with no expiry is not a grant: legacy rows created before the TTL
+    existed must not authorize anything forever. When the approval names a
+    requester, only a turn acting for that person may spend it — the person
+    who asked, or the person who approved on their behalf. Without the second
+    half, an administrator approving another member's request created a grant
+    nobody could spend and the agent asked again immediately.
+    """
+    ts = time.time()
+    async with open_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM approvals WHERE agent_name = ? AND channel_id = ? "
+            "AND tool = ? AND args_hash = ? AND status = 'approved' "
+            "AND consumed_at IS NULL "
+            "AND expires_at IS NOT NULL AND expires_at > ? "
+            "AND (requested_by IS NULL OR ? IS NULL "
+            "     OR requested_by = ? OR resolved_by = ?) "
+            "ORDER BY id ASC LIMIT 1",
+            (agent_name, channel_id, tool, args_hash, ts, requested_by,
+             requested_by, requested_by),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def consume_approval(approval_id: int) -> bool:
+    """Single-use claim. False means another caller already consumed it."""
+    async with open_db() as db:
+        cur = await db.execute(
+            "UPDATE approvals SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+            (time.time(), approval_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def get_approval(approval_id: int) -> dict[str, Any] | None:
@@ -2060,6 +2207,22 @@ async def get_approval(approval_id: int) -> dict[str, Any] | None:
         cur = await db.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
         row = await cur.fetchone()
         return dict(row) if row else None
+
+
+async def last_human_author(channel_id: str) -> str | None:
+    """The human who most recently spoke in a channel, or None.
+
+    Used to attribute a gated tool call to the person who triggered the work,
+    so a different member of the same room cannot approve it on their behalf.
+    """
+    async with open_db() as db:
+        cur = await db.execute(
+            "SELECT author FROM messages WHERE channel_id = ? "
+            "AND author_kind = 'human' ORDER BY id DESC LIMIT 1",
+            (channel_id,),
+        )
+        row = await cur.fetchone()
+        return str(row[0]) if row and row[0] else None
 
 
 async def list_approvals(
@@ -2075,6 +2238,9 @@ async def list_approvals(
         if status:
             clauses.append("status = ?")
             args.append(status)
+            if status == "pending":
+                clauses.append("(expires_at IS NULL OR expires_at > ?)")
+                args.append(time.time())
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         cur = await db.execute(
             f"SELECT * FROM approvals {where} ORDER BY id DESC LIMIT ?",
@@ -2083,16 +2249,18 @@ async def list_approvals(
         return [dict(r) for r in await cur.fetchall()]
 
 
-async def resolve_approval(approval_id: int, status: str) -> dict[str, Any] | None:
+async def resolve_approval(
+    approval_id: int, status: str, *, resolved_by: str | None = None
+) -> dict[str, Any] | None:
     if status not in {"approved", "denied"}:
         raise ValueError("invalid approval status")
     ts = time.time()
     async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "UPDATE approvals SET status = ?, resolved_at = ? "
+            "UPDATE approvals SET status = ?, resolved_at = ?, resolved_by = ? "
             "WHERE id = ? AND status = 'pending'",
-            (status, ts, approval_id),
+            (status, ts, resolved_by, approval_id),
         )
         if cur.rowcount == 0:
             cur = await db.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
@@ -2216,10 +2384,14 @@ async def delete_custom_tool(tool_id: int) -> bool:
 # -------------------------------------------------------- ai providers ---
 
 async def upsert_ai_provider(
-    provider_id: str, secret: str, *, model: str | None = None
+    provider_id: str, secret: str, *, model: str | None = None,
+    hint: str | None = None,
 ) -> dict[str, Any]:
     ts = time.time()
-    hint = f"…{secret[-4:]}" if len(secret) > 4 else "****"
+    # Callers that hold the plaintext (store.connect) pass its last four
+    # characters. Falling back to the blob suffix keeps old direct callers
+    # working, but a ciphertext suffix is not a useful hint to a human.
+    hint = hint or (f"…{secret[-4:]}" if len(secret) > 4 else "****")
     async with open_db() as db:
         await db.execute(
             "INSERT INTO ai_providers (provider_id, secret, key_hint, model, connected_at) "
@@ -2236,10 +2408,12 @@ async def upsert_ai_provider(
 
 
 async def update_ai_provider_oauth(
-    provider_id: str, secret: str, refresh_secret: str | None, expires_at: float | None, *, model: str | None = None
+    provider_id: str, secret: str, refresh_secret: str | None,
+    expires_at: float | None, *, model: str | None = None,
+    hint: str | None = None,
 ) -> dict[str, Any]:
     ts = time.time()
-    hint = f"…{secret[-4:]}" if len(secret) > 4 else "****"
+    hint = hint or (f"…{secret[-4:]}" if len(secret) > 4 else "****")
     async with open_db() as db:
         await db.execute(
             "INSERT INTO ai_providers (provider_id, secret, key_hint, model, connected_at, auth_method, refresh_secret, expires_at) VALUES (?, ?, ?, ?, ?, 'oauth', ?, ?) "
@@ -2248,6 +2422,21 @@ async def update_ai_provider_oauth(
         )
         await db.commit()
     return {"provider_id": provider_id, "connected": True, "model": model, "connected_at": ts, "key_hint": hint, "auth_method": "oauth", "expires_at": expires_at}
+
+
+async def reseal_ai_provider(provider_id: str, secret: str, hint: str) -> bool:
+    """Replace a legacy ciphertext with the current format, in place.
+
+    Used only after the old value decrypted successfully. OAuth metadata,
+    model, and connected_at are deliberately untouched.
+    """
+    async with open_db() as db:
+        cur = await db.execute(
+            "UPDATE ai_providers SET secret = ?, key_hint = ? WHERE provider_id = ?",
+            (secret, hint, provider_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def list_ai_providers() -> list[dict[str, Any]]:

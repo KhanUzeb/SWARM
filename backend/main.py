@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hmac
 import io
 import logging
 import os
@@ -161,6 +162,109 @@ def _rate_limited(handle: str) -> bool:
     if len(_last_write) > _LAST_WRITE_MAX_ENTRIES:
         _prune_last_write(now)
     return False
+
+
+# Registration is the one unauthenticated write, so it gets its own bounded
+# limiter keyed on the network peer rather than a handle an attacker chooses.
+_REGISTER_WINDOW_SECONDS = 300.0
+_REGISTER_MAX_ATTEMPTS = 20
+_REGISTER_MAX_ENTRIES = 4096
+_register_attempts: dict[str, list[float]] = {}
+
+# Password guessing gets a longer, per-handle lockout. Five wrong admin
+# passwords inside fifteen minutes returns 429 even before PBKDF2 runs.
+_PASSWORD_WINDOW_SECONDS = 900.0
+_PASSWORD_MAX_FAILURES = 5
+_password_failures: dict[str, list[float]] = {}
+
+
+def _peer_key(request: Request) -> str:
+    host = (request.client.host if request.client else "") or "unknown"
+    return host.strip().lower()
+
+
+def _register_limited(request: Request) -> bool:
+    now = time.monotonic()
+    key = _peer_key(request)
+    attempts = [t for t in _register_attempts.get(key, ()) if now - t < _REGISTER_WINDOW_SECONDS]
+    if len(attempts) >= _REGISTER_MAX_ATTEMPTS:
+        _register_attempts[key] = attempts
+        return True
+    attempts.append(now)
+    _register_attempts[key] = attempts
+    if len(_register_attempts) > _REGISTER_MAX_ENTRIES:
+        for stale in [k for k, v in _register_attempts.items() if not v or now - v[-1] > _REGISTER_WINDOW_SECONDS]:
+            _register_attempts.pop(stale, None)
+        while len(_register_attempts) > _REGISTER_MAX_ENTRIES:
+            _register_attempts.pop(next(iter(_register_attempts)), None)
+    return False
+
+
+def _password_locked(handle: str) -> bool:
+    now = time.monotonic()
+    failures = [t for t in _password_failures.get(handle.lower(), ()) if now - t < _PASSWORD_WINDOW_SECONDS]
+    _password_failures[handle.lower()] = failures
+    return len(failures) >= _PASSWORD_MAX_FAILURES
+
+
+def _note_password_failure(handle: str) -> None:
+    now = time.monotonic()
+    key = handle.lower()
+    failures = [t for t in _password_failures.get(key, ()) if now - t < _PASSWORD_WINDOW_SECONDS]
+    failures.append(now)
+    _password_failures[key] = failures
+
+
+def _clear_password_failures(handle: str) -> None:
+    _password_failures.pop(handle.lower(), None)
+
+
+def _matches(value: str | None, expected: str) -> bool:
+    if not expected:
+        return False
+    return hmac.compare_digest((value or "").encode("utf-8"), expected.encode("utf-8"))
+
+
+def _loopback_setup_ok(request: Request) -> bool:
+    """Loopback bootstrap, but never through a forwarding proxy.
+
+    `is_loopback` already revokes trust when X-Forwarded-For names a remote
+    client. Presence of any forwarding header is treated as a proxy chain we
+    cannot verify, so it needs the explicit setup token even when every value
+    happens to be loopback. Proxy behaviour therefore fails closed.
+    """
+    if not is_loopback(request):
+        return False
+    forwarded = (request.headers.get("x-forwarded-for") or "").strip()
+    standard = (request.headers.get("forwarded") or "").strip()
+    return not forwarded and not standard
+
+
+def _is_live_connection(row: dict[str, Any] | None) -> bool:
+    """True only for a stored credential the current seal key can open.
+
+    `store.status()` reports `connected: False` for a row sealed under a
+    rotated or absent SWARM_SECRET. Catalog payloads used to test row
+    existence alone, so a provider that needs a reconnect still advertised
+    itself as usable and the first request failed later.
+    """
+    return bool(row) and row.get("connected", True) is not False
+
+
+async def _store_credential(
+    provider_id: str, api_key: str, *, model: str | None = None,
+) -> dict[str, Any]:
+    """Seal and store one credential, naming a missing seal key instead of 500.
+
+    `store.connect` refuses to write without SWARM_SECRET (no public fallback
+    key is not a secret). That refusal is a configuration error a human can
+    fix, so it belongs in the 4xx contract rather than the unhandled-error
+    path.
+    """
+    try:
+        return await ai_store.connect(provider_id, api_key, model=model)
+    except ai_store.SealKeyMissing as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 async def _with_reactions(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -353,6 +457,8 @@ async def api_v2_providers(handle: str = Depends(require_auth)):
     for provider in catalog:
         spec = get_provider(provider["id"]) or {}
         conn = connections.get(provider["id"])
+        if not _is_live_connection(conn):
+            conn = None
         env_name = spec.get("env_fallback")
         env_ok = _key_set(env_name) if env_name else False
         provider["connected"] = conn is not None or env_ok
@@ -387,6 +493,10 @@ async def api_v2_oauth_start(provider_id: str, handle: str = Depends(require_aut
 async def api_v2_oauth_callback(code: str, state: str):
     try:
         return await v2.oauth_callback(state, code)
+    except ai_store.SealKeyMissing as exc:
+        # A missing seal key is a setup step, not a provider failure: say so
+        # instead of reporting the exchange as a 502 gateway error.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -874,7 +984,9 @@ async def api_status(handle: str | None = Depends(optional_auth)):
     """Boolean-only — never returns raw keys. Connection details require auth."""
     demo = agent.demo_mode_enabled()
     connections = await ai_store.status()
-    connected_ids = {c["provider_id"] for c in connections}
+    connected_ids = {
+        c["provider_id"] for c in connections if _is_live_connection(c)
+    }
     providers_ready: dict[str, bool] = {}
     for spec in providers_by_priority():
         pid = spec["id"]
@@ -899,8 +1011,11 @@ async def api_status(handle: str | None = Depends(optional_auth)):
     for row in await connectors.catalog_status():
         body[row["id"]] = bool(row.get("connected"))
     body["onboarded"] = await db.workspace_onboarded()
-    body["admins"] = await db.list_admin_handles()
     if handle:
+        # Admin identities and connected-provider metadata are account data.
+        # The anonymous bootstrap payload keeps only the booleans LoginScreen
+        # needs; everything that names a person or a connection is authed.
+        body["admins"] = await db.list_admin_handles()
         body["ai_providers"] = connections
         user = await db.get_user(handle)
         if user:
@@ -910,7 +1025,7 @@ async def api_status(handle: str | None = Depends(optional_auth)):
 
 # ---------------------------------------------------------------- auth ----
 
-MIN_ADMIN_PASSWORD = 4
+MIN_ADMIN_PASSWORD = 8
 
 
 def _session_body(handle: str, raw: str, role: str, *, created: bool, onboarded: bool) -> dict[str, Any]:
@@ -925,7 +1040,28 @@ def _session_body(handle: str, raw: str, role: str, *, created: bool, onboarded:
 
 @app.post("/api/register")
 async def api_register(payload: RegisterRequest, request: Request):
-    local = is_loopback(request)
+    """Bootstrap and membership registration under an explicit policy.
+
+    Three doors, each with its own proof:
+
+    * first administrator — loopback setup without forwarding headers, or
+      `SWARM_SETUP_TOKEN`. A remote caller can never win an empty database by
+      sending the first request.
+    * existing administrator — the admin password. A passwordless admin can
+      only be recovered from the loopback setup path.
+    * everyone else — loopback for local onboarding, or `SWARM_INVITE_CODE`
+      for a remote invite. Existing members cannot rotate a token remotely.
+
+    Responses for unauthenticated failures are deliberately generic so a
+    stranger cannot learn which handles or roles exist.
+    """
+    if _register_limited(request):
+        raise HTTPException(429, "too many registration attempts; try again later")
+
+    settings = get_settings()
+    setup = settings.setup_token_value()
+    invite = settings.invite_code_value()
+    local = _loopback_setup_ok(request)
     password = payload.password
     existing = await db.get_user(payload.handle)
     onboarded = await db.workspace_onboarded()
@@ -934,28 +1070,69 @@ async def api_register(payload: RegisterRequest, request: Request):
         if existing["role"] == "admin":
             has_pw = await db.user_has_password(payload.handle)
             if has_pw:
+                if _password_locked(payload.handle):
+                    raise HTTPException(429, "too many failed attempts; try again later")
                 if not await db.admin_password_ok(payload.handle, password):
-                    raise HTTPException(403, "wrong or missing admin password")
-            elif not local:
-                raise HTTPException(409, "handle already registered")
-        elif not local:
-            raise HTTPException(409, "handle already registered")
+                    _note_password_failure(payload.handle)
+                    raise HTTPException(403, "invalid credentials")
+                _clear_password_failures(payload.handle)
+            else:
+                # A passwordless admin is a bootstrap account, not a remote
+                # recovery account. Loopback is already the trusted path; a
+                # remote caller must present the setup token. Requiring the
+                # token from a local browser too would lock the login screen
+                # out of its own first-run flow, which sends only handle and
+                # password (the token is documented as a *remote* bootstrap).
+                if not local:
+                    if not setup or not _matches(payload.setup_token, setup):
+                        raise HTTPException(403, "invalid credentials")
+        else:
+            # Members have no password, so possession of a handle is not proof
+            # of ownership. Remote token rotation would be handle takeover.
+            if not local:
+                raise HTTPException(403, "registration is closed")
         raw = db.generate_token()
         user = await db.rotate_user_token(payload.handle, raw)
         if user is None:
-            raise HTTPException(409, "handle already registered")
+            raise HTTPException(403, "registration is closed")
         return _session_body(
             payload.handle, raw, user["role"], created=False, onboarded=onboarded,
         )
 
     if await db.user_count() == 0:
+        # The setup token is the remote bootstrap proof. A loopback request
+        # (no forwarding headers) is the host itself and needs no token; that
+        # keeps the browser's first-run screen working even when an operator
+        # has configured one for remote clients.
+        if not local:
+            if not setup:
+                raise HTTPException(
+                    403,
+                    "workspace not initialized — run setup from the server host "
+                    "or set SWARM_SETUP_TOKEN in .env and restart",
+                )
+            if not _matches(payload.setup_token, setup):
+                raise HTTPException(403, "invalid setup token")
         if password is not None and len(password) < MIN_ADMIN_PASSWORD:
-            raise HTTPException(400, f"admin password must be at least {MIN_ADMIN_PASSWORD} characters")
+            raise HTTPException(
+                400,
+                f"admin password must be at least {MIN_ADMIN_PASSWORD} characters",
+            )
         raw = db.generate_token()
-        created = await db.create_user(payload.handle, raw, role="admin", password=password)
+        created = await db.create_first_user(payload.handle, raw, password)
+        if created is None:
+            # A concurrent request won the bootstrap race. Never mint a second
+            # administrator from the losing request.
+            raise HTTPException(409, "workspace already initialized")
         return _session_body(
             payload.handle, raw, created["role"], created=True, onboarded=False,
         )
+
+    if not local:
+        if not invite:
+            raise HTTPException(403, "registration is closed")
+        if not _matches(payload.invite, invite):
+            raise HTTPException(403, "invalid invite")
 
     raw = db.generate_token()
     created = await db.create_user(payload.handle, raw, role="member")
@@ -1465,6 +1642,8 @@ async def api_ai_providers(handle: str = Depends(require_auth)):
     for p in catalog:
         spec = get_provider(p["id"]) or {}
         conn = connections.get(p["id"])
+        if not _is_live_connection(conn):
+            conn = None
         env_name = spec.get("env_fallback")
         env_ok = _key_set(env_name) if env_name else False
         p["connected"] = conn is not None or env_ok
@@ -1491,7 +1670,7 @@ async def api_ai_connect(
         raise HTTPException(429, "slow down")
     if get_provider(provider_id) is None:
         raise HTTPException(404, "unknown provider")
-    return await ai_store.connect(provider_id, payload.api_key, model=payload.model)
+    return await _store_credential(provider_id, payload.api_key, model=payload.model)
 
 
 @app.delete("/api/ai-support/connect/{provider_id}")
@@ -1674,7 +1853,17 @@ async def api_resolve_approval(
     await _require_channel(row["channel_id"], handle)
     if row["status"] != "pending":
         raise HTTPException(409, "already resolved")
-    updated = await db.resolve_approval(approval_id, payload.status)
+    requested_by = (row.get("requested_by") or "").strip()
+    if requested_by and requested_by != handle:
+        # A decision belongs to the person who asked for it. Admins can step
+        # in, but a different member of the same room cannot approve someone
+        # else's request.
+        user = await db.get_user(handle)
+        if not user or user.get("role") != "admin":
+            raise HTTPException(403, "only the requester can resolve this approval")
+    updated = await db.resolve_approval(
+        approval_id, payload.status, resolved_by=handle,
+    )
     if updated is None or updated.get("_already_resolved"):
         raise HTTPException(409, "already resolved")
     await db.set_agent_status(row["agent_name"], "idle")
@@ -1692,15 +1881,39 @@ async def api_resolve_approval(
     msg = await db.add_message(row["channel_id"], handle, body, "human")
     await hub.broadcast(row["channel_id"], {"type": "message", "message": msg})
     await hub.broadcast_all({"type": "approval", "approval": updated})
-    for candidate in await work.list_sessions(handle, 50):
-        if (candidate.get("channel_id") == row["channel_id"]
-                and candidate.get("status") == "waiting_for_approval"):
-            await _emit_work_event(
-                row["channel_id"], candidate, "approval_resolved",
-                {"decision": payload.status, "approval_id": approval_id},
-                candidate.get("active_step"))
+    # The waiting session belongs to the person who triggered the work. An
+    # admin resolving someone else's request must still settle that session,
+    # so look through the requester's sessions too rather than leaving it
+    # waiting forever.
+    waiting = None
+    owners = [handle]
+    if requested_by and requested_by != handle:
+        owners.append(requested_by)
+    for owner in owners:
+        for candidate in await work.list_sessions(owner, 50):
+            if (candidate.get("channel_id") == row["channel_id"]
+                    and candidate.get("status") == "waiting_for_approval"):
+                waiting = candidate
+                break
+        if waiting is not None:
             break
-    await _maybe_trigger_agents(row["channel_id"], msg)
+    if waiting is not None:
+        await _emit_work_event(
+            row["channel_id"], waiting, "approval_resolved",
+            {"decision": payload.status, "approval_id": approval_id},
+            waiting.get("active_step"))
+    target = await db.fetch_agent(row["agent_name"])
+    if target and not target.get("archived"):
+        # Resume only the bot that asked. Broadcasting the decision into a
+        # group room used to re-trigger every member, so one approval could
+        # start unrelated agents and repeat the gated action.
+        _track_task(
+            _run_agent(row["channel_id"], target),
+            "approval resume",
+            channel_id=row["channel_id"],
+        )
+    else:
+        await _maybe_trigger_agents(row["channel_id"], msg)
     # The two echoed fields are additive: every key the UI already read
     # (id, agent_name, channel_id, action, detail, status, created_at,
     # resolved_at) is unchanged, so the inbox needs no migration.
@@ -1867,6 +2080,10 @@ async def api_computer_file(path: str, handle: str = Depends(require_auth)):
     target = agent._safe_workspace_path(path)
     if target is None or not target.is_file():
         raise HTTPException(404, "no such file")
+    from .tools import system as system_mod
+
+    if system_mod.is_protected_path(target):
+        raise HTTPException(403, "protected file")
     if target.stat().st_size > 64_000:
         raise HTTPException(413, "file too large to preview")
     return {
@@ -1876,10 +2093,27 @@ async def api_computer_file(path: str, handle: str = Depends(require_auth)):
 
 
 @app.post("/api/computer/run")
-async def api_computer_run(payload: ComputerRunRequest, handle: str = Depends(require_auth)):
+async def api_computer_run(payload: ComputerRunRequest, handle: str = Depends(require_admin)):
+    """Host command execution, admin-only and off unless host tools are on.
+
+    `cwd=sandbox` was never an isolation boundary with `shell=True`, so the
+    route must mirror the host-system opt-in (`SWARM_SYSTEM`) instead of
+    pretending the sandbox protects a member. A member token never reaches
+    the subprocess; the tool path has its own policy gate in the agent.
+    """
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
+    from . import computer_providers as computers
     from .tools import computer as computer_mod
+    from .tools import system as system_mod
+
+    if not system_mod.enabled():
+        raise HTTPException(
+            403,
+            "host command execution is disabled; set SWARM_SYSTEM=1 to opt in",
+        )
+    if not computers.provider_configured():
+        raise HTTPException(403, "computer provider is none")
     output = computer_mod.computer_run(payload.command.strip())
     return {"command": payload.command.strip(), "output": output}
 
@@ -1984,6 +2218,11 @@ async def api_computer_system_file(path: str, handle: str = Depends(require_auth
     target = system_mod.safe_path(path)
     if target is None or not target.is_file():
         raise HTTPException(404, "no such file")
+    if system_mod.is_protected_path(target):
+        # Same guard as system_read. This route used to re-implement reading
+        # and drifted, which made .env readable by any member while the tool
+        # path refused it.
+        raise HTTPException(403, "protected file")
     if target.stat().st_size > system_mod.API_PREVIEW_BYTES:
         raise HTTPException(413, "file too large to preview")
     try:
@@ -2039,7 +2278,7 @@ async def api_connector_connect(
         raise HTTPException(404, "unknown connector")
     if spec.get("kind") == "cli":
         raise HTTPException(400, "this connector uses a local CLI, not an API key")
-    return await ai_store.connect(connector_id, payload.api_key)
+    return await _store_credential(connector_id, payload.api_key)
 
 
 @app.delete("/api/connectors/{connector_id}/connect")
@@ -2068,7 +2307,7 @@ async def api_composio_connect(
 ):
     if _rate_limited(handle):
         raise HTTPException(429, "slow down")
-    return await ai_store.connect("composio", payload.api_key)
+    return await _store_credential("composio", payload.api_key)
 
 
 @app.delete("/api/composio/connect")
@@ -2395,7 +2634,7 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
             await _emit_work_event(channel_id, session, "tool_finished",
                                    {"tool": tool_name,
                                     "result": str(event.get("result") or "")[:500]}, tool_name)
-            if event["tool"] == "request_approval":
+            if event["tool"] == "request_approval" or event.get("blocked") == "review":
                 pending = await db.list_approvals(channel_id=channel_id, status="pending")
                 for row in pending:
                     if row["agent_name"] == name and row not in pending_approvals:
@@ -2443,7 +2682,10 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
         await work.link_message(session["id"], int(msg["id"]))
         await _emit_work_event(channel_id, session, "message_linked",
                                {"message_id": msg["id"], "agent": name}, name)
-        asked = any(e["tool"] == "request_approval" for e in result["tool_events"])
+        asked = any(
+            e["tool"] == "request_approval" or e.get("blocked") == "review"
+            for e in result["tool_events"]
+        )
         await _set_status(name, "needs_approval" if asked else "idle")
         if not asked:
             completed_payload: dict[str, Any] = {
@@ -2452,7 +2694,9 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
                 completed_payload["context"] = result["context"]
             await _emit_work_event(channel_id, session, "work_completed",
                                    completed_payload, name)
-        if depth < HANDOFF_DEPTH:
+        if depth < HANDOFF_DEPTH and not asked:
+            # A bot that stopped for approval must not hand its objective to
+            # another bot: that would route around the pending decision.
             await _maybe_trigger_agents(channel_id, msg, depth=depth + 1)
         return result
     except asyncio.CancelledError:

@@ -24,7 +24,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import db, policy
 from .models import DEFAULT_TOOLS, resolve_groq_model
 from .tools.registry import BUILTIN_SCHEMAS, get_registry, reload_registry, risk_tier
 
@@ -226,7 +226,10 @@ _TOOL_POLICY = (
     "shared workspace; keep code and repo work on the system root.\n"
     "## Approval\n"
     "For sending, publishing, deleting, purchasing, or production "
-    "changes, call request_approval and wait for a human to decide.\n"
+    "changes, call request_approval and wait for a human to decide. Pass "
+    "its `tool` and `arguments` fields for the exact call you intend to "
+    "make; the approval is bound to that call, so an unbound request "
+    "authorises nothing and you will have to ask again.\n"
     "## Team\n"
     "@mention a bot to hand off work, or delegate_task to have another "
     "bot do a subtask and report back. For a recurring need (tracking, "
@@ -484,6 +487,10 @@ async def _run_write_workspace(rel: str, content: str) -> str:
     target = _safe_workspace_path(rel)
     if target is None:
         return "(invalid path — stay under the workspace root)"
+    from .tools import system as system_mod
+
+    if system_mod.is_protected_path(target):
+        return "(blocked — that file holds credentials or the database)"
     text = content if isinstance(content, str) else str(content)
     if len(text) > 32_000:
         return "(file too large — cap is 32000 characters)"
@@ -504,15 +511,45 @@ async def _run_save_skill(name: str, body: str) -> str:
 
 
 async def _run_approval_tool(
-    agent_name: str, channel_id: str, action: str, detail: str
+    agent_name: str,
+    channel_id: str,
+    action: str,
+    detail: str,
+    *,
+    tool: str = "",
+    arguments: dict[str, Any] | None = None,
 ) -> str:
     label = (action or "").strip()[:200]
     if not label:
         return "(need an action to approve)"
-    row = await db.create_approval(agent_name, channel_id, label, (detail or "").strip()[:2000])
+    bound_tool = (tool or "").strip()[:100] or None
+    bound_hash = (
+        policy.canonical_args_hash(arguments or {}) if bound_tool else None
+    )
+    detail_text = (detail or "").strip()
+    if bound_tool:
+        # The action label is prose chosen by the agent. The human also needs
+        # the exact call the grant will authorise, not only the story about it.
+        detail_text = (
+            f"{detail_text}\n\nAuthorises exactly: "
+            f"{_approval_label(bound_tool, arguments or {})}"
+        ).strip()[:2000]
+    from .settings import get_settings
+
+    row = await db.create_approval(
+        agent_name,
+        channel_id,
+        label,
+        detail_text,
+        tool=bound_tool,
+        args_hash=bound_hash,
+        requested_by=await db.last_human_author(channel_id),
+        expires_at=time.time() + get_settings().approval_ttl(),
+    )
     await db.set_agent_status(agent_name, "needs_approval")
+    scope = f" for {bound_tool}" if bound_tool else ""
     return (
-        f"Approval #{row['id']} is pending for: {label}. "
+        f"Approval #{row['id']} is pending{scope} for: {label}. "
         "Stop here. Tell the human what you need approved. Do not proceed."
     )
 
@@ -835,6 +872,10 @@ async def _run_read_workspace(rel: str) -> str:
     target = _safe_workspace_path(rel)
     if target is None:
         return "(invalid path — stay under the workspace root)"
+    from .tools import system as system_mod
+
+    if system_mod.is_protected_path(target):
+        return "(blocked — that file holds credentials or the database)"
     if not target.is_file():
         return "(file not found)"
     try:
@@ -844,6 +885,65 @@ async def _run_read_workspace(rel: str) -> str:
     if len(text) > 32_000:
         return text[:32_000] + "\n…[truncated]"
     return text
+
+
+def _approval_label(name: str, args: dict[str, Any]) -> str:
+    """One-line description of a blocked call for the approvals inbox."""
+    try:
+        payload = _json.dumps(args, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        payload = str(sorted((str(k), str(v)) for k, v in args.items()))
+    return f"{name} {payload}"[:200]
+
+
+async def _policy_gate(
+    name: str, args: dict[str, Any], *, agent_name: str, channel_id: str
+) -> None:
+    """Server-side decision before a tool can run.
+
+    This is deliberately in the execution path rather than in a prompt:
+    the model's tool list is advisory, and prompt injection can ask for any
+    call. ALLOW runs, DENY never runs, REVIEW either consumes a previously
+    approved grant bound to this exact agent/channel/tool/arguments or raises
+    `PolicyReviewRequired` with a fresh pending row.
+    """
+    verdict = policy.evaluate_tool(name, args, agent=agent_name)
+    decision = verdict.get("decision")
+    if decision == policy.ALLOW:
+        return
+    if decision == policy.DENY:
+        raise policy.PolicyDenied(
+            f"{name} is permanently blocked by policy",
+            tool=name, decision=policy.DENY, evaluation=verdict,
+        )
+
+    args_hash = policy.canonical_args_hash(args)
+    requested_by = await db.last_human_author(channel_id)
+    grant = await db.find_approval_grant(
+        agent_name, channel_id, name, args_hash, requested_by=requested_by,
+    )
+    if grant is not None and await db.consume_approval(int(grant["id"])):
+        return
+
+    from .settings import get_settings
+
+    approval = await db.ensure_bound_approval(
+        agent_name,
+        channel_id,
+        name,
+        args_hash,
+        action=_approval_label(name, args),
+        detail=(
+            "Server policy requires a human decision before this call: "
+            + "; ".join(verdict.get("reasons") or [])
+        )[:2000],
+        requested_by=requested_by,
+        expires_at=time.time() + get_settings().approval_ttl(),
+    )
+    raise policy.PolicyReviewRequired(
+        f"approval #{approval['id']} is required before {name} can run",
+        tool=name, decision=policy.REVIEW, evaluation=verdict, approval=approval,
+    )
 
 
 async def _execute_tool(
@@ -857,6 +957,12 @@ async def _execute_tool(
     delegate_chain: tuple[str, ...] = (),
     audit_sink: list[dict[str, Any]] | None = None,
 ) -> str:
+    # The agent's own tool list is checked before policy. Asking a human to
+    # approve a call the agent cannot make spends attention and grants
+    # nothing, so the refusal is immediate and no approval row is minted.
+    if name not in allowed:
+        return f"(tool {name} is disabled for this agent)"
+    await _policy_gate(name, args, agent_name=agent_name, channel_id=channel_id)
     helpers = {
         "list": _run_list_workspace,
         "read": _run_read_workspace,
@@ -864,7 +970,8 @@ async def _execute_tool(
         "save_skill": _run_save_skill,
         "approval": _run_approval_tool,
     }
-    return await get_registry().execute(
+    audit_mark = len(audit_sink) if audit_sink is not None else 0
+    result = await get_registry().execute(
         name, args,
         agent_name=agent_name,
         channel_id=channel_id,
@@ -876,6 +983,20 @@ async def _execute_tool(
         delegate_chain=delegate_chain,
         audit_sink=audit_sink,
     )
+    if name == "delegate_task" and audit_sink is not None:
+        for event in audit_sink[audit_mark:]:
+            if event.get("blocked") != "review":
+                continue
+            # A delegated agent that stopped for approval has not done the
+            # work. Letting the parent keep its turn would let it route around
+            # the child's gate with another tool while the approval is pending.
+            raise policy.PolicyReviewRequired(
+                "the delegated agent is waiting for human approval",
+                tool=name,
+                decision=policy.REVIEW,
+                approval={"id": event.get("approval_id")},
+            )
+    return result
 
 
 # ------------------------------------------------------ per-bot budget knobs
@@ -1080,6 +1201,7 @@ async def _run_with_client(
             # repeat before the run is cut off.
             arg_key = _call_signature(tc["name"], args)
             last_args = arg_key
+            review_block: dict[str, Any] | None = None
 
             try:
                 result = await _execute_tool(
@@ -1091,6 +1213,21 @@ async def _run_with_client(
                     delegate_chain=delegate_chain,
                     audit_sink=sub_audit,
                 )
+            except policy.PolicyReviewRequired as exc:
+                approval = exc.approval or {}
+                result = (
+                    f"(approval required: #{approval.get('id')} is pending for "
+                    f"{tc['name']}. Stop here. Tell the human what you need "
+                    f"approved. Do not retry this call until they decide.)"
+                )
+                review_block = {"blocked": "review", "approval_id": approval.get("id")}
+            except policy.PolicyDenied as exc:
+                reason = "; ".join(exc.evaluation.get("reasons") or []) or str(exc)
+                result = (
+                    f"(blocked by policy: {tc['name']} is not allowed for this "
+                    f"agent - {reason})"
+                )
+                review_block = {"blocked": "deny"}
             except Exception as exc:  # noqa: BLE001
                 # A tool that raises must still be audited like any other tool
                 # call (AGENTS.md s6) and must not take the turn down with a
@@ -1113,6 +1250,8 @@ async def _run_with_client(
             # loop is still a call, and AGENTS.md s6 persists every tool call
             # as a system audit message in-channel.
             tool_events.append({"tool": tc["name"], "args": args, "result": result})
+            if review_block is not None:
+                tool_events[-1].update(review_block)
             # A delegated sub-run answers headlessly, so its own tool calls are
             # not in this loop's `tc` list. They are collected by
             # generate_delegate_reply and folded in here, right after the
@@ -1126,6 +1265,23 @@ async def _run_with_client(
                 "content": wrap_untrusted(tc["name"], result),
             })
             round_results.append(result)
+
+            if review_block is not None:
+                # A gated call ends the turn. Letting the model continue would
+                # either retry the same blocked call or route around the gate
+                # with another tool, which is exactly what the policy exists to
+                # prevent. The approval row is already pending in the inbox.
+                if review_block.get("blocked") == "review":
+                    round_reason = (
+                        f"stopped for human approval: {tc['name']} is gated by "
+                        f"server policy until a human decides"
+                    )
+                else:
+                    round_reason = (
+                        f"stopped by policy: {tc['name']} is not permitted for "
+                        f"this agent"
+                    )
+                break
 
             if identical >= LOOP_REPEAT_LIMIT:
                 round_reason = (

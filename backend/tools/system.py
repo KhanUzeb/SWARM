@@ -217,21 +217,65 @@ def safe_path(rel: str | None) -> Path | None:
     return target
 
 
-def _protected_write(target: Path) -> bool:
+_PROTECTED_FILES = {
+    ".git-credentials", ".netrc", "_netrc", ".npmrc", ".pypirc",
+    "credentials", "credentials.json", "secrets.json",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+}
+_PROTECTED_PARTS = {".ssh"}
+
+
+def is_protected_path(target: Path | str) -> bool:
+    """True when a resolved path must never be read or written by a tool.
+
+    This is the one check every read path shares: `system_read`,
+    `system_write`, the system-file API, the sandbox preview, `read_workspace`,
+    and `computer_open`. A basename-only check is not enough (a symlink or a
+    differently-spelled path can alias a secret), so callers pass a path that
+    has already been resolved by `safe_path` / `_safe_workspace_path`.
+    """
     from ..settings import get_settings
 
-    name = target.name.lower()
-    if name in _PROTECTED_NAMES or _PROTECTED_DOTENV.match(name):
+    path = Path(target)
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    name = resolved.name.lower()
+    if (
+        name in _PROTECTED_NAMES
+        or name in _PROTECTED_FILES
+        or _PROTECTED_DOTENV.match(name)
+    ):
+        return True
+    if name == "config" and resolved.parent.name.lower() == ".git":
+        return True
+    if any(part.lower() in _PROTECTED_PARTS for part in resolved.parts):
         return True
     # The DB path is compared against the one settings object's value, not a
-    # second read of SWARM_DB_PATH (AGENTS.md s2).
-    db_path = (get_settings().db_path or "").strip()
-    if not db_path:
-        return False
-    try:
-        return target.resolve() == Path(db_path).expanduser().resolve()
-    except OSError:
-        return False
+    # second read of SWARM_DB_PATH (AGENTS.md s2). `db.DB_PATH` is the file
+    # SQLite actually opened, which matters when the variable is unset (the
+    # local default is backend/swarm.db) or when a test rebinds it. The
+    # WAL/SHM sidecars carry the same rows and are protected alongside it.
+    from .. import db as db_mod
+
+    candidates: set[Path] = set()
+    configured = (get_settings().db_path or "").strip()
+    for raw in (configured, str(db_mod.DB_PATH or "")):
+        if not raw:
+            continue
+        try:
+            candidates.add(Path(raw).expanduser().resolve())
+        except OSError:
+            continue
+    for base in candidates:
+        if resolved in {base, Path(f"{base}-wal"), Path(f"{base}-shm")}:
+            return True
+    return False
+
+
+# Back-compat alias: older call sites named the check after its first use.
+_protected_write = is_protected_path
 
 
 def _place_id(path: Path) -> str:

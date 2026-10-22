@@ -29,34 +29,77 @@ def _shell_env() -> dict[str, str]:
     return agent._shell_env()
 
 
+def _host_execution_enabled() -> bool:
+    """`computer_run` is host execution, so it follows the host-tool opt-in.
+
+    The sandbox working directory is not OS isolation. Until a real container
+    provider exists, refusing here is the only honest default; `SWARM_SYSTEM=1`
+    is the documented opt-in and the REST route enforces the same flag.
+    """
+    from . import system
+
+    if not system.enabled():
+        return False
+    from .. import computer_providers
+
+    return computer_providers.provider_configured()
+
+
 def computer_run(command: str) -> str:
     cmd = (command or "").strip()
     if not cmd:
         return "(need a command)"
+    if not _host_execution_enabled():
+        return (
+            "(host command execution is disabled. Set SWARM_SYSTEM=1 to opt in; "
+            "the sandbox is a working directory, not a container.)"
+        )
     match = guard.is_dangerous(cmd)
     if match:
         return guard.refusal_reason(cmd, match)
     if _DANGEROUS.search(cmd):
         return "(blocked — that command is too destructive for the shared computer)"
     cwd = sandbox_dir()
+    popen_kwargs: dict[str, Any] = {}
+    if os.name != "nt":
+        # A new process group lets the timeout kill the whole tree, not just
+        # the shell that spawned it. Windows uses taskkill /T below.
+        popen_kwargs["start_new_session"] = True
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             shell=True,
             cwd=str(cwd),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=SHELL_TIMEOUT,
             env=_shell_env(),
+            **popen_kwargs,
         )
-        output = (result.stdout or "") + (result.stderr or "")
-        code = result.returncode
-        body = output[:OUTPUT_CAP] or "(no output)"
+        try:
+            output, _ = proc.communicate(timeout=SHELL_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True, text=True,
+                )
+            else:  # pragma: no cover - POSIX-only branch
+                import signal
+
+                os.killpg(proc.pid, signal.SIGKILL)
+            try:
+                # A killed tree still has pipes to drain, but never wait
+                # forever for a process that ignored the kill.
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            return f"(timed out after {SHELL_TIMEOUT}s)"
+        code = proc.returncode
+        body = (output or "")[:OUTPUT_CAP] or "(no output)"
         if code:
             return f"(exit {code})\n{body}"
         return body
-    except subprocess.TimeoutExpired:
-        return f"(timed out after {SHELL_TIMEOUT}s)"
     except Exception as exc:  # noqa: BLE001
         return f"(computer error: {exc})"
 
@@ -80,6 +123,10 @@ def computer_open(target: str) -> str:
     path = agent._safe_workspace_path(raw)
     if path is None:
         return "(invalid path — stay under the workspace root)"
+    from . import system
+
+    if system.is_protected_path(path):
+        return "(blocked — that file holds credentials or the database)"
     if not path.exists():
         return f"(not found: {raw})"
     if path.is_dir():

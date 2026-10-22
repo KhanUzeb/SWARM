@@ -34,6 +34,7 @@ def test_seeded_agents_get_computer_use(client, auth):
 
 
 def test_runners_echo_and_block(client, auth, tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
     response = client.post("/api/computer/run", headers=auth, json={"command": "echo swarm"})
     assert response.status_code == 200
     assert response.json()["command"] == "echo swarm"

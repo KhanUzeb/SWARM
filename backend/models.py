@@ -181,8 +181,11 @@ class SystemPlaceAdd(BaseModel):
 class RegisterRequest(BaseModel):
     handle: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
     password: str | None = Field(default=None, max_length=128)
+    # Optional credentials are never echoed in validation errors or responses.
+    setup_token: str | None = Field(default=None, max_length=256)
+    invite: str | None = Field(default=None, max_length=256)
 
-    @field_validator("password")
+    @field_validator("password", "setup_token", "invite")
     @classmethod
     def password_blank(cls, value: str | None) -> str | None:
         if value is None:

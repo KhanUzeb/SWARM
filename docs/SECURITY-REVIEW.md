@@ -7,6 +7,9 @@ secret redaction, and key sealing at rest.
 Every finding below was reproduced against the running app (`fastapi.testclient`
 against `backend.main:app` with a temp SQLite DB) unless it is marked as
 code-reading only. Line numbers refer to the tree at the time of the audit.
+This is a point-in-time record, not the current security posture; see
+[SECURITY.md](../SECURITY.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for the
+current controls.
 
 Severity means **what an attacker who can reach the HTTP port can do**.
 

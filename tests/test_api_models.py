@@ -35,10 +35,12 @@ def approver(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_DB_PATH", str(db_path))
     db_mod.DB_PATH = db_path
     main_mod._last_write.clear()
+    main_mod._register_attempts.clear()
+    main_mod._password_failures.clear()
     main_mod.hub._rooms.clear()
     main_mod.hub._presence.clear()
 
-    with TestClient(main_mod.app) as client:
+    with TestClient(main_mod.app, client=("127.0.0.1", 50000)) as client:
         res = client.post("/api/register", json={"handle": "uzeb"})
         assert res.status_code == 200
         headers = {"Authorization": f"Bearer {res.json()['token']}"}

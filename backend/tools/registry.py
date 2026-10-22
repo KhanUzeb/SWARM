@@ -4,14 +4,17 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import inspect
+import ipaddress
 import json
 import re
+import socket
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit
 
 ToolHandler = Callable[..., Awaitable[str] | str]
 
@@ -256,12 +259,24 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "request_approval",
-            "description": "Pause for human approval before consequential external actions.",
+            "description": (
+                "Pause for human approval before consequential external actions. "
+                "Pass `tool` and `arguments` with the exact call you intend to "
+                "make so the approval authorises only that call."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string"},
                     "detail": {"type": "string"},
+                    "tool": {
+                        "type": "string",
+                        "description": "Exact tool name to authorise after approval.",
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Exact arguments for that tool call.",
+                    },
                 },
                 "required": ["action"],
             },
@@ -900,6 +915,7 @@ class ToolRegistry:
         if name == "request_approval":
             return await workspace_helpers["approval"](
                 agent_name, channel_id, args.get("action", ""), args.get("detail", ""),
+                tool=args.get("tool", "") or "", arguments=args.get("arguments") or {},
             )
         if name == "create_agent":
             return await self._exec_create_agent(args)
@@ -1188,13 +1204,72 @@ def _plugin_call_kwargs(
     return {k: v for k, v in merged.items() if k in params}
 
 
+def _is_public_http_url(url: str) -> bool:
+    """Only public http(s) destinations are fetchable.
+
+    A tool that can GET any URL is an SSRF primitive: `http://127.0.0.1:8000`
+    reaches the app itself and `http://169.254.169.254` reaches cloud metadata.
+    Resolve the host first and reject every non-global address (loopback,
+    private, link-local, CGNAT, reserved, multicast, unspecified). Redirects
+    are checked again before the opener follows them.
+    """
+    try:
+        parts = urlsplit((url or "").strip())
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    if parts.username or parts.password:
+        return False
+    host = parts.hostname
+    if not host:
+        return False
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    name = host.strip("[]").lower().rstrip(".")
+    if name == "localhost" or name.endswith(
+        (".localhost", ".local", ".internal", ".home.arpa")
+    ):
+        return False
+    try:
+        infos = socket.getaddrinfo(name, port)
+    except (OSError, ValueError):
+        return False
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if not address.is_global:
+            return False
+    return True
+
+
+class _PublicRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse a redirect that leaves the public internet."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        if not _is_public_http_url(newurl):
+            raise urllib.error.URLError(
+                "redirect target is not a public http(s) address"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _fetch_url_text(url: str) -> str:
     text = (url or "").strip()
     if not text.startswith(("http://", "https://")):
         return "(url must start with http:// or https://)"
+    if not _is_public_http_url(text):
+        return "(url must name a public http(s) address)"
     try:
         req = urllib.request.Request(text, headers={"User-Agent": "swarm/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+        opener = urllib.request.build_opener(_PublicRedirectHandler())
+        with opener.open(req, timeout=10) as resp:  # noqa: S310
+            if not _is_public_http_url(resp.geturl()):
+                return "(redirected to a non-public address)"
             raw = resp.read(8192)
             charset = resp.headers.get_content_charset() or "utf-8"
             return raw.decode(charset, errors="replace")[:8000]

@@ -62,18 +62,29 @@ def test_empty_command_is_not_dangerous():
     assert guard.is_dangerous("   ") is None
 
 
-def test_computer_run_blocks_and_explains():
+def test_computer_run_blocks_and_explains(monkeypatch):
     """The tool must refuse in the model's own voice, not silently no-op."""
     from backend.tools import computer
 
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
     out = computer.computer_run("rm -rf /")
     assert "Blocked" in out
     assert "was not executed" in out
 
 
-def test_computer_run_still_allows_normal_commands():
+def test_computer_run_requires_the_host_opt_in(monkeypatch):
     from backend.tools import computer
 
+    monkeypatch.delenv("SWARM_SYSTEM", raising=False)
+    out = computer.computer_run("echo should-not-run")
+    assert "disabled" in out.lower()
+    assert "should-not-run" not in out
+
+
+def test_computer_run_still_allows_normal_commands(monkeypatch):
+    from backend.tools import computer
+
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
     out = computer.computer_run("echo swarm-ok")
     assert "swarm-ok" in out
     assert "Blocked" not in out

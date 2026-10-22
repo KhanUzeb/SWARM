@@ -7,35 +7,77 @@ either, trust them and file the drift as a bug.
 
 ## Is it safe to expose Swarm to the internet?
 
-Not as it ships. A default instance is a private-network service, and the
-gap is bigger than "add TLS": **any client that can reach the port can
-register a handle** (`POST /api/register` has no rate limit and no
-invite), and a registered handle can then list channels, read every
-message, and post (`db.can_view_channel` only restricts `people` DMs, so
-rooms are open to every authenticated member). Treat the port as
-trusted-network-only unless you put authentication, TLS, and access
-control in front of it.
+Not by default — though open registration is no longer one of the reasons.
+`POST /api/register` now has three doors, each with its own proof:
 
-There is also a code-execution surface: host-system tools
-(`backend/tools/system.py`) run shell commands as the backend's OS user
-with the full host PATH, bounded only by a working-directory default, a
-regex deny-list for a handful of destructive patterns, and a 60s timeout.
-That is not a sandbox. `SWARM_SYSTEM=0` turns those tools off and is the
-single most important setting for an exposed deployment. The minimum
-hardening set:
+- **First administrator.** Loopback with no `X-Forwarded-For` or `Forwarded`
+  header, or a remote caller with the configured `SWARM_SETUP_TOKEN`. Without
+  that token, remote bootstrap is closed. A proxy chain fails the loopback
+  check and needs the token.
+- **An existing administrator.** The admin password, now at least 8
+  characters, with five wrong attempts per handle in fifteen minutes
+  returning `429` before PBKDF2 runs. A passwordless admin instead needs
+  `SWARM_SETUP_TOKEN` (when set) or loopback.
+- **Everyone else.** Loopback for local onboarding, or a remote caller with
+  `SWARM_INVITE_CODE`. An existing member cannot rotate their token
+  remotely, because a handle alone is not proof of ownership.
+
+The route is limited to 20 attempts per five minutes per peer address, the
+first-user insert runs under `BEGIN IMMEDIATE` (so concurrent first requests
+cannot all become admin), and unauthenticated failures say only "invalid
+credentials" or "registration is closed" so a stranger cannot learn which
+handles or roles exist.
+
+What is still open is the rest of the perimeter. Any authenticated member can
+list channels, read every room's messages, and post (`db.can_view_channel`
+only restricts `people` DMs), there is no TLS, and there is no container
+isolation. Treat the port as trusted-network-only unless you put
+authentication, TLS, and access control in front of it.
+
+The code-execution surface is now opt-in and gated. Host-system tools are off
+unless `SWARM_SYSTEM=1`; `POST /api/computer/run` is admin-only and requires
+that same flag plus a configured computer provider; and every execution-class
+call (shell, browser input, `system_run`, `computer_run`) is held by the
+server policy gate for a human approval of that exact call before it runs. That removes the "anyone who reaches the port"
+path, not the risk: an approved command still runs as the backend's OS user
+with the host's full PATH, bounded by a working directory, a regex deny-list,
+and a wall-clock timeout (30 s for `computer_run`, 60 s for `system_run`).
+That is not a sandbox.
+
+Some files are refused outright. `.env*`, `swarm.db` and its `-wal`/`-shm`
+sidecars, `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`, anything under `.ssh`,
+`.git-credentials`, `.netrc`/`_netrc`, `.npmrc`, `.pypirc`,
+`credentials`/`credentials.json`/`secrets.json`, and `.git/config` are blocked
+on read and on write by the file tools, the sandbox and system preview routes,
+`read_workspace`, and `computer_open`. A shell command is a different path:
+`backend/tools/guard.py` blocks the common dotenv readers, but it is a
+denylist, not a jail, so a determined command can still read what the file
+tools refuse.
+
+The minimum hardening set:
 
 - terminate TLS in front of port `8000`; Swarm does not do TLS itself
-- set a strong `SWARM_SECRET` (see the key-storage question below — the
-  default is a public literal)
-- set an admin password on the first registration, or the first stranger
-  to reach the port can claim admin
+- set a strong random `SWARM_SECRET`. There is no usable default any more —
+  connecting a provider with no secret set is refused, not sealed with a
+  public literal — but the value in `.env.example` is a placeholder, so do
+  not run with it
+- set an admin password on the first registration (8 characters minimum). If
+  you register the first admin remotely, `SWARM_SETUP_TOKEN` is the only way
+  in
+- set `SWARM_INVITE_CODE` if remote people should be able to join, and leave
+  it unset otherwise
 - restrict `SWARM_ALLOWED_ORIGINS` and keep the `X-Swarm-Client: web`
   marker working
-- set `SWARM_SYSTEM=0` unless you specifically need host access, and
-  accept that anyone who reaches the port can use whatever you enabled
+- keep `SWARM_SYSTEM=0`. If you turn host tools on, expect a pending approval
+  per exact execution call and accept that an approval is only as careful as
+  the human clicking it
+- leave `SWARM_DEMO` off for real work — it mocks replies, it does not
+  harden anything
 
-`SECURITY.md` says the same thing. A hardened public-demo mode is
-planned work, not shipped — see [ROADMAP.md](../ROADMAP.md).
+`SECURITY.md` says the same thing. A hardened public-demo mode is still
+**planned**, with the registration controls and the host-tool opt-in shipped as
+groundwork; read-only storage/computer surfaces, room-level access control, and
+the "what is real here" banner are not built. See [ROADMAP.md](../ROADMAP.md).
 
 ## How is Swarm different from the alternatives?
 
@@ -112,30 +154,40 @@ process environment, which `backend/__init__.py` populates from the
 project-root `.env` and then `backend/.env` without overriding real
 process vars. Nothing is written to the database.
 
-**Keys connected through the UI** are sealed before they touch SQLite.
-`backend/ai_support/store.py` derives a key with
-`SHA-256(SWARM_SECRET)` and XORs it across the plaintext, then
-base64url-encodes the result; `backend/db.py` also stores a `key_hint` of
-the last four characters. Be clear-eyed about what that is: **it is
-keyed obfuscation, not authenticated encryption.** There is no nonce and
-no AEAD, so anyone who has both the database file and `SWARM_SECRET` can
-recover the plaintext key with a few lines of Python. It stops a key from
-sitting in the database in the clear and stops casual log/backup leakage;
-it is not a defense against an attacker who already has your data volume.
+**Keys connected through the UI** are sealed with AES-256-GCM before they
+touch SQLite. `backend/ai_support/store.py` derives a 32-byte key with
+`scrypt(SWARM_SECRET)` and writes `v2:<base64url(nonce || ciphertext)>` with a
+fresh 96-bit nonce per value and an application-name associated-data tag. The
+secret's last four characters are stored as `key_hint` by `db.upsert_ai_provider`.
+Be clear-eyed about what that is: **it is authenticated encryption, but the key
+is only as private as `SWARM_SECRET`.** A flipped byte fails authentication
+instead of silently decrypting to a corrupted credential, identical keys do not
+produce identical blobs, and a guess at `SWARM_SECRET` costs a scrypt run. An
+attacker who has both the database file and the secret can still recover the
+plaintext — that is what a symmetric seal means.
 
 Three practical consequences:
 
-- **`SWARM_SECRET` is the master key, and it has a public default**
-  (`swarm-local-dev-secret`). Set it explicitly. If you change or lose
-  it, previously stored keys are unrecoverable — reconnect the provider.
+- **`SWARM_SECRET` is the master key, and there is no fallback.** With it
+  unset, the store refuses to seal (`SealKeyMissing`) rather than using the old
+  public literal, so a fresh install must set it before connecting a provider.
+  If you change or lose it, previously stored keys are unrecoverable: the
+  provider reports `needs_reconnect` and resolution only proceeds if an
+  environment key is set, so reconnect it. `.env.example` ships a placeholder
+  value — replace it.
 - **Keep `SWARM_SECRET` out of the same backup as the database**, and
   rotate provider keys if it ever leaks.
 - **No API ever returns a secret.** Only `provider_id`, `model`,
-  `connected_at`, and `key_hint` come back from `/api/status`,
-  `/api/ai-support/*`, and `/api/v2/providers`;
+  `connected_at`, `key_hint`, and a `connected`/`needs_reconnect` pair come
+  back from `/api/status`, `/api/ai-support/*`, and `/api/v2/providers`;
   `tests/test_rakazo_parity.py` guards that. OAuth access and refresh
   tokens go through the same seal, and refresh when the provider exposes
   a token endpoint plus client credentials in the environment.
+
+Blobs written by the old XOR format carry no `v2:` prefix. They are still
+readable, and they are re-sealed in place the first time they decrypt
+successfully — never when they do not, so a wrong key cannot destroy a
+credential that might still be recoverable elsewhere.
 
 Connector keys (Composio, Exa, Tavily, Firecrawl) use the same store, and
 are workspace-global too — see the roadmap item on per-user credentials.

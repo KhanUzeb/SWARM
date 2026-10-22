@@ -26,7 +26,7 @@ def test_status_reports_provider_readiness(client, monkeypatch):
     assert client.get("/api/status").json()["demo"] is False
 
 
-def test_register_and_409(client):
+def test_register_and_local_rotation(client):
     res = client.post("/api/register", json={"handle": "uzeb"})
     assert res.status_code == 200
     body = res.json()
@@ -35,8 +35,12 @@ def test_register_and_409(client):
     assert body["created"] is True
     assert body["onboarded"] is False
 
+    # Loopback is the trusted setup path, so the first admin can recover a
+    # passwordless account from the host by rotating its token. Remote
+    # rotation is refused (tests/test_security_registration.py).
     again = client.post("/api/register", json={"handle": "uzeb"})
-    assert again.status_code == 409
+    assert again.status_code == 200
+    assert again.json()["token"] != body["token"]
 
 
 def test_auth_is_required(client):

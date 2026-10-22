@@ -15,6 +15,14 @@ _DB = Path(__file__).parent / "_test.db"
 def pytest_configure(config):  # noqa: ARG001
     os.environ["SWARM_DB_PATH"] = str(_DB)
     os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+    # Credential sealing has no public fallback key. Tests exercise the real
+    # AES-GCM path, so they need a process-local secret.
+    os.environ.setdefault("SWARM_SECRET", "test-seal-key-not-for-deployment")
+    for name in (
+        "SWARM_SETUP_TOKEN", "SWARM_INVITE_CODE", "SWARM_SYSTEM",
+        "SWARM_COMPUTER_PROVIDER",
+    ):
+        os.environ.pop(name, None)
     os.environ.pop("GROQ_API_KEY", None)
     os.environ.pop("OPENROUTER_API_KEY", None)
     os.environ.pop("COMPOSIO_API_KEY", None)
@@ -26,7 +34,7 @@ def pytest_configure(config):  # noqa: ARG001
     os.environ.pop("LANGFUSE_SECRET_KEY", None)
 
 
-def _app_client(tmp_path, monkeypatch, client_addr=("testclient", 50000)):
+def _app_client(tmp_path, monkeypatch, client_addr=("127.0.0.1", 50000)):
     db_path = tmp_path / "swarm.db"
     monkeypatch.setenv("SWARM_DB_PATH", str(db_path))
 
@@ -35,6 +43,8 @@ def _app_client(tmp_path, monkeypatch, client_addr=("testclient", 50000)):
 
     db_mod.DB_PATH = db_path
     main_mod._last_write.clear()
+    main_mod._register_attempts.clear()
+    main_mod._password_failures.clear()
     main_mod.hub._rooms.clear()
     main_mod.hub._presence.clear()
 
@@ -46,11 +56,19 @@ def _app_client(tmp_path, monkeypatch, client_addr=("testclient", 50000)):
     main_mod.hub._rooms.clear()
     main_mod.hub._presence.clear()
     main_mod._last_write.clear()
+    main_mod._register_attempts.clear()
+    main_mod._password_failures.clear()
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     yield from _app_client(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def remote_client(tmp_path, monkeypatch):
+    """A client that is not on loopback and sends no forwarding headers."""
+    yield from _app_client(tmp_path, monkeypatch, ("203.0.113.7", 50000))
 
 
 @pytest.fixture(autouse=True)

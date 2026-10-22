@@ -59,11 +59,11 @@ repository does today.
 | **Tool calls visible in the channel** | Yes — each call persists a `system` row (`{agent} ran: {tool}({args}) -> {result}`) | No (you build it) | No | No | No | No |
 | **Multi-bot trigger** | `@mention`, whole bot 1:1 DMs, group roster, `@team-id`, routine ticks | Only what you implement | Agent-to-agent handoff via function calls | Delegation inside a crew | Conversation turns / handoff messages | Explicit graph edges |
 | **Handoff depth caps** | `HANDOFF_DEPTH = 3`, `DELEGATE_DEPTH_CAP = 2` | n/a | No cap in the primitive | Crew composition | Team-defined | Graph-defined |
-| **Human approval in the loop** | Agent calls `request_approval` → `approvals` row → in-channel approve/deny message the bot then reads and follows | Build it (Block Kit, modals, buttons) | Build it | Flow-level HITL | `UserProxyAgent` in the team | `interrupt()` + 4 decision types, checkpoint-persisted |
+| **Human approval in the loop** | Server policy gates tool dispatch; calls needing review get an exact, single-use approval, and agents can also call `request_approval` | Build it (Block Kit, modals, buttons) | Build it | Flow-level HITL | `UserProxyAgent` in the team | `interrupt()` + 4 decision types, checkpoint-persisted |
 | **Durable workflow runs** | v2 `workflows`/`runs`/`run_events`, approval nodes, artifacts, restart recovery | No | No | Flows, event-driven | GraphFlow (experimental) | Checkpoint + time travel (strongest) |
 | **Crash recovery mid-run** | `recoverable_runs()` at startup; `work.recover_interrupted()` settles stale sessions | Platform-dependent | No | Flow persistence | Runtime-dependent | Yes, by design |
 | **BYO model provider, no vendor lock** | 16-entry priority catalog + generic `custom` OpenAI-compatible endpoint (Ollama/LM Studio/vLLM via env) | n/a | Chat Completions API only | Provider-agnostic | Provider-agnostic | Provider-agnostic |
-| **Credentials sealed at rest** | XOR-over-`sha256(SWARM_SECRET)` in `ai_providers.secret`; only `key_hint` ever returned | Platform secrets manager | You pass keys in code | You pass keys in code | You pass keys in code | You pass keys in code |
+| **Credentials sealed at rest** | AES-256-GCM with a scrypt-derived `SWARM_SECRET` key and a fresh nonce per value; only `key_hint` ever returned | Platform secrets manager | You pass keys in code | You pass keys in code | You pass keys in code | You pass keys in code |
 | **Streaming to a live UI** | `agent_stream_start` / `agent_token` frames over WS | Platform-provided | Has streaming helpers | Framework-level | Has streaming | Has streaming |
 | **Sandbox / host tools** | Sandboxed shell (cwd + timeout + minimal PATH) and `SWARM_SYSTEM_ROOT`-bound host tools — **not** container isolation | n/a | No | No | No | No |
 | **Self-hosted, one process** | Yes — FastAPI + SQLite on a volume | No | Yes | Yes | Yes | Yes |
@@ -121,20 +121,15 @@ Honest gaps, from this repository's code:
 - **No cryptographic event signing or git-native workflows.** For that, the
   right answer is a different product.
 - **No unbounded loops in the workflow runner**, as noted above.
-- **No credential vault.** `ai_providers.secret` is sealed with a repeating-key
-  XOR keyed by `sha256(SWARM_SECRET)`, and `SWARM_SECRET` has a hardcoded
-  development default (`swarm-local-dev-secret`). That is obfuscation of a
-  value in your own database, not a managed secret store.
+- **No managed credential vault.** `ai_providers.secret` uses AES-256-GCM with
+  a scrypt-derived key from `SWARM_SECRET` and a fresh nonce per value. There
+  is no external secret manager or per-user provider-key isolation.
 - **No published benchmarks.** `backend/evals.py` has a scoring harness
   (`score_run` computes success, verified success, retries, human effort,
   tool calls) and `/api/v2/evals/*` exposes it, but there are no committed
   result sets. Any "Swarm scores X" claim is not currently supportable.
 - **Single-writer SQLite, single process.** Correct for a small team; not a
   multi-region deployment story.
-- **`policy.evaluate` and `routing.route` are advisory.** They are reachable
-  from `/api/v2/*` but do not gate the chat path. The only approval gate on a
-  chat turn is the agent choosing to call `request_approval` — there is no
-  automatic "this tool is risky, block it" layer on that path.
 
 ## How to choose
 
@@ -206,10 +201,10 @@ Every Swarm claim in this document maps to code in this repository:
 | Sealed credentials, key hints only | `backend/ai_support/store.py::_seal`, `backend/db.py::upsert_ai_provider` |
 | Approval row + in-channel approve/deny message | `backend/agent.py::_run_approval_tool`, `backend/main.py::api_resolve_approval` |
 | Durable runs, approval nodes, artifacts, recovery | `backend/v2.py` (`execute_run`, `recoverable_runs`, `start_run`) |
-| No policy gate on the chat path | `backend/main.py::_run_agent` calls neither `policy.evaluate` nor `routing.route` |
+| Policy gate on tool dispatch | `backend/agent.py` calls `policy.evaluate_tool` before registry execution |
 | No vector history | `backend/db.py::search_history`, `search_workspace` (SQL `LIKE`); `backend/knowledge.py` is FTS5 with `LIKE` fallback |
 | No isolation boundary | `backend/agent.py::_run_shell_tool`, `_shell_env` comments |
-| Default `SWARM_SECRET` | `backend/ai_support/store.py` module-level `_SECRET` |
+| Credential sealing | `backend/ai_support/store.py` AES-256-GCM; missing `SWARM_SECRET` refuses writes |
 
 Claims about competitor *relative* strength (durability depth, memory
 ranking, conversation mechanics, ecosystem reach) are judgments grounded in

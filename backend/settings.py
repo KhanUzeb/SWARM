@@ -87,7 +87,9 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0:0:0:0:0:0:0:1"}
 # here only so the redaction rule has a name. Both halves of the generic
 # OpenAI-compatible connection belong here: the API key is a credential, so
 # `swarm doctor` must report only whether it is set.
-SECRET_FIELDS: frozenset[str] = frozenset({"secret", "openai_compat_api_key"})
+SECRET_FIELDS: frozenset[str] = frozenset({
+    "secret", "openai_compat_api_key", "setup_token", "invite_code",
+})
 
 
 def truthy(raw: str | None, default: bool = False) -> bool:
@@ -205,6 +207,18 @@ class Settings(BaseSettings):
     openai_compat_api_key: str | None = Field(default=None, description="custom OpenAI-compatible API key")
     oauth_redirect_uri: str | None = Field(default=None, description="provider OAuth callback URL")
     secret: str | None = Field(default=None, description="seal key for stored provider keys")
+    setup_token: str | None = Field(
+        default=None,
+        description="one-time secret that authorises first-admin bootstrap from a remote client",
+    )
+    invite_code: str | None = Field(
+        default=None,
+        description="administrator-issued code required for remote registration",
+    )
+    approval_ttl_seconds: str | None = Field(
+        default=None,
+        description="how long a bound tool approval stays usable (default 900)",
+    )
     revision: str | None = Field(default=None, description="build revision for /health, informational only")
 
     # --- numerics (lenient, with documented fallbacks) ---------------------
@@ -372,6 +386,25 @@ class Settings(BaseSettings):
         """True when SWARM_SECRET has a value. The value is never returned."""
         return bool((self.secret or "").strip())
 
+    def setup_token_value(self) -> str:
+        """SWARM_SETUP_TOKEN, stripped. Never returned by a snapshot."""
+        return (self.setup_token or "").strip()
+
+    def invite_code_value(self) -> str:
+        """SWARM_INVITE_CODE, stripped. Never returned by a snapshot."""
+        return (self.invite_code or "").strip()
+
+    def approval_ttl(self) -> int:
+        """Seconds a bound approval stays valid. Unusable values use 900."""
+        raw = (self.approval_ttl_seconds or "").strip()
+        if not raw:
+            return 900
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError, OverflowError):
+            return 900
+        return value if 30 <= value <= 86_400 else 900
+
     def openai_compat_key_configured(self) -> bool:
         """True when SWARM_OPENAI_COMPAT_API_KEY has a value.
 
@@ -454,8 +487,23 @@ def iter_env(names: tuple[str, ...]) -> Iterator[tuple[str, str | None]]:
         yield name, os.environ.get(name)
 
 
+_SECRET_NAME_RE = re.compile(r"(SECRET|KEY|TOKEN|PASSWORD|CREDENTIAL|INVITE|SETUP)", re.I)
+
+
 def _redact(name: str, value: str | None) -> dict[str, Any]:
-    if name.split("_", 1)[-1].lower() in SECRET_FIELDS or name == "SWARM_SECRET":
+    """Never print a credential-shaped variable's value.
+
+    The old rule was a two-name allow-list, which failed open for every new
+    `SWARM_*_KEY`/`*_TOKEN` field. The snapshot is explicitly safe to paste
+    into a public issue, so redaction is now the default for credential-shaped
+    names and the explicit set below documents the exceptions we know about.
+    """
+    leaf = name.split("_", 1)[-1].lower()
+    if (
+        leaf in SECRET_FIELDS
+        or name == "SWARM_SECRET"
+        or _SECRET_NAME_RE.search(name)
+    ):
         return {"variable": name, "set": bool((value or "").strip()), "value": None}
     return {"variable": name, "set": bool((value or "").strip()), "value": value}
 

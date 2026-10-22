@@ -360,10 +360,15 @@ def check_exposure() -> list[dict[str, Any]]:
             "Bind to 127.0.0.1 and put auth plus TLS in front, or set SWARM_SYSTEM=0.",
         ))
     if not settings.secret_configured():
+        # No fallback key exists: storing a credential is refused, and a row
+        # sealed under an earlier secret cannot be read without it. Say that
+        # instead of implying a public default would cover for the missing key.
         rows.append(_check(
             "secret", WARN,
-            "SWARM_SECRET is unset: stored provider keys fall back to a public default",
-            "Set SWARM_SECRET to a private random string before connecting providers.",
+            "SWARM_SECRET is unset: connecting a provider is refused, and any "
+            "already-stored key cannot be read",
+            "Set SWARM_SECRET to a private random string and keep it — rotating "
+            "it makes stored keys need reconnecting. SWARM_DEMO=1 needs no key.",
         ))
     else:
         rows.append(_check("secret", OK, "SWARM_SECRET is set"))

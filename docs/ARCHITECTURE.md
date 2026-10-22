@@ -20,6 +20,7 @@ backend/main.py      routes, auth deps, rate limit, WS Hub, trigger logic
         ├── backend/work.py        work sessions (the unified event seam)
         ├── backend/v2.py          workflows, runs, run_events, artifacts, OAuth
         ├── backend/agent.py       one agent turn: context -> provider -> tools
+        ├── backend/policy.py      side-effect classes + per-call tool verdicts
         ├── backend/ai_support/    provider catalog, credential store, resolver
         ├── backend/tools/         registry: builtin + custom + plugin tools
         ├── backend/context.py     per-turn context budget assembly
@@ -32,6 +33,36 @@ Startup is `lifespan()` in `backend/main.py`: `db.init_db()`, `v2.init_db()`,
 `v2.recoverable_runs()`, `work.recover_interrupted()`, `tools.system.hydrate_root()`,
 `reload_registry()`, then the routine scheduler (`_routine_loop`, 20 s tick)
 and the sandbox sweeper (`_gc_loop`, 300 s tick).
+
+## Registration and first admin
+
+`POST /api/register` (`api_register`) is the only unauthenticated write, so it
+has its own limiter and its own policy instead of sharing the per-handle write
+gap. `_register_limited` allows 20 attempts per five minutes per peer address
+(`request.client.host`, so it is not a handle an attacker chooses); it prunes
+its own 4096-entry map and, like `_rate_limited`, it is process-local — not a
+quota and not shared across workers.
+
+Three doors, each with its own proof:
+
+| Caller | Proof accepted |
+| --- | --- |
+| first administrator (no users yet) | loopback with no forwarding headers, or a configured `SWARM_SETUP_TOKEN` from a remote caller |
+| an existing administrator | its password; a passwordless admin instead needs loopback with no forwarding headers or a configured `SWARM_SETUP_TOKEN` |
+| everyone else | loopback, or `SWARM_INVITE_CODE` when it is set |
+
+Loopback means `_loopback_setup_ok`: `security.is_loopback` **and** no
+`X-Forwarded-For` or `Forwarded` header. Any proxy chain therefore fails
+closed and needs the setup token even when every visible address is local.
+Both tokens are compared with `hmac.compare_digest`, and an unauthenticated
+failure never reveals whether a handle exists or which role it holds
+(`"invalid credentials"`, `"invalid invite"`, `"registration is closed"`).
+
+Password guessing gets `_password_locked`: five failures per handle inside
+fifteen minutes return `429` before PBKDF2 runs. The bootstrap insert is
+`db.create_first_user`, which takes `BEGIN IMMEDIATE` before counting users, so
+concurrent first requests cannot all mint themselves admin; the losers receive
+`409 workspace already initialized`.
 
 ## Request flow: a human message that triggers an agent
 
@@ -130,7 +161,7 @@ flowchart TD
         ROUND["_complete_stream(client, model, messages,<br/>stream=True, tools=schemas)"]
         ROUND --> PARSE{"tool_calls returned?"}
         PARSE -->|no| REPLY["return {reply, tool_events, usage}"]
-        PARSE -->|yes| EXEC["_execute_tool -> ToolRegistry.execute<br/>(allowed list enforced)<br/>append {tool,args,result} to tool_events"]
+        PARSE -->|yes| EXEC["_execute_tool -> policy gate -><br/>ToolRegistry.execute<br/>(allowed list enforced)<br/>append {tool,args,result} to tool_events"]
         EXEC --> AGAIN["loop again (cap+1 rounds max)"]
         AGAIN --> ROUND
     end
@@ -172,9 +203,18 @@ flowchart TD
   Custom; see the file). Each row carries a `category`
   (`featured`/`frontier`/`open`/`fast`/`china`/`gateway`/`enterprise`/`local`/`cloud`)
   for the Connect → AI filter.
-- `store.py` — API keys and OAuth tokens are sealed with a XOR over
-  `sha256(SWARM_SECRET)` before they touch SQLite. Only `key_hint` is ever
-  returned by an API.
+- `store.py` — API keys and OAuth tokens are sealed with AES-256-GCM under a
+  `scrypt(SWARM_SECRET)` key before they touch SQLite. The format is versioned
+  (`v2:<base64url(nonce || ciphertext)>`), each value gets a fresh 96-bit
+  nonce, and the application name is bound as associated data, so a flipped
+  byte fails authentication instead of decrypting to garbage. Without
+  `SWARM_SECRET` the store raises `SealKeyMissing` rather than falling back to
+  a public literal. Legacy XOR blobs are still read and re-sealed in place on
+  the first successful decrypt; a blob that will not decrypt is logged, marks
+  the provider `needs_reconnect` in `status()`, and lets resolution continue to
+  the environment fallback. Only `key_hint` is ever returned by an API. The
+  resolve cache key includes a fingerprint of `SWARM_SECRET`, so rotating it
+  never serves a plaintext cached under the old key.
 - `resolver.py` — `resolve_runtime_auth()` (stored key → env fallback),
   `resolve_effective_model()` (override → `SWARM_AGENT_MODEL` → connected
   provider default → agent row), `iter_provider_attempts()` (ordered
@@ -198,22 +238,64 @@ second visible stream (`stream_announced` guard in `generate_reply`).
 
 ### Tool dispatch
 
-`backend/agent.py::_execute_tool` delegates to
+`backend/agent.py::_execute_tool` gates, then delegates to
 `backend/tools/registry.py::ToolRegistry.execute(name, args, ...)`:
 
-1. `if name not in allowed` → `(tool {name} is disabled for this agent)`.
-2. `BUILTIN_SCHEMAS` → `_exec_builtin`: sandbox file tools, memory and
+1. `if name not in allowed` → `(tool {name} is disabled for this agent)`,
+   before any approval row is minted. Asking a human to approve a call the
+   agent cannot make spends attention and grants nothing.
+2. `_policy_gate` → `policy.evaluate_tool(name, args, agent=...)`. This is in
+   the execution path, not in the prompt, because the offered tool list is
+   advisory and injected text can ask for anything:
+   - `DENY` — the name matches a hard-deny pattern
+     (`push_to_main`, `deploy_production`, …) or a destructive prefix
+     (`delete_`, `destroy_`, `drop_`, `wipe_`, `format_`, `rm_`). Raises
+     `PolicyDenied`; the registry is never reached.
+   - `ALLOW` — a fixed allow-list of reversible local work
+     (`write_workspace`, memory/knowledge/skill writes,
+     `request_approval`, `delegate_task`, `browser_screenshot`) plus the
+     read-only network tools (`browser_navigate`, `fetch_url`, `exa_search`,
+     `tavily_search`, `firecrawl_scrape`).
+   - `REVIEW` — everything else, including execution (`read_only_shell`,
+     `system_run`, `computer_run`, browser input, `cua_desktop`), local writes
+     the allow-list does not name (`system_write`, `create_agent`), and every
+     tool the registry does not classify (custom and plugin tools). A grant is
+     looked up for this exact `(agent, channel, tool,
+     sha256(canonical args))`, and if one is found it is consumed
+     (`db.consume_approval`, single use). Otherwise `db.ensure_bound_approval`
+     reuses or creates the pending row and `PolicyReviewRequired` is raised.
+3. `BUILTIN_SCHEMAS` → `_exec_builtin`: sandbox file tools, memory and
    knowledge tools, `read_only_shell` via `_run_shell_tool` (cwd = sandbox,
    10 s timeout, minimal PATH), `system_*` tools bound to `SWARM_SYSTEM_ROOT`,
    browser tools, search connectors, `create_agent`, `delegate_task`,
    `request_approval`, `computer_*`.
-3. `custom_tools` rows → `_exec_custom` (template handler).
-4. Plugin tools loaded from `plugins/*/manifest.json`, keyed
+4. `custom_tools` rows → `_exec_custom` (template handler).
+5. Plugin tools loaded from `plugins/*/manifest.json`, keyed
    `plugin:<slug>:<tool>` → `_exec_plugin`.
+
+`request_approval` schema accepts `tool` and `arguments` so the agent's own
+request is bound to the call it intends to make, not just to a prose label.
+`_run_approval_tool` stores that binding (`approvals.tool`, `args_hash`), the
+TTL (`settings.approval_ttl()`, default 900 s), and the requesting human
+(`db.last_human_author(channel_id)`), and appends an "Authorises exactly: …"
+line to the detail a human reads.
+
+A gated call ends the turn. `_run_with_client` turns the exception into an
+audited tool event tagged `{"blocked": "review"}` or `{"blocked": "deny"}`,
+breaks the loop, and the result text tells the model to stop. Letting it
+continue would retry the blocked call or route around the gate with another
+tool. If the blocked call came from `delegate_task`, `_execute_tool` scans the
+sub-agent's audit events and raises in the parent too, so a child waiting for
+approval cannot be bypassed by the parent keeping its turn. `_run_agent` then
+surfaces the pending row like any other approval and skips the handoff step
+(`depth < HANDOFF_DEPTH and not asked`).
 
 Schemas offered to the model are built by `ToolRegistry.schemas_for`, and
 `ToolRegistry.filter_allowed` drops unknown names from an agent's stored tool
-list.
+list. The workspace helpers (`_run_read_workspace`, `_run_write_workspace`)
+refuse any path `tools.system.is_protected_path` names, and the registry's
+`fetch_url` / `browser_navigate` refuse any destination that is not a public
+http(s) address (see the perimeter section).
 
 ## WebSocket fanout and where streamed tokens are persisted
 
@@ -289,7 +371,10 @@ One SQLite file at `SWARM_DB_PATH` (`/app/data/swarm.db` in Docker). No ORM:
 `SCHEMA` constants plus `ensure_schema()`.
 
 - `db.py` `SCHEMA` + `_ensure_schema()` — the chat core; additive only, via
-  `PRAGMA table_info` + `ALTER TABLE`.
+  `PRAGMA table_info` + `ALTER TABLE`. Six `approvals` columns (`tool`,
+  `args_hash`, `requested_by`, `resolved_by`, `expires_at`, `consumed_at`)
+  arrive this way, so an older database keeps its rows and its old rows simply
+  authorise no new call.
 - `v2.py` `SCHEMA` + `init_db()` — workflows/runs plus an `ALTER TABLE` that
   adds `ai_providers.auth_method`, `ai_providers.refresh_secret`,
   `ai_providers.expires_at`, and `runs.model`.
@@ -427,6 +512,12 @@ erDiagram
         TEXT status "pending|approved|denied"
         REAL created_at
         REAL resolved_at
+        TEXT tool "added by _ensure_schema"
+        TEXT args_hash "sha256 of canonical args"
+        TEXT requested_by "human who triggered the work"
+        TEXT resolved_by "handle that decided"
+        REAL expires_at "a grant without one authorises nothing"
+        REAL consumed_at "single-use claim"
     }
     reactions {
         INTEGER message_id PK
@@ -579,6 +670,12 @@ Entity notes worth knowing before reading the code:
   including after a `model_fallback`.
 - **`ai_providers.secret`** is sealed, not hashed. `key_hint` is a
   last-four hint. No endpoint returns the secret.
+- **`approvals`** is both an inbox row and a capability. `tool` + `args_hash`
+  say what it authorises, `expires_at` bounds it (default 900 s;
+  `SWARM_APPROVAL_TTL_SECONDS`, clamped to 30–86400), `requested_by` names the
+  human whose work triggered it, `consumed_at` makes it single use, and
+  `resolved_by` records who decided. A row with a NULL `expires_at` — every row
+  written before this layer — is never a grant.
 - **`work_events`** is the unified seam. `work.py` maps v2 run events onto
   work event types at read time (`run_started` → `work_started`,
   `step_completed` → `tool_finished`, …) and numbers them after the session's
@@ -617,21 +714,40 @@ messages.
 
 ## Approval flow
 
-The agent asks by calling the `request_approval` builtin, which
-(`agent._run_approval_tool`) writes an `approvals` row with status `pending`
-and sets the agent's status to `needs_approval`. The tool result tells the
-model to stop and not proceed. `_run_agent` then surfaces the row:
-`hub.broadcast_all({"type": "approval", ...})` and a `approval_requested`
-work event. No `work_completed` is emitted while an approval is pending.
+Two producers write an `approvals` row:
 
-A human resolves it at `POST /api/approvals/{id}/resolve`. That handler
-returns `409` if already resolved, resets the agent status to `idle`
+- **The agent asks.** `request_approval` → `_run_approval_tool` stores the
+  action label, the optional exact `tool`/`arguments` binding, the human whose
+  work triggered it (`db.last_human_author`), and `expires_at`, then sets the
+  agent's status to `needs_approval`. The tool result tells the model to stop.
+- **Server policy refuses a call.** `_policy_gate` found no valid grant for a
+  `REVIEW` call, so `db.ensure_bound_approval` reuses (or creates) the pending
+  row for that exact `(agent, channel, tool, args_hash)` and raises
+  `PolicyReviewRequired`. The turn ends with an audited `blocked: review`
+  tool event.
+
+`_run_agent` surfaces every pending row: `hub.broadcast_all({"type":
+"approval", ...})` and an `approval_requested` work event. No `work_completed`
+is emitted while an approval is pending, and the bot does not hand off — the
+next depth runs only when `asked` is false.
+
+A human resolves it at `POST /api/approvals/{id}/resolve`. The handler checks
+the caller can see the channel, returns `409` if already resolved, and — when
+`requested_by` is set and differs from the caller — allows only an admin to
+decide. Resolution writes `resolved_by`, resets the agent status to `idle`
 (broadcast to all), and posts a **`human`** message into the original channel:
 `"Approved: {action} — {detail}. Continue from here."` or
-`"Denied: {action} — {detail}. Do not proceed with that action."` Then it
-emits `approval_resolved` on any waiting session and calls
-`_maybe_trigger_agents` so the bot reads its own verdict in-channel and
-continues.
+`"Denied: {action} — {detail}. Do not proceed with that action."` Then it emits
+`approval_resolved` on any waiting session and resumes **only the bot that
+asked** (`db.fetch_agent(row["agent_name"])` → `_run_agent`), rather than
+re-triggering every member of a group room. A missing or archived bot falls
+back to the ordinary mention path.
+
+A grant is spent by the exact call it names. `db.find_approval_grant` matches
+agent, channel, tool, canonical argument hash, requester, `expires_at > now`,
+and `consumed_at IS NULL`; `db.consume_approval` then claims it with a
+conditional `UPDATE`, so a second caller cannot spend the same row. Changing
+one argument invalidates the grant and mints a new request.
 
 ## Multi-bot paths
 
@@ -663,15 +779,33 @@ continues.
 ## Perimeter, stated honestly
 
 - The shell sandbox is a working directory plus a timeout plus a minimal
-  PATH — **not** container or network isolation. Host-system tools
-  (`system_ls`, `system_read`, `system_write`, `system_run`) are bound to
-  `SWARM_SYSTEM_ROOT`.
+  PATH — **not** container or network isolation.
+- `system_*` tools are bound to `SWARM_SYSTEM_ROOT` (the Place picked in
+  Places → System); `computer_run` runs in the sandbox directory. Both require
+  `SWARM_SYSTEM=1`, `POST /api/computer/run` is admin-only and additionally
+  requires a configured computer provider, and an execution call still needs
+  its own approval.
+- Credential-shaped files are refused on read and on write by the file tools,
+  both preview routes, `read_workspace`/`write_workspace`, and
+  `computer_open` (`tools.system.is_protected_path`). A shell command is not
+  covered by that check: `tools/guard.py` is a denylist of destructive and
+  dotenv-reading commands, not a jail.
+- `fetch_url` and `browser_navigate` resolve the host and accept only public
+  http(s) answers; redirects are re-checked before they are followed. That
+  closes SSRF to loopback, private ranges, and cloud metadata — it is not an
+  egress firewall for a process that already runs.
+- Registration is closed to remote callers without `SWARM_SETUP_TOKEN` (first
+  admin), an admin password, or `SWARM_INVITE_CODE` (members), and the route is
+  limited per peer address. Rooms remain readable by every authenticated
+  member: `db.can_view_channel` only gates `people` DMs.
 - `_rate_limited` is a 500 ms per-handle minimum gap between writes, held in
   a process-local dict. It is not a quota and not multi-process.
+- Approvals are capability rows: bound to a tool plus its canonical argument
+  hash, single use, expiring, and scoped to the requester. `policy.evaluate_tool`
+  runs inside `_execute_tool`, so the chat path is inside policy now;
+  `routing.route` is still v2-only.
 - Langfuse tracing is best-effort and silent when
   `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are unset.
-- `backend/routing.py`, `backend/policy.py`, `backend/evals.py`, and
-  `backend/work_state.py` are reached from `/api/v2/*` routes and the work
-  view. They do not sit in the chat request path: `_run_agent` does not call
-  `policy.evaluate` or `routing.route`. The only approval gate on the chat
-  path is the agent calling `request_approval` itself.
+- `backend/routing.py`, `backend/evals.py`, and `backend/work_state.py` are
+  reached from `/api/v2/*` routes and the work view, not from the chat request
+  path.

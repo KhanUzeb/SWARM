@@ -26,11 +26,13 @@ everyone shares one key. It is also the biggest obstacle to treating a
 Swarm instance as anything other than a strictly private tool.
 
 **Status: planned.** No per-user column on `ai_providers`, no user id in
-the provider resolve path, no scoping on the connect routes. The seal
-itself (`SWARM_SECRET`) is already the right primitive, so this is
-mostly schema and resolution work: an additive column or table, a
-user-scoped lookup with workspace fallback, and a decision about
-whether a bot inherits its owner's credentials or a named bot's.
+the provider resolve path, no scoping on the connect routes. The storage
+primitive is already the right one — credentials are AES-256-GCM sealed under
+`SWARM_SECRET` with a per-value nonce and re-sealed from the legacy XOR format
+(`backend/ai_support/store.py`) — so this is mostly schema and resolution
+work: an additive column or table, a user-scoped lookup with workspace
+fallback, and a decision about whether a bot inherits its owner's credentials
+or a named bot's.
 
 ---
 
@@ -53,9 +55,12 @@ workspace run is the cheapest version that would force it.
 **Status: planned.** There is no container runtime anywhere in the tree.
 `backend/computer_providers.py` provides `local | none | fake` — the
 interface is the right shape (a container backend would slot in beside
-`local`), but no provider beyond `local` is implemented. The Docker
-image runs the whole app as an unprivileged user with `SWARM_SYSTEM_ROOT=/app`;
-that is process-level hygiene, not agent isolation.
+`local`), but no provider beyond `local` is implemented. Host execution is
+narrower than it was: `computer_run` and the `system_*` tools require
+`SWARM_SYSTEM=1`, the REST route is admin-only, and each execution call needs
+its own bound approval — that lowers the blast radius, it does not isolate
+anything. The Docker image runs the whole app as an unprivileged user with
+`SWARM_SYSTEM_ROOT=/app`; that is process-level hygiene, not agent isolation.
 
 ---
 
@@ -91,20 +96,29 @@ computer surfaces disabled or read-only, and a visible banner saying what
 is and isn't real.
 
 **Why:** it turns "here is a repo, clone it" into "here is a link", which
-is how most people will meet this. Today the honest posture is
-trusted-network-only: `POST /api/register` is open (first handle becomes
-admin), rooms are readable by any authenticated member
-(`db.can_view_channel` only gates `people` DMs), and `SWARM_SYSTEM`
-controls whether anyone reaching the port gets code execution. A public
-demo that ships without closing those is a liability for the operator.
+is how most people will meet this. The parts that did not need a demo mode
+have shipped as general hardening: `POST /api/register` is no longer an open
+door (loopback or `SWARM_SETUP_TOKEN` for the first admin, an admin password
+or `SWARM_SETUP_TOKEN` for an existing one, `SWARM_INVITE_CODE` for remote
+members, a 20-per-five-minutes peer limit, and a password lockout), host tools
+are off unless `SWARM_SYSTEM=1`, `POST /api/computer/run` is admin-only, and
+every execution call needs a bound, single-use approval. What still keeps this
+from being a demo mode is everything a stranger can do once admitted: rooms
+are readable by any authenticated member (`db.can_view_channel` only gates
+`people` DMs), storage and computer surfaces are not read-only, and nothing
+tells a visitor which replies are mock data.
 
-**Status: planned.** `SWARM_DEMO=1` exists and does something different —
-deterministic mock replies plus a seeded `#general` thread, for local
-development and the offline test suite. It does not restrict
-registration, disable tools, or bound the data. `warn_if_exposed` in
-`backend/tools/system.py` logs a loud warning when host tools are enabled
-on a non-loopback bind, which is the right direction and a log line, not
-a mode.
+**Status: planned, with groundwork shipped.** Registration controls, the
+host-execution opt-in with bound approvals, and the protected-file guard are
+shipped and covered by `tests/test_security_registration.py`,
+`tests/test_policy_gate.py`, and `tests/test_protected_files.py`. The mode
+itself is not, and these are the requirements still missing: closing room
+reads to a demo channel set, making the storage and computer surfaces
+read-only, bounding retention, and rendering a visible banner. `SWARM_DEMO=1`
+does something different today — deterministic mock replies plus a seeded
+`#general` thread, for local development and the offline test suite — and
+restricts nothing. `warn_if_exposed` in `backend/tools/system.py` is still a
+log line, not a mode.
 
 ---
 

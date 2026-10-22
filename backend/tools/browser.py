@@ -41,6 +41,35 @@ def status() -> dict[str, Any]:
     }
 
 
+def _url_is_public(url: str) -> bool:
+    """True for a blank page or a public http(s) destination."""
+    from .registry import _is_public_http_url
+
+    current = (url or "").strip()
+    if current in ("", "about:blank"):
+        return True
+    return _is_public_http_url(current)
+
+
+async def _blank_if_private(page: Any) -> bool:
+    """Call after anything that can navigate; True when the page is safe.
+
+    `navigate` checks its target, but a click, a form submit or client-side
+    script can still land on loopback or the metadata service. Reading the
+    resulting page (snapshot/screenshot) would leak it, so the surface that
+    reads always re-checks the URL and blanks the page rather than serving it.
+    """
+    global LAST_URL
+    if _url_is_public(page.url):
+        return True
+    try:
+        await page.goto("about:blank")
+    except Exception:  # noqa: BLE001 - blanking is best-effort
+        pass
+    LAST_URL = ""
+    return False
+
+
 async def _ensure_page():
     global _playwright, _browser, _context, _page, LAST_ERROR
     if not enabled():
@@ -85,10 +114,24 @@ async def navigate(url: str) -> str:
     async with _lock:
         try:
             page = await _ensure_page()
+            # A headless browser is another network client: without this check
+            # `http://127.0.0.1:8000` renders the app's own API and
+            # `169.254.169.254` renders cloud metadata. The browser stays
+            # disabled when Playwright is absent, so this check runs only when
+            # there is a real page to protect.
+            if not _url_is_public(target):
+                return "(url must name a public http(s) address)"
             await page.goto(target, wait_until="domcontentloaded", timeout=20_000)
+            if not _url_is_public(page.url):
+                # A public URL can redirect to the metadata service. Do not
+                # report that page's title or leave it loaded for a later
+                # snapshot.
+                await page.goto("about:blank")
+                LAST_URL = ""
+                return "(redirected to a non-public address)"
             LAST_URL = page.url
             title = await page.title()
-            return f"opened {LAST_URL} — {title}"
+            return f"opened {LAST_URL} - {title}"
         except Exception as exc:  # noqa: BLE001
             LAST_ERROR = str(exc)
             if "playwright" in str(exc).lower() or "SWARM_BROWSER" in str(exc):
@@ -113,9 +156,15 @@ def navigate_sync(url: str) -> str:
 
 
 async def snapshot() -> str:
+    global LAST_URL
     async with _lock:
         try:
             page = await _ensure_page()
+            if not await _blank_if_private(page):
+                return (
+                    "(blocked — the open page is not a public http(s) "
+                    "address; it was closed. Navigate to a public URL.)"
+                )
             LAST_URL = page.url
             title = await page.title()
             text = await page.inner_text("body")
@@ -134,6 +183,7 @@ async def snapshot() -> str:
 
 
 async def click(selector: str) -> str:
+    global LAST_URL
     sel = (selector or "").strip()
     if not sel:
         return "(need a CSS selector)"
@@ -141,6 +191,11 @@ async def click(selector: str) -> str:
         try:
             page = await _ensure_page()
             await page.click(sel, timeout=8_000)
+            if not await _blank_if_private(page):
+                return (
+                    "(clicked, but the page left the public http(s) space; "
+                    "it was closed. Navigate to a public URL.)"
+                )
             LAST_URL = page.url
             return f"clicked {sel} — now {LAST_URL}"
         except Exception as exc:  # noqa: BLE001
@@ -166,6 +221,11 @@ async def press(key: str) -> str:
         try:
             page = await _ensure_page()
             await page.keyboard.press(name)
+            if not await _blank_if_private(page):
+                return (
+                    f"pressed {name}, but the page left the public http(s) "
+                    "space; it was closed. Navigate to a public URL."
+                )
             return f"pressed {name}"
         except Exception as exc:  # noqa: BLE001
             return f"(browser press error: {exc})"
@@ -185,9 +245,16 @@ async def wait(ms: int = 1000) -> str:
 
 async def screenshot() -> str:
     from .computer import sandbox_dir
+    global LAST_URL
     async with _lock:
         try:
             page = await _ensure_page()
+            if not await _blank_if_private(page):
+                return (
+                    "(blocked — the open page is not a public http(s) "
+                    "address; it was closed. Downloading it would leak a "
+                    "private page.)"
+                )
             folder = sandbox_dir() / "screenshots"
             folder.mkdir(parents=True, exist_ok=True)
             name = f"browser-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.png"
