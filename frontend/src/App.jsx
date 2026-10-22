@@ -101,16 +101,30 @@ export default function App() {
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef(null);
   const intentionalClose = useRef(false);
+  // The queue ref is what a drain reads, and persistOutbox advances it
+  // synchronously; it is never re-derived from a render for that reason.
   const outboxRef = useRef(outbox);
-  outboxRef.current = outbox;
   const wsStatusRef = useRef(wsStatus);
   wsStatusRef.current = wsStatus;
   const flushChain = useRef(Promise.resolve());
+  const outboxRetryTimer = useRef(null);
+  const outboxRetryChannel = useRef(null);
+  const outboxBackoff = useRef(1000);
+  const lastWriteAt = useRef(0);
+  const [outboxRetryTick, setOutboxRetryTick] = useState(0);
   const tokenRef = useRef(token);
   const channelRef = useRef(channel);
   tokenRef.current = token; channelRef.current = channel;
   const ingestWorkEventRef = useRef(null);
   const handleChannelDeletedRef = useRef(null);
+
+  useEffect(() => () => {
+    if (outboxRetryTimer.current) {
+      window.clearTimeout(outboxRetryTimer.current);
+      outboxRetryTimer.current = null;
+      outboxRetryChannel.current = null;
+    }
+  }, []);
 
   const current = channels.find(c => c.id === channel) || { id: channel, name: channel, topic: "" };
   const bot = allAgents.find(a => a.dm_channel_id === channel);
@@ -167,8 +181,7 @@ export default function App() {
   ingestWorkEventRef.current = ingestWorkEvent;
   handleChannelDeletedRef.current = handleChannelDeleted;
 
-  const remember = useCallback((m) => {
-    const channelKey = channelRef.current;
+  const remember = useCallback((m, channelKey = channelRef.current) => {
     const previousId = lastSeenId.current[channelKey] || 0;
     if (m.id && m.id > previousId) lastSeenId.current[channelKey] = m.id;
     setMessages(prev => ({ ...prev, [m.id]: m }));
@@ -518,10 +531,17 @@ export default function App() {
     setUser(null); setToken(null);
   }
 
-  async function authenticate(handle, password, failMessage = "Sign-in failed") {
+  async function authenticate(handle, password, failMessage = "Sign-in failed", setupAccess = null) {
     // handleLogin and handleSetup were two copies of this same POST with
     // different error strings, so a fix applied to one left the other wrong.
-    const res = await apiJson("/api/register", { method: "POST", body: { handle, password } });
+    const accessFields = setupAccess?.kind === "bootstrap"
+      ? { setup_token: setupAccess.value }
+      : setupAccess?.kind === "invite"
+        ? { invite: setupAccess.value }
+        : setupAccess?.kind === "either"
+          ? { setup_token: setupAccess.value, invite: setupAccess.value }
+          : {};
+    const res = await apiJson("/api/register", { method: "POST", body: { handle, password, ...accessFields } });
     if (!res.ok) throw new Error(res.data?.detail || failMessage);
     disconnectWs();
     bustCache(); // everything cached was fetched under the previous token
@@ -540,7 +560,7 @@ export default function App() {
   }
 
   const handleLogin = (handle, password) => authenticate(handle, password);
-  const handleSetup = (handle, password) => authenticate(handle, password, "Could not create the account");
+  const handleSetup = (handle, password, access) => authenticate(handle, password, "Could not create the account", access);
 
   // ── Effects ──
   useEffect(() => {
@@ -620,14 +640,16 @@ export default function App() {
   }, [user]);
 
   function persistOutbox(next) {
-    // Callers pass updater functions (queueMessage/pruneOutbox/flush drain),
-    // so resolve inside setOutbox: stringifying the function itself stored
-    // "undefined" and lost the queue on reload.
-    setOutbox(prev => {
-      const value = typeof next === "function" ? next(prev) : next;
-      try { localStorage.setItem("swarm.outbox", JSON.stringify(value)); } catch { /* private mode */ }
-      return value;
-    });
+    // Resolve against the ref, then publish to the ref and the state together.
+    // A drain drops an entry and returns without yielding, and the next chained
+    // drain reads this ref the moment the call returns — before React can
+    // commit the setState — so a ref refreshed only during render re-POSTed the
+    // last entry of every multi-message queue. Resolving here also keeps the
+    // setState updater pure (StrictMode runs it twice).
+    const value = typeof next === "function" ? next(outboxRef.current) : next;
+    outboxRef.current = value;
+    try { localStorage.setItem("swarm.outbox", JSON.stringify(value)); } catch { /* private mode */ }
+    setOutbox(value);
   }
 
   /** Drop queued messages that were typed as somebody else. Signing out of one
@@ -635,8 +657,12 @@ export default function App() {
    *  account's unsent messages into the second one's channels. */
   function pruneOutbox(handle) {
     persistOutbox(prev => Object.fromEntries(
-      Object.entries(prev).filter(([, list]) =>
-        (list || []).length > 0 && (list || []).every(e => e.author === handle)),
+      Object.entries(prev)
+        .map(([channelId, list]) => [
+          channelId,
+          (list || []).filter(e => e.author === handle),
+        ])
+        .filter(([, list]) => list.length > 0),
     ));
   }
 
@@ -648,7 +674,9 @@ export default function App() {
   async function sendMessage(text, parentId = null, opts = null) {
     if (!tokenRef.current) return false;
     const model = (opts && "model" in opts ? opts.model : chatModel) || null;
-    const channelId = channelRef.current;
+    // A retry carries the channel its text was typed in, so a failure that
+    // surfaces after the user switched rooms can never land in the wrong one.
+    const channelId = (opts && opts.channelId) || channelRef.current;
     const author = user.handle;
     const body = { author, body: text, author_kind: "human", parent_id: parentId };
     if (model) body.model = model;
@@ -672,11 +700,13 @@ export default function App() {
           flash("Connection lost — message queued, will send on reconnect", "warning");
           return true;
         }
-        setSendFailure({ text, parentId, model, detail: res.data?.detail || "Message could not be sent" });
+        setSendFailure({ text, parentId, model, channelId, detail: res.data?.detail || "Message could not be sent" });
         return false;
       }
-      setSendFailure(prev => (prev?.text === text && prev?.parentId === parentId ? null : prev));
-      remember(res.data);
+      setSendFailure(prev => (
+        prev?.text === text && prev?.parentId === parentId && prev?.channelId === channelId ? null : prev
+      ));
+      remember(res.data, channelId);
       loadContextStats(channelId);
       return true;
     } catch {
@@ -698,20 +728,9 @@ export default function App() {
     flushChain.current = flushChain.current.then(async () => {
       if (wsStatusRef.current !== "connected" || !tokenRef.current) return;
       const channelId = channelRef.current;
+      const sessionToken = tokenRef.current;
       const pending = [...(outboxRef.current[channelId] || [])];
-      for (const entry of pending) {
-        const body = { author: entry.author, body: entry.text, author_kind: "human", parent_id: entry.parentId };
-        if (entry.model) body.model = entry.model;
-        let res;
-        try {
-          res = await apiJson(`/api/channels/${channelId}/messages`, {
-            token: tokenRef.current, method: "POST", body,
-          });
-        } catch {
-          return; // offline again — keep the rest queued
-        }
-        if (!res.ok) return; // e.g. rate-limited — keep the rest queued
-        if (res.data) remember(res.data);
+      const drop = (entry) => {
         persistOutbox(prev => {
           const list = prev[channelId] || [];
           const at = list.indexOf(entry);
@@ -721,11 +740,94 @@ export default function App() {
           else delete next[channelId];
           return next;
         });
+      };
+      // A live socket can still sit next to a failing HTTP write path. Without
+      // a retry the queue only drains when the user happens to type again, so
+      // a single 429 used to strand every later message.
+      const retryLater = (delay) => {
+        outboxBackoff.current = Math.min(outboxBackoff.current * 2, 30000);
+        if (outboxRetryTimer.current) return;
+        outboxRetryChannel.current = channelId;
+        outboxRetryTimer.current = window.setTimeout(() => {
+          outboxRetryTimer.current = null;
+          outboxRetryChannel.current = null;
+          setOutboxRetryTick(n => n + 1);
+        }, delay);
+      };
+      for (let i = 0; i < pending.length; i += 1) {
+        // Signing out or switching accounts mid-drain leaves the rest of this
+        // queue without an owner; never post it under the next session.
+        if (tokenRef.current !== sessionToken) return;
+        const entry = pending[i];
+        const body = { author: entry.author, body: entry.text, author_kind: "human", parent_id: entry.parentId };
+        if (entry.model) body.model = entry.model;
+        // The backend spaces writes 500 ms apart per handle. Pace from one
+        // timestamp so a 429 retry and the first POST of the next chained
+        // drain wait too, instead of racing the write that just landed.
+        const post = async () => {
+          const wait = lastWriteAt.current + 550 - Date.now();
+          if (wait > 0) await new Promise((resolve) => window.setTimeout(resolve, wait));
+          lastWriteAt.current = Date.now();
+          return apiJson(`/api/channels/${channelId}/messages`, {
+            token: sessionToken, method: "POST", body,
+          });
+        };
+        let res;
+        try {
+          res = await post();
+        } catch {
+          retryLater(outboxBackoff.current);
+          return; // offline again — keep the rest queued
+        }
+        if (res.status === 429) {
+          // Rate-limited: wait out the window once, exactly like the live
+          // composer does.
+          await new Promise((resolve) => window.setTimeout(resolve, 650));
+          try {
+            res = await post();
+          } catch {
+            retryLater(outboxBackoff.current);
+            return;
+          }
+        }
+        if (!res.ok) {
+          if (res.status === 401) {
+            sessionExpired();
+            return;
+          }
+          if (res.status === 0 || res.status === 408 || res.status === 429 || res.status >= 500) {
+            retryLater(res.status === 429 ? 1500 : outboxBackoff.current);
+            return;
+          }
+          // A permanent 4xx will never succeed. Drop this one entry so it
+          // cannot block the messages behind it, then stop: the rest of the
+          // queue stays intact, and surfacing one text at a time keeps the
+          // banner from overwriting — and losing — an earlier failure.
+          setSendFailure({
+            text: entry.text,
+            parentId: entry.parentId,
+            model: entry.model,
+            channelId,
+            detail: res.data?.detail || "Message could not be sent",
+          });
+          drop(entry);
+          return;
+        }
+        outboxBackoff.current = 1000;
+        // Only the channel that armed the retry may cancel it: another
+        // channel's successful drain must not strand this queue.
+        if (outboxRetryTimer.current && outboxRetryChannel.current === channelId) {
+          window.clearTimeout(outboxRetryTimer.current);
+          outboxRetryTimer.current = null;
+          outboxRetryChannel.current = null;
+        }
+        if (res.data) remember(res.data, channelId);
+        drop(entry);
       }
       loadContextStats(channelId);
     }).catch(() => { /* one drain must never break the chain */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsStatus, outbox, channel]);
+  }, [wsStatus, outbox, channel, outboxRetryTick]);
 
   async function stopChat() {
     try {
@@ -745,8 +847,8 @@ export default function App() {
 
   async function retryFailedSend() {
     if (!sendFailure) return;
-    const { text, parentId, model } = sendFailure;
-    const ok = await sendMessage(text, parentId, { model });
+    const { text, parentId, model, channelId } = sendFailure;
+    const ok = await sendMessage(text, parentId, { model, channelId });
     if (ok) setSendFailure(null);
   }
 
@@ -1042,7 +1144,7 @@ export default function App() {
 
         {mainView === "talk" && (
           <>
-            {sendFailure && !threadId && (
+            {sendFailure && !threadId && sendFailure.channelId === channel && (
               <div className="send-failure-banner" role="alert">
                 <span className="send-failure-text">{sendFailure.detail}</span>
                 <div className="send-failure-actions">
@@ -1073,7 +1175,7 @@ export default function App() {
               placeholder={`Message ${current.name}…`}
               workingWith={workingWith}
               offline={wsStatus === "offline"}
-              sendFailed={!!sendFailure && !threadId}
+              sendFailed={!!sendFailure && !threadId && sendFailure.channelId === channel}
               contextStats={contextStats}
               contextError={contextError}
               onRefreshContext={() => loadContextStats(channelRef.current)}

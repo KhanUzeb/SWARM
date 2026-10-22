@@ -4,9 +4,14 @@ import { Input } from "@/components/ui/input";
 import { Lamp } from "@/components/Flap";
 import { Shield } from "lucide-react";
 
+type SetupAccess =
+  | { kind: "bootstrap"; value: string }
+  | { kind: "invite"; value: string }
+  | { kind: "either"; value: string };
+
 interface LoginScreenProps {
   onLogin: (handle: string, pass: string) => Promise<void> | void;
-  onSetup: (handle: string, pass: string) => Promise<void> | void;
+  onSetup: (handle: string, pass: string, access: SetupAccess) => Promise<void> | void;
   /** Whether the backend answered the public status probe. This screen never
    *  has a chat socket — the lamp used to read that and so sat on "Relay not
    *  ready" over a perfectly healthy server, for ever. */
@@ -19,6 +24,7 @@ interface LoginScreenProps {
 export function LoginScreen({ onLogin, onSetup, relayReady, onboarded, demoMode }: LoginScreenProps) {
   const [handle, setHandle] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [accessCode, setAccessCode] = React.useState("");
   const [mode, setMode] = React.useState<"login" | "setup">("login");
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -35,7 +41,8 @@ export function LoginScreen({ onLogin, onSetup, relayReady, onboarded, demoMode 
       if (mode === "login") {
         await onLogin(handle.trim(), password);
       } else {
-        await onSetup(handle.trim(), password);
+        const kind = onboarded === false ? "bootstrap" : onboarded === true ? "invite" : "either";
+        await onSetup(handle.trim(), password, { kind, value: accessCode.trim() });
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign-in failed. Try again.");
@@ -100,7 +107,7 @@ export function LoginScreen({ onLogin, onSetup, relayReady, onboarded, demoMode 
               {/* The backend only asks for a minimum length, and only on the
                   first account — "required" was true for neither of the two
                   paths it was shown on. */}
-              {mode === "setup" && <span className="reg reg-hold"> optional, 4 characters or more</span>}
+              {mode === "setup" && firstAccount && <span className="reg reg-hold"> optional; at least 8 characters if set</span>}
             </label>
             <Input
               id="login-pass"
@@ -108,9 +115,33 @@ export function LoginScreen({ onLogin, onSetup, relayReady, onboarded, demoMode 
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder={mode === "setup" ? "Choose a password" : "Your password"}
+              minLength={mode === "setup" && firstAccount ? 8 : undefined}
               autoComplete={mode === "setup" ? "new-password" : "current-password"}
             />
           </div>
+
+          {mode === "setup" && (
+            <details className="panel-note">
+              <summary style={{ cursor: "pointer" }}>
+                Remote setup or account invite
+              </summary>
+              <p style={{ marginTop: 6, lineHeight: 1.55 }}>
+                Use the setup token for the first administrator or the invite code for another account.
+              </p>
+              <div className="login-row">
+                <label className="field-label" htmlFor="login-access-code">
+                  {onboarded === false ? "Setup token" : onboarded === true ? "Invite code" : "Setup token or invite code"}
+                </label>
+                <Input
+                  id="login-access-code"
+                  type="password"
+                  value={accessCode}
+                  onChange={(e) => setAccessCode(e.target.value)}
+                  autoComplete="off"
+                />
+              </div>
+            </details>
+          )}
 
           {error && (
             <div className="login-error" role="alert">
@@ -172,6 +203,7 @@ export function LoginScreen({ onLogin, onSetup, relayReady, onboarded, demoMode 
                 className="btn btn-ghost btn-sm"
                 onClick={() => {
                   setMode("login");
+                  setAccessCode("");
                   setError("");
                 }}
               >

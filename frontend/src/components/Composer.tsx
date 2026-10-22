@@ -84,6 +84,13 @@ export function Composer({
   prefill,
   onPrefillConsumed,
 }: ComposerProps) {
+  // The main composer and the thread composer can be mounted together, so
+  // their listbox/description ids have to be unique per instance.
+  const ids = React.useId();
+  const mentionListId = `${ids}-mentions`;
+  const commandListId = `${ids}-commands`;
+  const keyHintId = `${ids}-key-hint`;
+  const offlineNoteId = `${ids}-offline-note`;
   const [draft, setDraft] = React.useState("");
   const [mention, setMention] = React.useState<{
     open: boolean;
@@ -161,7 +168,7 @@ export function Composer({
     const value = e.target.value;
     setDraft(value);
 
-    const match = value.match(/(?:^|\s)@(\w*)$/);
+    const match = value.match(/(?:^|\s)@([\w.-]*)$/);
     if (match) {
       const query = match[1].toLowerCase();
       const items = allMentions().filter((m) =>
@@ -292,13 +299,19 @@ export function Composer({
   }, [prefill, onPrefillConsumed]);
 
   React.useEffect(() => {
-    if (mention.open && mentionRef.current) {
-      const el = mentionRef.current.children[mention.index] as HTMLElement;
-      el?.scrollIntoView({ block: "nearest" });
-    }
+    if (!mention.open || !mentionRef.current) return;
+    // The list opens with a section row, so indexing children by the option
+    // index scrolled one item short. Ask for the highlighted option itself.
+    const el = mentionRef.current.querySelector<HTMLElement>('[aria-selected="true"]');
+    el?.scrollIntoView({ block: "nearest" });
   }, [mention.index, mention.open]);
 
   const canSend = draft.trim().length > 0;
+  // A popup only exists when its list actually renders. `slash.open` goes true
+  // for any unfinished "/word", while the command list renders only on a match,
+  // so the combobox must not claim an expanded, controllable popup without one.
+  const mentionOpen = mention.open && mention.items.length > 0;
+  const commandOpen = slash.open && slashItems().length > 0;
   const ctxPct =
     contextStats && contextStats.budget_chars
       ? Math.min(
@@ -361,7 +374,7 @@ export function Composer({
         // Defect: the held-message banner carried a hard-coded amber hex, a
         // third signal hue outside :root. `.send-failure-banner` already
         // declares the hold wash these words actually mean.
-        <div id="composer-offline-note" role="status" className="send-failure-banner">
+        <div id={offlineNoteId} role="status" className="send-failure-banner">
           <AlertCircle size={14} className="shrink-0" />
           <span className="send-failure-text">
             No link to the workspace. This message is held and sent when the link comes back.
@@ -380,23 +393,25 @@ export function Composer({
 
       {/* A slab, docked. Not a floating pill. */}
       <div className="composer-row">
-        {mention.open && (
+        {mentionOpen && (
           <ul
             ref={mentionRef}
+            id={mentionListId}
             role="listbox"
             aria-label="Mention teammates"
             className="dropdown-menu"
             style={{ bottom: "calc(100% + 6px)", left: 0, width: 280 }}
           >
-            <li className="dropdown-section reg">Hand it to</li>
+            <li className="dropdown-section reg" role="presentation">Hand it to</li>
             {mention.items.map((item, i) => (
-              <li key={item.name}>
+              <li key={item.name} role="presentation">
                 <button
                   type="button"
+                  id={`${mentionListId}-${i}`}
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    insertMention(item);
                   }}
+                  onClick={() => insertMention(item)}
                   role="option"
                   aria-selected={i === mention.index}
                   className="dropdown-item"
@@ -414,22 +429,24 @@ export function Composer({
           </ul>
         )}
 
-        {slash.open && slashItems().length > 0 && (
+        {commandOpen && (
           <ul
+            id={commandListId}
             role="listbox"
             aria-label="Commands"
             className="dropdown-menu"
             style={{ bottom: "calc(100% + 6px)", left: 0, width: 320 }}
           >
-            <li className="dropdown-section reg">Commands</li>
+            <li className="dropdown-section reg" role="presentation">Commands</li>
             {slashItems().map((item, i) => (
-              <li key={item.name}>
+              <li key={item.name} role="presentation">
                 <button
                   type="button"
+                  id={`${commandListId}-${i}`}
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    insertCommand(item);
                   }}
+                  onClick={() => insertCommand(item)}
                   role="option"
                   aria-selected={i === slash.index}
                   className="dropdown-item"
@@ -502,11 +519,33 @@ export function Composer({
           onKeyDown={handleKeyDown}
           placeholder={placeholder || `Message ${channelName || "this room"} — @ to hand it to a teammate, / for commands`}
           rows={1}
+          role="combobox"
+          aria-autocomplete="list"
           aria-label={placeholder || `Message ${channelName || "this room"}`}
-          aria-expanded={mention.open || slash.open}
-          aria-describedby={offline ? "composer-offline-note" : undefined}
+          aria-expanded={mentionOpen || commandOpen}
+          aria-controls={
+            mentionOpen
+              ? mentionListId
+              : commandOpen
+                ? commandListId
+                : undefined
+          }
+          aria-activedescendant={
+            mentionOpen
+              ? `${mentionListId}-${mention.index}`
+              : commandOpen
+                ? `${commandListId}-${slash.index}`
+                : undefined
+          }
+          aria-describedby={[offline ? offlineNoteId : null, keyHintId]
+            .filter(Boolean)
+            .join(" ")}
           className="composer-input"
         />
+        <span id={keyHintId} className="sr-only">
+          Enter sends the message. Shift+Enter adds a new line. When the teammate
+          or command list is open, Enter picks the highlighted item instead.
+        </span>
 
         <button
           type="button"
@@ -515,6 +554,9 @@ export function Composer({
               const prefix = d && !/\s$/.test(d) ? `${d} ` : d;
               return `${prefix}@`;
             });
+            // One popup at a time: a "/" list left open would render over this
+            // one while aria-controls could only describe a single listbox.
+            setSlash({ open: false, index: 0 });
             const items = allMentions();
             setMention({ open: items.length > 0, index: 0, items, query: "" });
             inputRef.current?.focus();

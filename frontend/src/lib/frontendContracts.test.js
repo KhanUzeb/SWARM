@@ -56,6 +56,17 @@ describe("websocket frame contract (backend/main.py hub broadcasts)", () => {
   });
 });
 
+describe("registration access contract", () => {
+  test("the setup form sends bootstrap and invite credentials to the matching API fields", async () => {
+    const app = await src("App.jsx");
+    const login = await src("components/LoginScreen.tsx");
+    expect(app).toContain("setup_token: setupAccess.value");
+    expect(app).toContain("invite: setupAccess.value");
+    expect(login).toContain("Remote setup or account invite");
+    expect(login).toContain("at least 8 characters if set");
+  });
+});
+
 describe("outbox drain decision", () => {
   test("drains only over a live socket with queued entries", () => {
     expect(shouldFlushOutbox("connected", 2)).toBe(true);
@@ -71,7 +82,10 @@ describe("outbox drain decision", () => {
     // outbox among its dependencies.
     const app = await src("App.jsx");
     expect(app).toContain("shouldFlushOutbox");
-    expect(app).toContain("[wsStatus, outbox, channel]");
+    expect(app).toContain("[wsStatus, outbox, channel, outboxRetryTick]");
+    // A 429 or outage must schedule another drain instead of stranding the
+    // queue until the user types again.
+    expect(app).toContain("retryLater(");
   });
 });
 
@@ -412,5 +426,75 @@ describe("places and connect are first-class destinations", () => {
     expect(panel).toContain('role="group"');
     expect(panel).toContain("aria-current");
     expect(panel).not.toContain("onKeyDown");
+  });
+});
+
+describe("outbox retry keeps every queued message recoverable", () => {
+  test("the queue ref advances synchronously, so a chained drain cannot re-send", async () => {
+    // A drain drops its last entry and returns without yielding, and the next
+    // chained drain reads outboxRef before React commits the setState — so a
+    // ref refreshed only during render POSTed that entry a second time.
+    const app = await src("App.jsx");
+    expect(app).toContain("next(outboxRef.current)");
+    expect(app).toContain("outboxRef.current = value");
+  });
+
+  test("a permanent rejection surfaces one text and leaves the rest queued", async () => {
+    // Dropping every 4xx while overwriting one banner slot destroyed every
+    // queued text except the last (a deleted room 404s the whole queue).
+    const app = await src("App.jsx");
+    const start = app.indexOf("A permanent 4xx");
+    expect(start).toBeGreaterThan(-1);
+    const block = app.slice(start, app.indexOf("loadContextStats(channelId);", start));
+    expect(block).toContain("drop(entry);");
+    expect(block).toContain("return;");
+    expect(block).not.toContain("continue;");
+    // 408 is the gateway giving up on a slow request, not a rejected message.
+    expect(app).toContain("res.status === 408");
+  });
+
+  test("a retry goes back to the room the text was typed in", async () => {
+    // sendMessage read only the live channel, so a failure that surfaced after
+    // a room switch was retried into whichever room was open at the time.
+    const app = await src("App.jsx");
+    expect(app).toContain("const channelId = (opts && opts.channelId) || channelRef.current;");
+    expect(app).toContain("sendFailure.channelId === channel");
+    expect(app).toContain("remember(res.data, channelId)");
+  });
+
+  test("a drain that outlives its session stops posting", async () => {
+    // A drain sleeping between entries could resume after sign-out and post
+    // under the next session's token.
+    const app = await src("App.jsx");
+    expect(app).toContain("const sessionToken = tokenRef.current;");
+    expect(app).toContain("if (tokenRef.current !== sessionToken) return;");
+  });
+});
+
+describe("transcript and composer accessibility", () => {
+  test("the stream row is inert, not aria-hidden over focusable markdown", async () => {
+    // RichBody emits real links, so aria-hidden left focusable children that
+    // announced nothing (axe aria-hidden-focus) and killed the "is writing"
+    // note rendered inside it.
+    const list = await src("components/MessageList.tsx");
+    expect(list).toContain("inert={true}");
+    expect(list).toContain("still writing");
+  });
+
+  test("the log is one scrollport with one name, and history loads silently", async () => {
+    const list = await src("components/MessageList.tsx");
+    // No `.log-scroll` rule exists in styles.css, so the class was a no-op.
+    expect(list).not.toContain("log-scroll");
+    expect(list).toContain('aria-label={channelId ? "Channel transcript" : "Thread transcript"}');
+    expect(list).toContain('aria-live={loadingMore ? "off" : "polite"}');
+  });
+
+  test("the combobox only claims a popup that is rendered", async () => {
+    const composer = await src("components/Composer.tsx");
+    // slash.open goes true for any unfinished "/word" while the command list
+    // renders only on a match, so aria-expanded pointed at a missing popup.
+    expect(composer).toContain("const commandOpen = slash.open && slashItems().length > 0;");
+    expect(composer).not.toContain("aria-expanded={mention.open || slash.open}");
+    expect(composer).toContain("setSlash({ open: false, index: 0 });");
   });
 });

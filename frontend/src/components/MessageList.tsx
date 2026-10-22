@@ -223,7 +223,17 @@ export function MessageList({
   // ── Empty room: the board is set, nothing has run on it yet ──
   if (roots.length === 0 && !loadingMore && liveStreams.length === 0 && !typing) {
     return (
-      <div id="log">
+      // A channel switch remounts the region: a live region's initial content
+      // is not announced, so the next room's backlog stays silent instead of
+      // being read out row by row.
+      <div
+        key={channelId || "thread"}
+        id={channelId ? "log" : undefined}
+        role="log"
+        aria-live="polite"
+        aria-label={channelId ? "Channel transcript" : "Thread transcript"}
+        tabIndex={channelId ? 0 : undefined}
+      >
         <div className="log-empty">
           <div className="talk-empty">
             <h2>{channelName ? channelName : "This room is empty"}</h2>
@@ -255,8 +265,28 @@ export function MessageList({
   }
 
   return (
-    <div id="log" ref={logRef} onScroll={handleScroll}>
-      <div className="log-inner">
+    <div
+      key={channelId || "thread"}
+      id={channelId ? "log" : undefined}
+      ref={logRef}
+      onScroll={handleScroll}
+      role="log"
+      // Prepend history silently: "Load earlier lines" must not make a reader
+      // recite the old backlog as if it had just arrived.
+      aria-live={loadingMore ? "off" : "polite"}
+      aria-relevant="additions"
+      aria-label={channelId ? "Channel transcript" : "Thread transcript"}
+      // Only the channel log is its own scrollport; the thread scrolls in
+      // .thread-body, so a focus stop here would be a dead one.
+      tabIndex={channelId ? 0 : undefined}
+    >
+      {/* Inside the thread panel the roll is not `#log`, so it would lose the
+          top and bottom breathing room that rule gives the channel transcript.
+          styles.css owns the values; this only restores them here. */}
+      <div
+        className="log-inner"
+        style={channelId ? undefined : { paddingTop: "var(--s6)", paddingBottom: "var(--s5)" }}
+      >
         {hasMore && (
           <div style={{ display: "grid", placeItems: "center", paddingBottom: 8 }}>
             <button onClick={onLoadMore} disabled={loadingMore} className="btn btn-ghost btn-sm" aria-live="polite">
@@ -298,7 +328,7 @@ export function MessageList({
           return (
             <React.Fragment key={m.id}>
               {dayLabel && (
-                <div className="day-sep" role="separator">
+                <div className="day-sep" role="heading" aria-level={2}>
                   {dayLabel}
                 </div>
               )}
@@ -330,11 +360,23 @@ export function MessageList({
           );
         })}
 
-        {/* Live lines: the machine is still setting type. */}
+        {/* Live lines: the machine is still setting type. The row is inert
+            while tokens land — a polite region would otherwise read the answer
+            out one keystroke at a time — and inert (not aria-hidden) also keeps
+            the partial markdown's links out of the tab order. One status line
+            outside the rows says who is writing. */}
+        {liveStreams.length > 0 && (
+          <p className="sr-only" role="status">
+            {liveStreams
+              .map(([author]) => allAgents.find((a) => a.name === author)?.display_name || author)
+              .join(", ")}{" "}
+            {liveStreams.length > 1 ? "are" : "is"} still writing
+          </p>
+        )}
         {liveStreams.map(([author, text]) => {
           const who = allAgents.find((a) => a.name === author);
           return (
-            <div className="entry streaming-entry" key={`stream-${author}`}>
+            <div className="entry streaming-entry" key={`stream-${author}`} inert={true}>
               <div className="entry-head">
                 <span className="entry-author">{who?.display_name || author}</span>
                 <span className="entry-time">now</span>
@@ -342,7 +384,6 @@ export function MessageList({
               <div className="entry-body">
                 <RichBody body={text} />
                 <span className="streaming-cursor" aria-hidden="true" />
-                <span className="sr-only">is still writing</span>
               </div>
             </div>
           );
@@ -496,6 +537,11 @@ const MessageRow = React.memo(function MessageRow({
             <span className="entry-time">{fmtTime(m.created_at)}</span>
             {agent?.job && !grouped && <span className="entry-job">{agent.job}</span>}
           </>
+        )}
+        {grouped && (
+          // Grouping is visual only: a screen reader landing on any row must
+          // still hear who wrote it and when.
+          <span className="sr-only">{label}, {fmtTime(m.created_at)}</span>
         )}
       </div>
 
@@ -656,7 +702,8 @@ function ReactionChips({
             key={emoji}
             onClick={() => onToggle(emoji)}
             className={`reaction ${mine ? "mine" : ""}`}
-            aria-label={`${emoji}${mine ? ", remove your reaction" : ", react"}`}
+            aria-pressed={mine}
+            aria-label={`${emoji}, ${counts[emoji] || 1} ${(counts[emoji] || 1) === 1 ? "reaction" : "reactions"}`}
           >
             <span>{emoji}</span>
             {counts[emoji] > 1 && <span>{counts[emoji]}</span>}
