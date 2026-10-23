@@ -100,7 +100,7 @@ export default function AppsPanel({ token, flash }) {
   return (
     <div className="panel-body apps-panel">
       <p className="panel-note">
-        Workspace connectors shared by every bot — search, scrape, apps, browser automation, and desktop drivers.
+        Workspace connectors shared by every bot: search, scrape, apps, browser automation, and desktop drivers.
       </p>
       <ul className="connector-grid">
         {!connectors.length && <li className="empty-state">Loading connectors…</li>}
@@ -120,7 +120,7 @@ export default function AppsPanel({ token, flash }) {
               </div>
             )}
             {c.kind === "cli" ? (
-              <p className="hint">Local install — no API key required.</p>
+              <p className="hint">Local install; no API key required.</p>
             ) : !c.connected ? (
               <form className="mini-form" onSubmit={(ev) => { ev.preventDefault(); connect(c.id); }}>
                 <input

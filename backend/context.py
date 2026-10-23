@@ -5,6 +5,11 @@ rooms silently blew past useful context and the knowledge base was never
 consulted. `build_context` assembles one budgeted package — recent
 history first, then memory notes, the channel summary, and knowledge
 hits — and reports what was dropped so the UI can show a context meter.
+
+Accounting contract: the `*_chars` breakdown keys describe prompt
+content actually loaded, and they sum to `total_chars` exactly. Count
+keys (`memory_notes`, `kb_hits`, `kb_docs`) describe store inventory or
+package items — never treat a count as metered content.
 """
 from __future__ import annotations
 
@@ -21,6 +26,21 @@ KB_CHARS = 2_500
 
 def _chars(value: str | None) -> int:
     return len(value or "")
+
+
+def _history_entry_chars(message: dict[str, Any]) -> int:
+    """Chars one history entry contributes to the metered package.
+
+    `_build_messages` prefixes human turns with the speaker's name
+    (`f"{author}: {body}"`), so that name is loaded prompt content; agent
+    turns render the body alone. The two-char `": "` join is not metered.
+    One helper so the pre-trim estimate, the trim loop, and the reported
+    breakdown can never drift apart.
+    """
+    body = _chars(message.get("body"))
+    if message.get("author_kind") == "agent":
+        return body
+    return body + _chars(message.get("author"))
 
 
 def _last_human_text(history: list[dict[str, Any]]) -> str:
@@ -65,7 +85,7 @@ async def build_context(
     kb_hits.sort(key=lambda h: (not h.get("boosted"), -(h.get("updated_at") or 0)))
 
     # Enforce the char budget: history first, then notes, then KB.
-    history_chars = sum(_chars(m.get("body")) + _chars(m.get("author")) for m in recent)
+    history_chars = sum(_history_entry_chars(m) for m in recent)
     notes_chars = sum(_chars(n.get("body")) for n in (notes or []))
     kb_chars = sum(_chars(h.get("body")) for h in kb_hits)
     summary_chars = _chars((summary or {}).get("body"))
@@ -91,9 +111,14 @@ async def build_context(
             total -= _chars(dropped_note.get("body"))
         else:
             dropped_msg = trimmed_history.pop(0)
-            total -= _chars(dropped_msg.get("body")) + _chars(dropped_msg.get("author"))
+            total -= _history_entry_chars(dropped_msg)
             extra_dropped += 1
 
+    # Loaded-content breakdown, recomputed from the kept package with the
+    # same arithmetic as the estimate and trim loop above, so the four
+    # char counts always sum to total_chars. `memory_notes`/`kb_hits`
+    # count kept package items; `dropped_messages` counts window overflow
+    # plus budget trims — they are counts, not metered characters.
     return {
         "history": trimmed_history,
         "notes": trimmed_notes,
@@ -102,8 +127,9 @@ async def build_context(
         "stats": {
             "budget_chars": budget_chars,
             "total_chars": total,
-            "history_chars": sum(_chars(m.get("body")) for m in trimmed_history),
+            "history_chars": sum(_history_entry_chars(m) for m in trimmed_history),
             "notes_chars": sum(_chars(n.get("body")) for n in trimmed_notes),
+            "summary_chars": _chars((summary or {}).get("body")),
             "kb_chars": sum(_chars(h.get("body")) for h in trimmed_kb),
             "messages": len(trimmed_history),
             "dropped_messages": dropped + extra_dropped,
@@ -118,12 +144,27 @@ async def build_context(
 async def context_stats(
     channel_id: str, agent_name: str | None = None, window: int = 12
 ) -> dict[str, Any]:
-    """Lightweight numbers for the composer's context meter (no model call)."""
+    """Lightweight numbers for the composer's context meter (no model call).
+
+    Two kinds of numbers, kept apart on purpose. `total_chars` and the
+    `*_chars` keys describe prompt content actually loaded — the windowed
+    history, plus the memory notes and channel summary `build_context`
+    would inject (same 12-note window, same arithmetic). Count keys
+    (`memory_notes`, `has_summary`, `kb_docs`) are store inventory: every
+    note the agent holds in scope and every KB doc it owns, metered or
+    not — reading an inventory count as loaded content is a UI bug.
+
+    KB prompt content is deliberately absent: hits are chosen per turn
+    from the turn query (last human line or routine tick) and then
+    budget-trimmed, which this path cannot know without a turn. `kb_chars`
+    stays None rather than implying an empty load.
+    """
     from . import knowledge as kb_mod
     history = await db.get_history(channel_id, limit=max(window * 2, window))
     usable = [m for m in history if m.get("author_kind") != "system"]
     recent = usable[-window:]
-    chars = sum(_chars(m.get("body")) for m in recent)
+    # Same metering as build_context so the meter tracks the package.
+    chars = sum(_history_entry_chars(m) for m in recent)
     out: dict[str, Any] = {
         "channel_id": channel_id,
         "window": window,
@@ -131,20 +172,18 @@ async def context_stats(
         "history_chars": chars,
         "messages": len(recent),
         "dropped_messages": max(0, len(usable) - len(recent)),
-        "has_summary": False,
-        "memory_notes": 0,
-        "kb_docs": 0,
+        # Inventory defaults to unknown (None), not zero: without an agent
+        # name there is no memory/KB owner to count, and a bare 0 would
+        # imply an empty load rather than an uncounted one.
+        "has_summary": None,
+        "memory_notes": None,
+        "kb_docs": None,
+        # Turn-scoped: a per-turn KB query is required before this is knowable.
+        "kb_chars": None,
     }
     if agent_name:
         counts = await db.count_memories(agent_name, channel_id)
         out["memory_notes"] = counts["notes"]
-        out["has_summary"] = counts["summaries"] > 0
-        try:
-            out["kb_docs"] = await kb_mod.count_docs(f"agent:{agent_name}")
-        except Exception:  # noqa: BLE001
-            out["kb_docs"] = 0
-        # Count what build_context counts so the meter tracks the real
-        # package: memory note + summary bodies on top of history.
         try:
             notes, summary = await db.get_context_memories(agent_name, channel_id, 12)
         except Exception:  # noqa: BLE001
@@ -153,7 +192,17 @@ async def context_stats(
         summary_chars = _chars((summary or {}).get("body"))
         out["notes_chars"] = notes_chars
         out["summary_chars"] = summary_chars
+        # What the turn path would keep before budget trimming: the
+        # 12-note injection window plus the channel summary row it loads.
+        out["notes_loaded"] = len(notes or [])
+        # One accounting contract: same has_summary semantics as
+        # build_context.stats, from the same loaded fetch.
+        out["has_summary"] = bool(summary and summary.get("body"))
         chars += notes_chars + summary_chars
+        try:
+            out["kb_docs"] = await kb_mod.count_docs(f"agent:{agent_name}")
+        except Exception:  # noqa: BLE001
+            pass  # Unknown inventory stays None, never an empty 0
     out["total_chars"] = chars
     return out
 

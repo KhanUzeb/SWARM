@@ -161,7 +161,7 @@ export function LoginScreen({ onLogin, onSetup, relayReady, onboarded, demoMode 
             How credentials are stored
           </summary>
           <p style={{ marginTop: 6, lineHeight: 1.55 }}>
-            PBKDF2-HMAC-SHA256, 100k rounds, per-user salt. Only the hash is kept — the raw
+            PBKDF2-HMAC-SHA256, 100k rounds, per-user salt. Only the hash is kept; the raw
             password is never written to the database.
           </p>
         </details>

@@ -189,7 +189,7 @@ function SandboxView({ computer, token, flash, onRootChange }) {
           {rootBusy ? "…" : "Open folder"}
         </button>
       </form>
-      {root && <p className="hint">Sandbox: <span className="mono">{root}</span>. Point it at any folder — a project, a drive, a worktree. Admin only.</p>}
+      {root && <p className="hint">Sandbox: <span className="mono">{root}</span>. Point it at any folder, such as a project, drive, or worktree. Admin only.</p>}
       {files.length === 0 ? (
         <EmptyState kind="folder" title="Empty sandbox" message="Agents can write files here with write_workspace." />
       ) : (

@@ -365,7 +365,7 @@ export function Composer({
         {ctxPct === null && contextError && (
           <button type="button" onClick={onRefreshContext} className="chip chip-hold" style={{ marginLeft: "auto" }}>
             <AlertCircle size={12} />
-            Context unavailable — retry
+            Retry context
           </button>
         )}
       </div>
@@ -386,7 +386,7 @@ export function Composer({
         <div role="alert" className="send-failure-banner">
           <AlertCircle size={14} className="shrink-0" />
           <span className="send-failure-text">
-            The message did not send. Your draft is kept — send it again.
+            The message did not send. Your draft is kept. Try sending it again.
           </span>
         </div>
       )}
@@ -489,7 +489,7 @@ export function Composer({
                 className="model-option"
                 style={!model ? { background: "var(--housing-high)" } : undefined}
               >
-                <span className="model-option-name">Auto — each teammate's default</span>
+                <span className="model-option-name">Auto (each bot default)</span>
                 {!model && <Check size={13} className="model-live" />}
               </button>
               <ModelPicker

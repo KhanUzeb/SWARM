@@ -703,6 +703,21 @@ Entity notes worth knowing before reading the code:
 4. Enforce `BUDGET_CHARS` by dropping, in order: unboosted KB hits, then
    boosted hits, then notes, then oldest history.
 
+The per-turn `stats.*_chars` fields meter the loaded content using the same
+estimate as the budget: human history includes the speaker name, agent history
+is body-only, and notes, the summary, and KB hits contribute their body lengths.
+Those four fields sum to `total_chars`. The estimate omits message formatting
+separators. `memory_notes` and `kb_hits` count package items, not characters.
+
+`context_stats()` is a lightweight pre-turn estimate before budget trimming.
+It includes windowed history and the notes plus summary available to the next
+turn, but cannot know which KB hits that turn's query will load, so `kb_chars`
+is `null` there and `total_chars` excludes per-turn KB hits and any later
+budget trimming. `kb_docs` and `memory_notes` are store inventory counts;
+`notes_loaded` is the bounded note count eligible for injection. A missing
+owner or failed inventory lookup remains unknown rather than being reported as
+an empty store.
+
 `_build_messages` then concatenates blocks into one `system` message: the
 agent's `system_prompt`, the tool policy (with display name, job, and the
 allowed tool list), `profile.md` if one exists for the job, a group-chat

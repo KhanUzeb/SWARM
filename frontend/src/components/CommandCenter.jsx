@@ -176,7 +176,7 @@ export function CommandCenter({ token, flash, onOpenRun, onOpenConnect, onUnauth
       <div className="cc-hero">
         <div>
           
-          <h1>Make the work <em>legible.</em></h1>
+          <h1>Make the work legible.</h1>
           <p>Design a team, launch a supervised run, and keep the result after the agents are done.</p>
         </div>
         
@@ -211,7 +211,7 @@ export function CommandCenter({ token, flash, onOpenRun, onOpenConnect, onUnauth
               <>
                 <label className="field-label" htmlFor="run-workflow">Workflow (optional)</label>
                 <select id="run-workflow" className="input" value={workflowId} onChange={e => setWorkflowId(e.target.value)}>
-                  <option value="">Direct run — lead agent only</option>
+                  <option value="">Direct run: lead agent only</option>
                   {workflows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                 </select>
               </>

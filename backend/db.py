@@ -1764,6 +1764,13 @@ async def list_memories(agent_name: str, limit: int = 20) -> list[dict[str, Any]
 async def get_context_memories(
     agent_name: str, channel_id: str, limit: int = 12
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """The memory payload build_context would inject for a turn.
+
+    Returns the injection window — the `limit` most recent notes visible
+    in this channel scope (oldest last, so popping from the front drops
+    stale notes first) — and the channel's latest summary row. These rows
+    are the loaded prompt content; `count_memories` describes inventory.
+    """
     async with open_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -1838,6 +1845,14 @@ async def forget_memory_by_query(
 
 
 async def count_memories(agent_name: str, channel_id: str | None = None) -> dict[str, int]:
+    """Store inventory, not prompt content.
+
+    `notes` counts every note the agent holds in scope (the channel when
+    scoped, otherwise all scopes) — build_context injects only a bounded
+    window, so an inventory count never implies loaded content. `summaries`
+    is only counted for a channel scope, where exactly one summary row is
+    meaningful.
+    """
     scope, params = (
         ("AND (channel_id IS NULL OR channel_id = ?) ", (agent_name, channel_id))
         if channel_id else

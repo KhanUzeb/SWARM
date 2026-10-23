@@ -895,7 +895,8 @@ export default function App() {
     } catch { setThreadReplies([]); }
   }
   async function onReact(messageId, target) {
-    const emoji = typeof target === "string" ? target : "👍";
+    // This is reaction payload data, not an interface icon.
+    const emoji = typeof target === "string" ? target : String.fromCodePoint(0x1f44d);
     const res = await apiJson(`/api/messages/${messageId}/reactions`, {
       token: tokenRef.current,
       method: "POST",
@@ -1164,7 +1165,7 @@ export default function App() {
             {(outbox[channel] || []).length > 0 && (
               <div className="send-failure-banner" role="status">
                 <span className="send-failure-text">
-                  {(outbox[channel] || []).length} queued — sending on reconnect
+        {(outbox[channel] || []).length} queued. Sending on reconnect
                 </span>
               </div>
             )}
@@ -1316,7 +1317,6 @@ function PaperView({ messages, title }) {
   return (
     <div id="log" className="paper-log">
       <article className="paper-doc">
-        <p className="paper-kicker">swarm preprint</p>
         <h1>{title}</h1>
         <p className="paper-meta">
           {/* Three register items on one line, not a middle-dot meta string (8a).
@@ -1328,7 +1328,7 @@ function PaperView({ messages, title }) {
         </p>
         <section aria-label="Code listings">
           <h2>Code</h2>
-          {code.length === 0 && <p className="paper-empty">No code listings yet — share a fenced code block in Talk and it will compile here.</p>}
+          {code.length === 0 && <p className="paper-empty">No code listings yet. Share a fenced code block in Talk to see it here.</p>}
           {code.map(c => (
             <div key={c.id} className="paper-item">
               <CodeBlock lang={c.lang} text={c.text} />
@@ -1338,7 +1338,7 @@ function PaperView({ messages, title }) {
         </section>
         <section aria-label="Math notes">
           <h2>Mathematics</h2>
-          {math.length === 0 && <p className="paper-empty">No TeX yet — inline $math$ in Talk appears here.</p>}
+        {math.length === 0 && <p className="paper-empty">No TeX yet. Inline $math$ in Talk appears here.</p>}
           {math.length > 0 && (
             <ul className="paper-math-list">
               {math.map(m => (

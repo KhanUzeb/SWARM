@@ -238,9 +238,8 @@ export function MessageList({
           <div className="talk-empty">
             <h2>{channelName ? channelName : "This room is empty"}</h2>
             <p>
-              Mention a teammate by name to hand it the room. Everything it does —
-              every tool call, handoff, and failure — is printed here in the order
-              it happened.
+              Mention a teammate by name to hand it the room. Tool calls, handoffs,
+              and failures are printed here in the order they happen.
             </p>
 
             {onQuickStart && quickStarts.length > 0 && (

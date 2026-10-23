@@ -190,7 +190,7 @@ function WorkCard({ session, events, agents, approvals, selected, onSelect, onCa
 
       {expanded && (
         <ol className="work-timeline">
-          {events.length === 0 && <li className="work-timeline-empty">No events yet — the bots are stretching…</li>}
+          {events.length === 0 && <li className="work-timeline-empty">No events yet. New work appears here as it starts.</li>}
           {events.map(e => (
             <li key={e.seq} className={`work-timeline-row type-${e.type}`}>
               <span className="work-timeline-seq">#{e.seq}</span>
@@ -317,7 +317,7 @@ export function WorkDetail({ session, events, token, agents, approvals, busy, on
       ))}
       <h3 className="work-detail-section">Timeline ({(events || []).length})</h3>
       <ol className="work-timeline">
-        {(events || []).length === 0 && <li className="work-timeline-empty">No events yet — replaying…</li>}
+        {(events || []).length === 0 && <li className="work-timeline-empty">No events yet. Replaying…</li>}
         {(events || []).map(e => (
           <li key={e.seq} className={`work-timeline-row type-${e.type}`}>
             <span className="work-timeline-seq">#{e.seq}</span>

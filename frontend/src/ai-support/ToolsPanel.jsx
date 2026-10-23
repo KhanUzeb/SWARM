@@ -146,7 +146,7 @@ export default function ToolsPanel({ token, flash }) {
         <div className="panel-section">
           <div className="mem-title">Plugin sources</div>
           <ul className="panel-list dim">
-            {plugins.map((p) => <li key={p.id}>{p.name} v{p.version} — {p.description}</li>)}
+            {plugins.map((p) => <li key={p.id}>{p.name} v{p.version}: {p.description}</li>)}
           </ul>
         </div>
       )}

@@ -187,8 +187,8 @@ export default function SystemPanel({ token, flash, onRootChange }) {
   return (
     <div className="panel-body system-panel">
       <p className="panel-note">
-        This machine — not just the project. Save any folder as a place, type any
-        folder, or go up a level. Bots follow this folder with{" "}
+        You can save folders across this machine, not just the project: add a
+        place, type a folder, or move up a level. Bots follow this folder with{" "}
         <code>system_run</code>, <code>system_read</code>, and <code>system_write</code>.
       </p>
       <div className="place-chips">
