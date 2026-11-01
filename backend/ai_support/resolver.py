@@ -56,17 +56,17 @@ async def resolve_effective_model(agent_model: str, *, override: str | None = No
 def map_model_for_provider(agent_model: str, provider_id: str, *, stored_model: str | None = None) -> str:
     spec = get_provider(provider_id) or {}
     aliases = spec.get("model_aliases") or {}
-    known = spec.get("models") or []
     chosen = (agent_model or "").strip()
+    # These IDs are the agent runtime's default, not a provider choice. Use
+    # the model saved on the connected provider (or its own default) even if
+    # the generic ID happens to exist in that provider's catalog. OpenRouter,
+    # for example, lists gpt-oss but the user may have selected a different
+    # model for that connection. Apply this before aliases so a self-alias
+    # cannot hide the saved choice.
+    if chosen in _DEFAULT_AGENT_MODELS:
+        return stored_model or spec.get("default_model") or chosen
     if chosen in aliases:
         return aliases[chosen]
-    # A Groq default id is a placeholder, not a choice the user made: a
-    # provider that does not serve it gets its connection's model (or the
-    # catalog default) instead of a 404 and a wasted attempt in the fallback
-    # chain. This is the provider-neutral form of the huggingface/together
-    # special case — any new catalog entry inherits it for free.
-    if chosen in _DEFAULT_AGENT_MODELS and chosen not in known:
-        return stored_model or spec.get("default_model") or chosen
     if chosen:
         return chosen
     return stored_model or spec.get("default_model") or chosen

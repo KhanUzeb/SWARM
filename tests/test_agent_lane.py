@@ -18,6 +18,17 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_openrouter_uses_its_saved_model_for_the_default_agent_model():
+    from backend.ai_support.resolver import map_model_for_provider
+    from backend.models import DEFAULT_GROQ_MODEL
+
+    assert map_model_for_provider(
+        DEFAULT_GROQ_MODEL,
+        "openrouter",
+        stored_model="qwen/qwen3-coder:free",
+    ) == "qwen/qwen3-coder:free"
+
+
 # ------------------------------------------------------------------ mentions
 # AGENTS.md s6: triggers are whole-word case-insensitive @mentions. An email
 # address (foo@bar.com) is not a mention of @bar.
