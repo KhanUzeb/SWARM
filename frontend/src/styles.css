@@ -20,6 +20,11 @@
             and build checks do not claim render verification.
    ═══════════════════════════════════════════════════════════════════ */
 
+/* The machine register prints letter-spaced uppercase because the flap
+   hardware is; every register site (flap faces, codes, timestamps, counts,
+   context meters, model ids) shares that one voice at 0.05em. Interface
+   labels stay in the body face, untracked: a chip, badge, or toggle is a
+   control, not machine output. AGENTS.md section 8a owns this split. */
 @import "tailwindcss";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -261,6 +266,9 @@ body {
 
 .mono { font-family: var(--f-machine); }
 .muted { color: var(--ink-3); }
+/* Body copy at the small step: hints, fact lines, detail text. Positions as
+   a utility so screens stop repeating font-size rules for the same step. */
+.small { font-size: var(--t-sm); line-height: 1.5; }
 .dim { color: var(--ink-2); }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .scroll-y { overflow-y: auto; overflow-x: hidden; min-height: 0; }
@@ -270,16 +278,18 @@ body {
 /* ═══ The machine register ═════════════════════════════════════
    Departure Mono is used for real machine data and nothing else:
    codes, timestamps, status lamps, flap faces, counts. Never as a
-   costume for "technical" — and never set tracked or uppercase at
-   this size: the register face is typed quiet (finding 67), the way
-   a Solari register prints. Labels that are not machine data read in
-   the body voice (see .field-label, .section-label, .chip ...).       */
+   costume for "technical". Sentence case everywhere except this
+   register, which prints tracked uppercase at 0.05em because the
+   flap hardware is — one value for every register site.
+   Labels that are not machine data read in the body voice, untracked
+   (see .field-label, .section-label, .chip ...). AGENTS.md s8a
+   owns that split, so the labels stay body-voiced.                    */
 
 .reg {
   font-family: var(--f-machine);
   font-size: var(--t-xs);
-  letter-spacing: 0;
-  text-transform: none;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--ink-3);
 }
 .reg-lit { color: var(--ink-on-housing); }
@@ -293,9 +303,9 @@ body {
    black reverse — the state change reads in peripheral vision.
 
    The face is machine output by law — cardstock, split and register
-   face — but it is typed quiet: untracked, sentence case, as the
-   data was authored (finding 67; the register face stays, the
-   tracked-uppercase costume goes).                                    */
+   face at the register voice (letter-spaced uppercase, because the
+   flap hardware is). The sizer and the two visible halves inherit
+   the same transform, so widths stay equal.                          */
 
 .flap {
   position: relative;
@@ -310,8 +320,8 @@ body {
   box-shadow: var(--slot-shadow);
   font-family: var(--f-machine);
   font-size: var(--t-xs);
-  letter-spacing: 0;
-  text-transform: none;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   white-space: nowrap;
   vertical-align: middle;
   isolation: isolate;
@@ -888,9 +898,8 @@ select.input { cursor: pointer; }
 
 .entry-head { display: flex; flex-direction: column; gap: 2px; padding-top: var(--s1); min-width: 0; }
 .entry-author { font-size: var(--t-sm); font-weight: 600; letter-spacing: -0.01em; color: var(--ink-on-housing); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* A timestamp is machine data: register face, typed quiet (finding 67
-   — the tracked costume goes, the face stays). */
-.entry-time { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0; color: var(--ink-3); }
+/* A timestamp is machine data: register face at the register voice. */
+.entry-time { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
 .entry-job {
   font-size: var(--t-xs);
   line-height: 1.35;
@@ -973,8 +982,9 @@ select.input { cursor: pointer; }
 .entry.is-streaming .entry-author { color: var(--go-lit); }
 .msg-mini-action.is-danger:hover { color: var(--hold-lit); }
 
-/* A system line: the machine register speaking (joins, leaves, hub
-   events) — machine data, register face, typed quiet (finding 67). */
+/* A system line: register face. It prints an event (joins, leaves,
+   hub events) rather than a code, so it stays untracked — caps say
+   "read me"; a caption reads by position, not volume (record). */
 .sys-line {
   font-family: var(--f-machine);
   font-size: var(--t-xs);
@@ -987,8 +997,7 @@ select.input { cursor: pointer; }
   flex-wrap: wrap;
 }
 
-/* A date stamp on the roll — machine data, register face, typed
-   quiet (finding 67). */
+/* A date stamp on the roll — machine data at the register voice. */
 .day-sep {
   display: flex;
   align-items: center;
@@ -997,14 +1006,13 @@ select.input { cursor: pointer; }
   color: var(--ink-3);
   font-family: var(--f-machine);
   font-size: var(--t-xs);
-  letter-spacing: 0;
-  text-transform: none;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 .day-sep::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
 
-/* The agent's tool calls: printed annotations, in the register — tool
-   names are machine data. Typed quiet: untracked, sentence case
-   (finding 67 + reflex 64). */
+/* The agent's tool calls: printed annotations in the register — tool
+   names are machine data at the register voice. */
 .tool-chip {
   display: inline-flex;
   align-items: center;
@@ -1013,8 +1021,8 @@ select.input { cursor: pointer; }
   padding: 0 var(--s2);
   font-family: var(--f-machine);
   font-size: var(--t-xs);
-  letter-spacing: 0;
-  text-transform: none;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--ink-2);
   background: var(--slot);
   border: 1px solid var(--rule);
@@ -1066,11 +1074,12 @@ select.input { cursor: pointer; }
   padding: var(--s1) var(--s2) var(--s1) var(--s2);
   border-bottom: 1px solid var(--rule);
 }
-/* Language id: machine data, register face, untracked (finding 67). */
+/* Language id: machine data at the register voice. */
 .code-block-lang {
   font-family: var(--f-machine);
   font-size: var(--t-xs);
-  letter-spacing: 0;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--ink-3);
   min-width: 0;
   overflow: hidden;
@@ -1130,26 +1139,25 @@ select.input { cursor: pointer; }
 
 .inspector { margin-top: var(--s3); }
 
-/* The model run is machine data: register face, typed quiet (finding
-   67, .inspector-model). */
+/* The model id is machine data at the register voice. */
 .inspector-model {
   font-family: var(--f-machine);
   font-size: var(--t-xs);
   color: var(--go-lit);
-  letter-spacing: 0;
-  text-transform: none;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
-/* Elapsed run time: machine data (finding 67, .inspector-elapsed). */
+/* Elapsed run time: machine data at the register voice. */
 .inspector-elapsed {
   display: inline-flex;
   align-items: center;
   gap: var(--s1);
   font-family: var(--f-machine);
-  letter-spacing: 0;
-  text-transform: none;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
-/* A step count is machine data (finding 67, .inspector-count). */
-.inspector-count { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0; text-transform: none; color: var(--ink-2); }
+/* A step count is machine data at the register voice. */
+.inspector-count { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-2); }
 
 .inspector-body { margin-top: var(--s2); }
 
@@ -1169,14 +1177,13 @@ select.input { cursor: pointer; }
 }
 .inspector-seq { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); align-self: center; }
 .inspector-lamp { display: inline-flex; align-self: center; }
-/* Step labels carry tool names — machine data (finding 67 + reflex
-   64, .inspector-step-label). The detail beside it was already the
-   ordinary sentence-case body voice. */
+/* Step labels carry tool names — machine data at the register voice;
+   the detail beside it is interface text in the body voice. */
 .inspector-step-label {
   font-family: var(--f-machine);
   font-size: var(--t-xs);
-  letter-spacing: 0;
-  text-transform: none;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--ink-on-housing);
   align-self: center;
   min-width: 0;
@@ -1235,8 +1242,9 @@ select.input { cursor: pointer; }
 .approvals-decided > summary svg { transition: transform var(--dur-fast) var(--ease-out); }
 
 /* What the machine actually said: register face, slot background.
-   The register word (stdout, stderr) is machine data (finding 67 +
-   reflex 64, .inspector-register-label). */
+   The register word (stdout, stderr) is machine data at the register
+   voice; the dump itself prints untracked — the machine said it in
+   a case, and the register would lie if it upped it. */
 .inspector-register {
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr);
@@ -1248,7 +1256,7 @@ select.input { cursor: pointer; }
   border-radius: var(--r-slot);
   box-shadow: var(--slot-shadow);
 }
-.inspector-register-label { font-family: var(--f-ui); font-size: var(--t-xs); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+.inspector-register-label { font-family: var(--f-machine); font-size: var(--t-xs); font-weight: 400; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
 .inspector-register-value {
   font-family: var(--f-machine);
   font-size: var(--t-xs);
@@ -1263,8 +1271,8 @@ select.input { cursor: pointer; }
 .inspector-register.is-hold .inspector-register-value { color: var(--hold-text); }
 
 .inspector-foot { display: flex; gap: var(--s3); flex-wrap: wrap; margin: var(--s2) 0 0; }
-/* Register foot line (halted at …): machine data (finding 67). */
-.inspector-foot-reg { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+/* Register foot line (halted at …): machine data at the register voice. */
+.inspector-foot-reg { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
 
 .streaming-cursor {
   display: inline-block;
@@ -1403,6 +1411,9 @@ select.input { cursor: pointer; }
    page that is a roll opens the same way. */
 .page-header { padding: var(--s8) var(--s5) var(--s4); max-width: var(--measure-app); margin: 0 auto; width: 100%; }
 .page-header h1 { font-size: var(--t-2xl); font-weight: 620; letter-spacing: -0.03em; margin: 0 0 var(--s1); color: var(--ink-on-housing); }
+/* Work home opens on an h2, a step below a page title: it is one
+   destination among eight, not the app's front page. */
+.page-header h2 { font-size: var(--t-xl); font-weight: 620; letter-spacing: -0.025em; margin: 0 0 var(--s1); color: var(--ink-on-housing); }
 .page-header p { font-size: var(--t-base); color: var(--ink-2); margin: 0; max-width: 56ch; }
 
 /* ═══ Composer: a slab, not a floating pill ═════════════════════ */
@@ -1511,9 +1522,8 @@ select.input { cursor: pointer; }
 }
 /* Rail heading: body face, sentence case, untracked (67). */
 .work-rail-title { font-family: var(--f-ui); font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); }
-/* The hub line is machine data (ws state): register face, untracked
-   (finding 67). */
-.work-rail-conn { display: flex; align-items: center; gap: var(--s1); font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0; color: var(--ink-3); }
+/* The hub line is machine data (ws state) at the register voice. */
+.work-rail-conn { display: flex; align-items: center; gap: var(--s1); font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
 .work-rail-filters {
   display: flex;
   gap: 1px;
@@ -1597,7 +1607,6 @@ select.input { cursor: pointer; }
   transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .work-card:hover { background: var(--housing-high); border-color: var(--rule-2); }
-.work-card.work-attention { border-color: var(--hold-edge); background: var(--housing-raised); color: var(--ink-on-housing); }
 /* In the rail the queue prints (pass 2): rows are transparent and
    separated by the roll rule, they raise on hover, and an attention
    row carries the hold cannon like every other needs-you mark in the
@@ -1613,14 +1622,14 @@ select.input { cursor: pointer; }
 }
 #work-rail .work-card + .work-card { border-top: 1px solid var(--rule); }
 #work-rail .work-card:hover { background: var(--housing-raised); border-color: transparent; }
-#work-rail .work-card.work-attention { background: var(--housing-raised); box-shadow: inset 2px 0 0 var(--hold-lit); border-color: transparent; color: var(--ink-on-housing); }
-#work-rail .work-card.work-attention:hover { background: var(--housing-high); }
 .work-card-top { display: flex; align-items: center; gap: var(--s2); }
 .work-card-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .work-objective { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Rail meta is machine data (bot ids, stamps, counts): register face,
-   untracked (finding 67). */
-.work-meta-line { display: flex; align-items: center; gap: var(--s2); font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0; }
+/* The home-grid card's objective prints at the same scale as the
+   rail's (.work-objective), so the two card faces read as one object. */
+.work-card h4 { margin: 0; font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); min-width: 0; }
+/* Rail meta is machine data (bot ids, stamps, counts) at the register voice. */
+.work-meta-line { display: flex; align-items: center; gap: var(--s2); font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0.05em; text-transform: uppercase; }
 .work-card-actions { display: flex; gap: var(--s2); }
 .attention-dot { width: 6px; height: 6px; border-radius: 1px; background: var(--hold-lit); flex-shrink: 0; }
 
@@ -1690,18 +1699,13 @@ select.input { cursor: pointer; }
 .work-detail-section { margin-bottom: var(--s5); }
 .work-detail-section:last-child { margin-bottom: 0; }
 .work-detail-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s3); }
+/* The sheet's objective is the head of the object, not a stray h3. */
+.work-detail-head h3 { margin: 0; font-size: var(--t-lg); font-weight: 620; letter-spacing: -0.025em; color: var(--ink-on-housing); min-width: 0; }
 .work-detail-time, .work-detail-reply-time { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); }
 .work-detail-reply { padding: var(--s3) 0; border-top: 1px solid var(--rule); }
 .work-detail-reply-author { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); }
 .work-detail-reply-body { font-size: var(--t-sm); color: var(--ink-2); margin-top: 2px; }
 
-.approval-card {
-  padding: var(--s3);
-  background: var(--hold-wash);
-  border: 1px solid var(--edge-hold);
-  border-radius: var(--r-panel);
-  margin-bottom: var(--s3);
-}
 .approval-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-bottom: var(--s2); }
 .approval-agent { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); }
 .approval-detail { font-size: var(--t-sm); color: var(--ink-2); }
@@ -1747,11 +1751,13 @@ select.input { cursor: pointer; }
 .approval-card { border: 1px solid var(--rule); border-radius: var(--r-panel); background: var(--housing-raised); color: var(--ink-on-housing); box-shadow: inset 0 1px 0 var(--glint); padding: var(--s3); }
 .approval-card.is-pending { border-color: var(--hold-edge); background: var(--hold-wash); }
 .approval-card.is-denied { border-color: var(--rule); opacity: 0.72; }
+/* The detail sheet's approval body carries the attention edge only:
+   the border says needs-you, the wash stays for pending modules. */
+.approval-card.rich { border-color: var(--edge-hold); }
 
 .approval-flap { margin-left: auto; }
-/* "tool / shape" is a register readout about the machine — machine
-   data (finding 67), typed quiet. */
-.approval-shape { display: inline-flex; align-items: center; gap: var(--s1); font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0; text-transform: none; color: var(--ink-2); }
+/* A register readout about the machine: "tool / shape" at the register voice. */
+.approval-shape { display: inline-flex; align-items: center; gap: var(--s1); font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-2); }
 
 .approval-action { font-size: var(--t-md); font-weight: 600; letter-spacing: -0.015em; color: var(--ink-on-housing); margin: var(--s2) 0 0; }
 .approval-detail { font-size: var(--t-sm); color: var(--ink-2); margin: var(--s1) 0 0; max-width: 62ch; }
@@ -1781,9 +1787,10 @@ select.input { cursor: pointer; }
 .approval-args { margin-top: var(--s2); }
 .approval-args-list { margin: var(--s2) 0 0; }
 .approval-arg { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: var(--s2); padding: var(--s2); background: transparent; }
-/* Argument keys are machine data (tool parameter names) — register
-   face (finding 67), untracked; the values were already untracked. */
-.approval-arg dt { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+/* Argument keys are tool parameter names — machine data at the
+   register voice; the raw values print untracked — the tool said them
+   in a case, and a diff dump would lie if a face upped it. */
+.approval-arg dt { font-family: var(--f-machine); font-size: var(--t-xs); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
 .approval-arg dd { margin: 0; font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-2); white-space: pre-wrap; word-break: break-word; min-width: 0; }
 
 /* Where it came from, grouped by indentation and a rule, never a box. */
@@ -1798,13 +1805,13 @@ select.input { cursor: pointer; }
 
 .approvals-decided { margin-top: var(--s2); }
 .approvals-decided > .approvals-list { margin-top: var(--s3); }
-/* An unread count is machine data — register face, untracked
-   (finding 67). */
+/* An unread count is machine data at the register voice. */
 .sidebar-nav-count {
   margin-left: auto;
   font-family: var(--f-machine);
   font-size: var(--t-xs);
-  letter-spacing: 0;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--hold-lit);
 }
 .work-approve { color: var(--flap); background: var(--go); border-color: var(--go-lit); }
@@ -1855,13 +1862,23 @@ select.input { cursor: pointer; }
 .work-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(288px, 1fr)); gap: var(--s3); padding: 0 var(--s5) var(--s8); max-width: var(--measure-app); margin: 0 auto; }
 .work-card-actions { display: flex; gap: var(--s2); }
 .work-grid .work-card { margin-bottom: 0; }
-/* The bind line carries agent handles: machine data, so the register
-   face stays but is untracked (finding 67 fixed by de-tracking here). */
-.work-agent { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0; text-transform: none; }
+/* The needs-you band prints on the page measure like every region:
+   an h3 with a hold lamp, cards whose edge — not a wash — says
+   attention (AGENTS.md 8a: state on the lamp and the edge, never a
+   tint). The band's own hold hue (line 720) stays inherited to the
+   h3's lamp and nothing else. */
+.needs-you { display: flex; flex-direction: column; gap: var(--s2); max-width: var(--measure-app); margin: 0 auto var(--s2); padding: 0 var(--s5); width: 100%; }
+.needs-you h3 { display: flex; align-items: center; gap: var(--s2); margin: 0; font-size: var(--t-md); font-weight: 620; letter-spacing: -0.02em; color: var(--ink-on-housing); }
+.needs-you h3::before { content: ""; width: 7px; height: 7px; border-radius: 1px; background: var(--hold-lit); flex-shrink: 0; }
+.needs-you .work-card { border-color: var(--edge-hold); }
+/* The bind line carries agent handles and roles: both are machine
+   names, so the register face holds and prints them at the register
+   voice — the machine refers to the team by these names. */
+.work-agent { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0.05em; text-transform: uppercase; }
 .work-agent-name { color: var(--go-lit); }
 .work-agent-role { color: var(--ink-3); }
 .work-tools { display: flex; flex-wrap: wrap; gap: var(--s1); }
-.work-source { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); }
+.work-source { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0.05em; text-transform: uppercase; }
 .work-source-filter { display: flex; gap: var(--s2); align-items: center; padding: 0 var(--s5) var(--s3); max-width: var(--measure-app); margin: 0 auto; width: 100%; }
 .smart-composer {
   display: flex;
@@ -1878,26 +1895,25 @@ select.input { cursor: pointer; }
 
 /* ═══ Board (command center) ═════════════════════════════════════
    The board leads with what you can do and what needs you: the hero
-   states the ask, launches sit under it, and the record of runs is a
-   ledger of printed rows — no walls of cards.                        */
+   states the ask, launches sit under it, the provider band says what
+   the run will answer with, and the record of runs is a ledger of
+   printed rows — no walls of cards.                                  */
 
 .command-center { flex: 1; min-height: 0; overflow-y: auto; }
 /* A section is a heading and its content, not a box inside a box. Only the
    list of physical rows earns the slot treatment. */
 .cc-hero { padding: var(--s8) var(--s5) var(--s5); max-width: var(--measure-app); margin: 0 auto; }
-/* The JSX keeps its <em>; the head is set one way anyway — the second
-   thought lands as a quieter second line at a second size (reflex
-   38iii's own suggested fix; the <em> element itself is JSX-owned, so
-   finding 38i stands as a JSX-level conflict, not waived). */
+/* The h1 speaks in one voice: the old <em> around the closing two words
+   was pulled from the JSX, so the head colour needs no exception
+   (38i/38iii die with the element). */
 .cc-hero h1 { font-size: var(--t-2xl); font-weight: 620; letter-spacing: -0.03em; margin: 0 0 var(--s1); color: var(--ink-on-housing); text-wrap: balance; }
 .cc-hero p { font-size: var(--t-md); color: var(--ink-2); margin: 0; max-width: 58ch; }
 
 .cc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--s3); padding: 0 var(--s5) var(--s6); max-width: var(--measure-app); margin: 0 auto; align-items: start; }
 .cc-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s3); }
 .cc-section-head h2 { font-size: var(--t-md); font-weight: 620; letter-spacing: -0.02em; margin: 0; color: var(--ink-on-housing); }
-/* The runs ledger plus its counts: a count is machine data — register
-   face, untracked (finding 67, .cc-count). */
-.cc-count { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0; }
+/* The runs ledger plus its counts: a count is machine data at the register voice. */
+.cc-count { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); letter-spacing: 0.05em; text-transform: uppercase; }
 
 .cc-runs, .cc-providers, .cc-list { padding: 0 var(--s5) var(--s6); max-width: var(--measure-app); margin: 0 auto; }
 /* The runs ledger prints: rows are transparent; a hover raises. */
@@ -2308,7 +2324,9 @@ select.input { cursor: pointer; }
   flex-direction: column;
   gap: var(--s2);
   pointer-events: none;
-  max-width: min(380px, calc(100vw - var(--s8)));
+  /* For a fixed element 100% is the viewport width, so this is the
+     same number without the vw unit that forces a scrollbar. */
+  max-width: min(380px, calc(100% - var(--s8)));
 }
 .toast {
   display: flex;
@@ -2572,7 +2590,9 @@ select.input { cursor: pointer; }
 .work-detail-objective { font-size: var(--t-md); font-weight: 600; color: var(--ink-on-housing); margin: 0; }
 .work-overview { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); }
 .work-detail-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
-.work-attention { border-color: var(--hold-edge); }
+/* A run that needs you: the hold lamp carries the state, the words stay
+   ink — the alert says needs-you without tinting the surface (8a). */
+.work-attention { display: flex; align-items: center; gap: var(--s2); font-size: var(--t-xs); font-weight: 600; color: var(--ink-2); }
 /* Links and repairs inside work rows: plain text affordances. */
 .work-link { color: var(--go-lit); background: transparent; border: 0; padding: 0; cursor: pointer; text-underline-offset: 3px; }
 .work-link:hover { color: var(--ink-on-housing); }
@@ -2613,6 +2633,9 @@ select.input { cursor: pointer; }
   border: 1px solid var(--rule);
   border-radius: var(--r-panel);
 }
+/* Card heads inside these modules print at label scale; the h4s were
+   falling through to the UA default. */
+.report-card h4, .approval-card h4 { margin: 0; font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); }
 /* An agent summary chip: one flap module plus its meta. */
 .agent-chip-card { display: inline-flex; align-items: center; gap: var(--s2); padding: var(--s1) var(--s2); background: var(--slot); color: var(--ink-on-housing); border: 1px solid var(--rule); border-radius: var(--r-key); }
 /* A file list outside Files (work draft listings) prints as a roll. */

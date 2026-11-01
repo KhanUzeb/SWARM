@@ -69,7 +69,8 @@ def test_eval_harness_scoring_and_compare():
     score = evals.score_run(events, human_effort=1)
     assert score["task_success"] is True
     assert score["verified_success"] is True
-    assert score["tool_calls"] == 2
+    # One call records both a start and a finish; count the call once.
+    assert score["tool_calls"] == 1
     assert score["human_effort_label"] == "one-click approval"
     table = evals.compare_architectures({
         "multi_agent": [score],

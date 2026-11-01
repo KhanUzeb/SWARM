@@ -2461,8 +2461,39 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
         hub.mark_offline(handle)
 
 
+async def _agent_handoff_targets(channel_id: str, msg: dict) -> list[dict]:
+    body = msg.get("body") or ""
+    if not str(body).strip():
+        return []
+    author = msg.get("author")
+    scoped_agents = await db.list_agents(channel_id)
+    mentioned = agent.find_mentioned_agents(body, scoped_agents)
+    mentioned = [a for a in mentioned if a["name"] != author]
+    teams = await db.list_teams()
+    mentioned_teams = agent.find_mentioned_teams(body, teams)
+    team_bots: list[dict] = []
+    for team in mentioned_teams:
+        for name in (team.get("members") or []):
+            if name == author:
+                continue
+            row = await db.fetch_agent(name)
+            if row and not row.get("archived"):
+                team_bots.append(row)
+    mentioned = mentioned + [a for a in team_bots
+                             if a["name"] not in {x["name"] for x in mentioned}]
+    seen: set[str] = set()
+    out: list[dict] = []
+    for a in mentioned:
+        if a["name"] in seen:
+            continue
+        seen.add(a["name"])
+        out.append(a)
+    return out
+
+
 async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
-                              model_override: str | None = None) -> None:
+                              model_override: str | None = None,
+                              session: Any = None) -> None:
     if depth > HANDOFF_DEPTH:
         return
     kind = msg.get("author_kind")
@@ -2491,24 +2522,16 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
     teams = await db.list_teams()
     mentioned_teams = agent.find_mentioned_teams(body, teams)
     if kind == "agent":
-        mentioned = [a for a in mentioned if a["name"] != msg.get("author")]
-        team_bots: list[dict] = []
-        for team in mentioned_teams:
-            for name in team.get("members") or []:
-                if name == msg.get("author"):
-                    continue
-                row = await db.fetch_agent(name)
-                if row and not row.get("archived"):
-                    team_bots.append(row)
-        mentioned = mentioned + [a for a in team_bots if a["name"] not in {x["name"] for x in mentioned}]
-        if not mentioned:
+        recipients = await _agent_handoff_targets(channel_id, msg)
+        if not recipients:
             return
         # depth is already the handoff depth: _run_agent incremented it when
         # it handed off to us (see _run_agent's tail). Incrementing again here
         # made every hop cost 2, so HANDOFF_DEPTH=3 allowed only 2 hops
         # (3 bots) instead of the documented 3 hops (4 bots).
-        _track_task(_run_agents_in_order(channel_id, mentioned, depth=depth,
-                                          model_override=model_override),
+        _track_task(_run_agents_in_order(channel_id, recipients, depth=depth,
+                                          model_override=model_override,
+                                          session=session),
                     "agent handoff", channel_id=channel_id)
         return
 
@@ -2555,9 +2578,11 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
 
 
 async def _run_agents_in_order(channel_id: str, agents: list[dict], *, depth: int = 0,
-                               model_override: str | None = None) -> None:
+                               model_override: str | None = None,
+                               session: Any = None) -> None:
     for a in agents:
-        await _run_agent(channel_id, a, depth=depth, model_override=model_override)
+        await _run_agent(channel_id, a, depth=depth, model_override=model_override,
+                         session=session)
 
 
 async def _set_status(name: str, status: str) -> None:
@@ -2600,7 +2625,8 @@ def _work_owner_from_history(history: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
-                   source: str | None = None, model_override: str | None = None) -> dict:
+                   source: str | None = None, model_override: str | None = None,
+                   session: Any = None) -> dict:
     if agent_row.get("archived"):
         return {"reply": "", "tool_events": []}
     name = agent_row["name"]
@@ -2610,12 +2636,20 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
     history = await db.get_history(channel_id, limit=max(window * 2, window))
     tools_posted = False
     pending_approvals: list[dict] = []
-    owner, objective = _work_owner_from_history(history)
-    session = await work.create_session(
-        owner, objective or f"@{name}",
-        source=source or ("handoff" if depth > 0 else "chat"), channel_id=channel_id)
-    await _emit_work_event(channel_id, session, "work_started",
-                           {"objective": objective or f"@{name}", "agent": name})
+    if session is None:
+        owner, objective = _work_owner_from_history(history)
+        session = await work.create_session(
+            owner, objective or f"@{name}",
+            source=source or ("handoff" if depth > 0 else "chat"), channel_id=channel_id)
+        await _emit_work_event(channel_id, session, "work_started",
+                               {"objective": objective or f"@{name}", "agent": name})
+    else:
+        owner = session.get("owner") or ""
+        objective = session.get("objective") or ""
+        if not str(objective).strip():
+            owner, objective = _work_owner_from_history(history)
+            if not str(objective).strip():
+                objective = f"@{name}"
     await _emit_work_event(channel_id, session, "agent_started",
                            {"agent": name, "role": agent_row.get("role") or "agent"}, name)
 
@@ -2687,7 +2721,11 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
             for e in result["tool_events"]
         )
         await _set_status(name, "needs_approval" if asked else "idle")
-        if not asked:
+        will_handoff = False
+        if depth < HANDOFF_DEPTH and not asked:
+            handoff_targets = await _agent_handoff_targets(channel_id, msg)
+            will_handoff = bool(handoff_targets)
+        if not asked and not will_handoff:
             completed_payload: dict[str, Any] = {
                 "summary": str(result["reply"] or "")[:1000]}
             if isinstance(result.get("context"), dict):
@@ -2697,7 +2735,8 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
         if depth < HANDOFF_DEPTH and not asked:
             # A bot that stopped for approval must not hand its objective to
             # another bot: that would route around the pending decision.
-            await _maybe_trigger_agents(channel_id, msg, depth=depth + 1)
+            await _maybe_trigger_agents(channel_id, msg, depth=depth + 1,
+                                       session=session)
         return result
     except asyncio.CancelledError:
         with suppress(Exception):

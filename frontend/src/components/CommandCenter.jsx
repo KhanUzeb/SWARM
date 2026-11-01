@@ -175,11 +175,9 @@ export function CommandCenter({ token, flash, onOpenRun, onOpenConnect, onUnauth
     <div id="command-center" className="command-center">
       <div className="cc-hero">
         <div>
-          
           <h1>Make the work legible.</h1>
           <p>Design a team, launch a supervised run, and keep the result after the agents are done.</p>
         </div>
-        
       </div>
       <section className="cc-grid">
         {/* Not <Card padded className="cc-launch-card">: that is a card inside
@@ -252,9 +250,6 @@ export function CommandCenter({ token, flash, onOpenRun, onOpenConnect, onUnauth
           />
         </div>
       )}
-      <section className="cc-runs"><div className="cc-section-head"><h2>Runs</h2><span className="cc-count">{runs.length}</span></div>{loadError && <p className="cc-provider-note" role="alert">{loadError} <Button variant="ghost" size="sm" onClick={load}>Retry</Button></p>}{runs.length ? <div className="cc-run-list">{runs.slice(0, 8).map(r => <button className="cc-run-row" key={r.id} onClick={() => onOpenRun?.(r)}><Lamp tone={r.status === "failed" ? "hold" : r.status === "cancelled" ? "off" : "go"} /><span className="run-objective">{r.objective}</span><Badge variant={r.status === "completed" ? "success" : r.status === "failed" ? "error" : "subtle"}>{r.status.replaceAll("_", " ")}</Badge>{/* fmtTime, not new Date(seconds * 1000): the run endpoint answers with
-              an ISO string on some paths, which that turned into "Invalid Date" */}
-            <span className="mono muted">{fmtTime(r.created_at)}</span></button>)}</div> : <EmptyState kind="run" title="No runs yet" message="Launch a brief and your live run history will appear here." />}</section>
       <section className="cc-providers" aria-label="AI provider status">
         <div className="cc-section-head">
           <h2>AI providers</h2>
@@ -270,6 +265,9 @@ export function CommandCenter({ token, flash, onOpenRun, onOpenConnect, onUnauth
         </div>
         {!llmReady && statusKnown && <p className="cc-provider-note">Connect an API key in Connect, or set GROQ_API_KEY in your environment.</p>}
       </section>
+      <section className="cc-runs"><div className="cc-section-head"><h2>Runs</h2><span className="cc-count">{runs.length}</span></div>{loadError && <p className="cc-provider-note" role="alert">{loadError} <Button variant="ghost" size="sm" onClick={load}>Retry</Button></p>}{runs.length ? <div className="cc-run-list">{runs.slice(0, 8).map(r => <button className="cc-run-row" key={r.id} onClick={() => onOpenRun?.(r)}><Lamp tone={r.status === "failed" ? "hold" : r.status === "cancelled" ? "off" : "go"} /><span className="run-objective">{r.objective}</span><Badge variant={r.status === "completed" ? "success" : r.status === "failed" ? "error" : "subtle"}>{r.status.replaceAll("_", " ")}</Badge>{/* fmtTime, not new Date(seconds * 1000): the run endpoint answers with
+              an ISO string on some paths, which that turned into "Invalid Date" */}
+            <span className="mono muted">{fmtTime(r.created_at)}</span></button>)}</div> : <EmptyState kind="run" title="No runs yet" message="Launch a brief and your live run history will appear here." />}</section>
     </div>
   );
 }
