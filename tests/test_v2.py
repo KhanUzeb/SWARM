@@ -1,5 +1,7 @@
+import asyncio
 import time
 
+from backend import v2
 from backend.v2 import order_nodes
 
 
@@ -150,3 +152,38 @@ def test_v2_graph_order_follows_edges():
     nodes = [{"id": "finish"}, {"id": "start"}, {"id": "middle"}]
     ordered = order_nodes(nodes, [["start", "middle"], ["middle", "finish"]])
     assert [node["id"] for node in ordered] == ["start", "middle", "finish"]
+
+
+def test_v2_resume_skips_completed_parallel_children(client, auth, monkeypatch):
+    async def _run():
+        workflow = await v2.create_workflow("uzeb", "Parallel resume", "", {
+            "nodes": [{"id": "parallel", "type": "parallel", "children": [
+                {"id": "already_done", "type": "agent", "agent": "swarm"},
+                {"id": "still_pending", "type": "agent", "agent": "ledger"},
+            ]}],
+            "edges": [],
+        })
+        run = await v2.create_run("uzeb", "resume safely", workflow["id"])
+        await v2.append_event(run["id"], "step_completed", {
+            "label": "Completed already", "output": "saved result", "parallel": True,
+        }, "already_done")
+        requested_agents = []
+
+        async def fetch_agent(name):
+            requested_agents.append(name)
+            return None
+
+        monkeypatch.setattr(v2.db, "fetch_agent", fetch_agent)
+        await v2.execute_run(run["id"], "uzeb")
+        finished = await v2.get_run(run["id"], "uzeb")
+        return run["id"], requested_agents, finished["report"]
+
+    run_id, requested_agents, report = asyncio.run(_run())
+    assert requested_agents == ["ledger"]
+    steps = report["steps"]
+    assert [step["id"] for step in steps] == ["already_done", "still_pending"]
+    assert steps[0]["output"] == "saved result"
+    events = asyncio.run(v2.list_events(run_id, "uzeb"))
+    assert [e["step_id"] for e in events if e["event_type"] == "step_completed"] == [
+        "already_done", "still_pending",
+    ]

@@ -491,15 +491,31 @@ async def execute_run(run_id: str, owner: str) -> None:
                     continue
             if node.get("type") == "parallel":
                 children = [child for child in (node.get("children") or []) if isinstance(child, dict)]
+                completed_children = {
+                    event.get("step_id"): event
+                    for event in prior_events
+                    if event.get("event_type") == "step_completed"
+                    and event.get("step_id")
+                    and (event.get("payload") or {}).get("parallel") is True
+                }
                 async def run_parallel_child(child: dict[str, Any]) -> dict[str, Any]:
                     child_id = str(child.get("id") or uuid.uuid4().hex[:8])
                     child_label = str(child.get("label") or child.get("agent") or "parallel step")
+                    completed = completed_children.get(child_id)
+                    if completed:
+                        payload = completed.get("payload") or {}
+                        return {
+                            "id": child_id,
+                            "label": payload.get("label") or child_label,
+                            "output": payload.get("output") or "",
+                        }
                     await append_event(run_id, "step_started", {"label": child_label, "parallel": True}, child_id)
                     output = await run_agent_node(child)
                     await append_event(run_id, "step_completed", {"label": child_label, "output": output[:4000], "parallel": True}, child_id)
                     return {"id": child_id, "label": child_label, "output": output}
                 parallel_results = await asyncio.gather(*(run_parallel_child(child) for child in children))
-                report["steps"].extend(parallel_results)
+                reported_step_ids = {step.get("id") for step in report["steps"]}
+                report["steps"].extend(result for result in parallel_results if result["id"] not in reported_step_ids)
                 if parallel_results:
                     report["summary"] = parallel_results[-1]["output"][:1000]
                 continue
