@@ -132,6 +132,18 @@ def _auth_from_key(provider_id: str, api_key: str) -> RuntimeProviderAuth | None
     )
 
 
+def _safe_error(exc: Exception, auth: RuntimeProviderAuth) -> str:
+    """Keep provider failures useful without reflecting credentials to clients."""
+    message = str(exc)
+    secrets = {auth.api_key, *(auth.headers or {}).values()}
+    for secret in secrets:
+        if secret:
+            message = message.replace(str(secret), "<REDACTED>")
+    return message[:240]
+
+
+
+
 async def list_provider_models(
     provider_id: str,
     *,
@@ -172,9 +184,8 @@ async def list_provider_models(
             body["models"] = live
             body.pop("note", None)
             return body
-        body["note"] = "Provider returned no chat models — showing catalog defaults."
     except Exception as exc:  # noqa: BLE001
-        body["error"] = str(exc)[:240]
+        body["error"] = _safe_error(exc, auth)
         body["note"] = "Couldn't reach the provider — showing catalog defaults."
     return body
 

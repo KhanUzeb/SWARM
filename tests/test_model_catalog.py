@@ -72,3 +72,19 @@ def test_list_all_models_does_not_resolve_auth_twice(monkeypatch, client):
         "each provider should resolve auth exactly once"
     )
     assert len(calls) == len(set(calls)), "a provider resolved auth more than once"
+
+
+def test_live_model_errors_redact_preview_credentials(monkeypatch):
+    import asyncio
+
+    async def fail_with_echoed_key(auth):
+        raise RuntimeError(f"provider rejected credential {auth.api_key}")
+
+    monkeypatch.setattr(catalog, "_fetch_openai_compatible", fail_with_echoed_key)
+
+    result = asyncio.run(catalog.list_provider_models("groq", api_key="secret-preview-key"))
+
+    assert result["connected"] is True
+    assert result["live"] is False
+    assert result["error"] == "provider rejected credential <REDACTED>"
+    assert "secret-preview-key" not in repr(result)

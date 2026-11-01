@@ -68,6 +68,26 @@ def test_workflow_run_maps_to_same_session_interface(client, auth, monkeypatch):
     assert asyncio.run(work.linked_messages(session["id"], "uzeb")) == [4242]
 
 
+def test_agent_error_fails_work_session(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="[agent error: no API key — connect a provider]")
+    owners = ("uzeb", "system")
+    before = {s["id"] for owner in owners
+              for s in asyncio.run(work.list_sessions(owner))}
+    agent_row = asyncio.run(main.db.fetch_agent("swarm"))
+
+    result = asyncio.run(main._run_agent("dm-swarm", agent_row))
+
+    assert result["reply"].startswith("[agent error:")
+    sessions = [s for owner in owners for s in asyncio.run(work.list_sessions(owner))
+                if s["id"] not in before]
+    assert len(sessions) == 1
+    session = asyncio.run(work.get_session_any_owner(sessions[0]["id"]))
+    events = asyncio.run(work.list_events(session["id"], session["owner"]))
+    assert session["status"] == "failed"
+    assert "work_failed" in [e["type"] for e in events]
+    assert "work_completed" not in [e["type"] for e in events]
+
+
 def test_event_cursor_replay_is_stable(client, auth):
     """Cursor replay over run-backed sessions is monotonic and never
     renumbers or drops the run-derived tail (regression: pre-fix behavior
@@ -155,6 +175,50 @@ def test_approval_gate_approve_and_deny(client, auth, monkeypatch):
     detail = client.get(f"/api/work/{denied_session['id']}", headers=auth).json()
     assert detail["status"] == "cancelled"
 
+
+
+def test_approval_resume_preserves_completed_step_outputs(client, auth, monkeypatch):
+    """Resuming after a gate must keep prior step results in the final report."""
+    _mock_agent(monkeypatch, reply="step output")
+    workflow = client.post(
+        "/api/v2/workflows",
+        headers=auth,
+        json={"name": "Resume report", "description": "", "graph": {
+            "nodes": [
+                {"id": "before", "type": "agent", "label": "Before"},
+                {"id": "gate", "type": "approval", "label": "Review"},
+                {"id": "after", "type": "agent", "label": "After"},
+            ],
+            "edges": [["before", "gate"], ["gate", "after"]],
+        }},
+    ).json()
+    edited = client.patch(
+        f"/api/v2/workflows/{workflow['id']}",
+        headers=auth,
+        json={"name": "Resume report edited"},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["name"] == "Resume report edited"
+    run = client.post(
+        "/api/v2/runs", headers=auth,
+        json={"objective": "Resume this workflow", "workflow_id": workflow["id"]},
+    ).json()
+    _wait_for(lambda: client.get(
+        f"/api/v2/runs/{run['id']}", headers=auth
+    ).json()["status"] == "waiting_for_approval" or None)
+
+    resolved = client.post(
+        f"/api/v2/runs/{run['id']}/approvals/gate",
+        headers=auth,
+        json={"status": "approved"},
+    )
+    assert resolved.status_code == 200
+    terminal = _wait_for(lambda: (
+        current if (current := client.get(
+            f"/api/v2/runs/{run['id']}", headers=auth
+        ).json())["status"] == "completed" else None
+    ))
+    assert [step["id"] for step in terminal["report"]["steps"]] == ["before", "after"]
 
 def test_work_cancel_and_idempotent_recancel(client, auth, monkeypatch):
     _mock_agent(monkeypatch, reply="slow work")

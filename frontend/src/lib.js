@@ -1,3 +1,11 @@
+export function safeStorageGet(key, fallback = null) {
+  try { return globalThis.localStorage?.getItem(key) ?? fallback; } catch { return fallback; }
+}
+
+export function safeStorageSet(key, value) {
+  try { globalThis.localStorage?.setItem(key, value); } catch { /* storage may be blocked */ }
+}
+
 export const HISTORY_LIMIT = 50;
 export const DEFAULT_MODEL = "openai/gpt-oss-120b";
 export const SWARM_CLIENT = "web";

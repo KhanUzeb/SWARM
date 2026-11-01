@@ -11,10 +11,31 @@ import {
   avatarKindClass,
   quickCreatePayload,
   canSubmitDraft,
+  safeStorageGet,
+  safeStorageSet,
 } from "../lib.js";
 import { EMPTY_STATE_KINDS } from "../ui.jsx";
 
 const src = (rel) => Bun.file(`src/${rel}`).text();
+
+describe("blocked browser storage does not break the workspace", () => {
+  test("preference reads and writes fall back harmlessly when storage is unavailable", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    try {
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        get() { throw new Error("storage access denied"); },
+      });
+      expect(() => globalThis.localStorage.getItem("swarm_roster_folded")).toThrow("storage access denied");
+      expect(safeStorageGet("swarm_roster_folded", "default")).toBe("default");
+      expect(() => safeStorageSet("swarm_roster_folded", "1")).not.toThrow();
+      expect(await src("App.jsx")).toContain('safeStorageGet("swarm_roster_folded")');
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+      else delete globalThis.localStorage;
+    }
+  });
+});
 
 describe("websocket frame contract (backend/main.py hub broadcasts)", () => {
   test("full message frames merge into the log", () => {

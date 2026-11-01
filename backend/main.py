@@ -2716,25 +2716,30 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
         await work.link_message(session["id"], int(msg["id"]))
         await _emit_work_event(channel_id, session, "message_linked",
                                {"message_id": msg["id"], "agent": name}, name)
+        failed = agent.is_agent_error(str(result.get("reply") or ""))
         asked = any(
             e["tool"] == "request_approval" or e.get("blocked") == "review"
             for e in result["tool_events"]
         )
         await _set_status(name, "needs_approval" if asked else "idle")
         will_handoff = False
-        if depth < HANDOFF_DEPTH and not asked:
+        if depth < HANDOFF_DEPTH and not asked and not failed:
             handoff_targets = await _agent_handoff_targets(channel_id, msg)
             will_handoff = bool(handoff_targets)
-        if not asked and not will_handoff:
+        if failed:
+            await _emit_work_event(
+                channel_id, session, "work_failed",
+                {"error": str(result["reply"])[:500]}, name)
+        elif not asked and not will_handoff:
             completed_payload: dict[str, Any] = {
                 "summary": str(result["reply"] or "")[:1000]}
             if isinstance(result.get("context"), dict):
                 completed_payload["context"] = result["context"]
             await _emit_work_event(channel_id, session, "work_completed",
                                    completed_payload, name)
-        if depth < HANDOFF_DEPTH and not asked:
-            # A bot that stopped for approval must not hand its objective to
-            # another bot: that would route around the pending decision.
+        if depth < HANDOFF_DEPTH and not asked and not failed:
+            # A bot that stopped for approval or errored must not hand off its
+            # objective and disguise the blocked turn as successful work.
             await _maybe_trigger_agents(channel_id, msg, depth=depth + 1,
                                        session=session)
         return result

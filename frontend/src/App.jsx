@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // The API client lives in lib.js, which is its only owner.
-import { apiJson, bustCache, CACHE_TTL, HISTORY_LIMIT, fmtBytes, isUnauthorized, quickCreatePayload } from "./lib.js";
+import { apiJson, bustCache, CACHE_TTL, HISTORY_LIMIT, fmtBytes, isUnauthorized, quickCreatePayload, safeStorageGet, safeStorageSet } from "./lib.js";
 import {
   WS_MESSAGE_FRAME_TYPES,
   WS_DELTA_FRAME_TYPES,
@@ -76,21 +76,19 @@ export default function App() {
   const [selectedWork, setSelectedWork] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [rosterFolded, setRosterFolded] = useState(
-    () => localStorage.getItem("swarm_roster_folded") === "1",
+    () => safeStorageGet("swarm_roster_folded") === "1",
   );
   const [streamingAgents, setStreamingAgents] = useState({});
   const [streamText, setStreamText] = useState({});
   const [outbox, setOutbox] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("swarm.outbox") || "{}"); } catch { return {}; }
+    try { return JSON.parse(safeStorageGet("swarm.outbox") || "{}"); } catch { return {}; }
   });
-  const [chatModel, setChatModelState] = useState(() => {
-    try { return localStorage.getItem("swarm.chat_model") || ""; } catch { return ""; }
-  });
+  const [chatModel, setChatModelState] = useState(() => safeStorageGet("swarm.chat_model") || "");
   const [composerPrefill, setComposerPrefill] = useState("");
 
   function setChatModel(value) {
     setChatModelState(value || "");
-    try { localStorage.setItem("swarm.chat_model", value || ""); } catch { /* private mode */ }
+    safeStorageSet("swarm.chat_model", value || "");
   }
 
   const wsRef = useRef(null);
@@ -631,7 +629,7 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdOpen(true); }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "w" && user) {
         e.preventDefault();
-        setWorkRailOpen(o => { localStorage.setItem("swarm_work_rail", o ? "0" : "1"); return !o; });
+        setWorkRailOpen(o => { safeStorageSet("swarm_work_rail", o ? "0" : "1"); return !o; });
       }
       if (e.key === "Escape") { setCmdOpen(false); setThreadId(null); setSelectedRun(null); setSelectedWork(null); setSidebarOpen(false); }
     }
@@ -648,7 +646,7 @@ export default function App() {
     // setState updater pure (StrictMode runs it twice).
     const value = typeof next === "function" ? next(outboxRef.current) : next;
     outboxRef.current = value;
-    try { localStorage.setItem("swarm.outbox", JSON.stringify(value)); } catch { /* private mode */ }
+    safeStorageSet("swarm.outbox", JSON.stringify(value));
     setOutbox(value);
   }
 
@@ -1020,7 +1018,7 @@ export default function App() {
         onClose={() => setSidebarOpen(false)}
         collapsed={rosterFolded}
         onToggleCollapsed={() => setRosterFolded((folded) => {
-          localStorage.setItem("swarm_roster_folded", folded ? "0" : "1");
+          safeStorageSet("swarm_roster_folded", folded ? "0" : "1");
           return !folded;
         })}
       />
@@ -1043,7 +1041,7 @@ export default function App() {
           workConnected={workConnected}
           workRailOpen={workRailOpen}
           onToggleWorkRail={() => setWorkRailOpen(o => {
-            localStorage.setItem("swarm_work_rail", o ? "0" : "1");
+            safeStorageSet("swarm_work_rail", o ? "0" : "1");
             return !o;
           })}
           participants={[...new Set(order.map(id => messages[id]?.author).filter(Boolean))]}
@@ -1211,7 +1209,7 @@ export default function App() {
         error={workError}
         onRetry={refreshWork}
         onToggle={() => setWorkRailOpen(o => {
-          localStorage.setItem("swarm_work_rail", o ? "0" : "1");
+          safeStorageSet("swarm_work_rail", o ? "0" : "1");
           return !o;
         })}
       />

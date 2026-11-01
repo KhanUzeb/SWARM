@@ -354,7 +354,7 @@ async def update_run(run_id: str, owner: str, status: str, *, report: dict[str, 
         if report is None:
             cur = await conn.execute("UPDATE runs SET status=?, started_at=COALESCE(started_at, ?), finished_at=COALESCE(?, finished_at) WHERE id=? AND owner=?", (status, started, finished, run_id, owner))
         else:
-            cur = await conn.execute("UPDATE runs SET status=?, report=?, started_at=COALESCE(started_at, ?), finished_at=? WHERE id=? AND owner=?", (status, json.dumps(report), started, finished or now, run_id, owner))
+            cur = await conn.execute("UPDATE runs SET status=?, report=?, started_at=COALESCE(started_at, ?), finished_at=COALESCE(?, finished_at) WHERE id=? AND owner=?", (status, json.dumps(report), started, finished, run_id, owner))
         await conn.commit()
     return await get_run(run_id, owner) if cur.rowcount else None
 
@@ -439,11 +439,24 @@ async def execute_run(run_id: str, owner: str) -> None:
     workflow = await get_workflow(run.get("workflow_id"), owner) if run.get("workflow_id") else None
     graph = (workflow or {}).get("graph") or {}
     nodes = order_nodes(graph.get("nodes") or [], graph.get("edges") or [])
-    report: dict[str, Any] = {"objective": run["objective"], "summary": "", "steps": [], "artifacts": [], "decisions": []}
+    report: dict[str, Any] = run.get("report") or {"objective": run["objective"], "summary": "", "steps": [], "artifacts": [], "decisions": []}
     try:
         if not await claim_run(run_id, owner):
             return
         prior_events = await list_events(run_id, owner)
+        if run.get("report") is None:
+            for event in prior_events:
+                if event.get("event_type") != "step_completed":
+                    continue
+                payload = event.get("payload") or {}
+                output = payload.get("output") or ""
+                report["steps"].append({
+                    "id": event.get("step_id"),
+                    "label": payload.get("label") or event.get("step_id") or "step",
+                    "output": output,
+                })
+                if output:
+                    report["summary"] = output[:1000]
         completed_steps = {e.get("step_id") for e in prior_events if e.get("event_type") == "step_completed"}
         approved_steps = {e.get("step_id") for e in prior_events if e.get("event_type") == "approval_resolved" and (e.get("payload") or {}).get("decision") == "approved"}
         await update_run(run_id, owner, "running")
@@ -496,7 +509,7 @@ async def execute_run(run_id: str, owner: str) -> None:
                 continue
             await append_event(run_id, "step_started", {"label": label}, step_id)
             if node.get("type") == "approval":
-                await update_run(run_id, owner, "waiting_for_approval")
+                await update_run(run_id, owner, "waiting_for_approval", report=report)
                 await append_event(run_id, "approval_requested", {"label": label, "reason": "Workflow checkpoint requires review"}, step_id)
                 return
             output = await run_agent_node(node)
