@@ -801,7 +801,6 @@ async def _complete_stream(
         base = str(getattr(client, "base_url", "") or "")
         if "openrouter.ai" not in base:
             kwargs["reasoning_effort"] = "low"
-            kwargs["include_reasoning"] = False
     else:
         kwargs["max_tokens"] = 600
     if tool_schemas:

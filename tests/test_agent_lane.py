@@ -29,6 +29,48 @@ def test_openrouter_uses_its_saved_model_for_the_default_agent_model():
     ) == "qwen/qwen3-coder:free"
 
 
+def test_gpt_oss_stream_uses_openai_sdk_supported_request_fields():
+    import json
+
+    import httpx
+    from openai import AsyncOpenAI
+
+    requests = []
+
+    async def respond(request):
+        requests.append(json.loads((await request.aread()).decode()))
+        chunk = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "openai/gpt-oss-120b",
+            "choices": [{"index": 0, "delta": {"content": "done"}, "finish_reason": "stop"}],
+        }
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
+        )
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            client = AsyncOpenAI(
+                api_key="test-key", base_url="https://api.groq.com/openai/v1", http_client=http,
+            )
+            try:
+                return await agent_mod._complete_stream(
+                    client, "openai/gpt-oss-120b", [{"role": "user", "content": "work"}], None, None,
+                )
+            finally:
+                await client.close()
+
+    content, tool_calls, _usage = _run(exercise())
+    assert content == "done"
+    assert tool_calls == []
+    assert len(requests) == 1
+    assert "include_reasoning" not in requests[0]
+
+
 # ------------------------------------------------------------------ mentions
 # AGENTS.md s6: triggers are whole-word case-insensitive @mentions. An email
 # address (foo@bar.com) is not a mention of @bar.
