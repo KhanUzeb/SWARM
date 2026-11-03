@@ -256,9 +256,8 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
     # through the normalized interface without duplicating orchestration.
     if run_id:
         from . import v2 as v2_mod
-        run = await v2_mod.get_run(run_id, owner)
-        if run:
-            run_events = await v2_mod.list_events(run_id, owner, 0)
+        run_events = await v2_mod.list_events(run_id, owner, 0)
+        if run_events:
             mapping = {
                 "run_queued": "work_queued", "run_started": "work_started",
                 "step_started": "agent_started", "step_completed": "tool_finished",
