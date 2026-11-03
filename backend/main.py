@@ -824,10 +824,9 @@ async def _sync_work_with_run(session: dict[str, Any], owner: str) -> dict[str, 
 @app.get("/api/work")
 async def api_list_work(limit: int = Query(default=50, ge=1, le=100), handle: str = Depends(require_auth)):
     sessions = await work.list_sessions(handle, limit)
-    synced = []
-    for session in sessions:
-        synced.append(await _sync_work_with_run(session, handle))
-    return synced
+    return await asyncio.gather(
+        *(_sync_work_with_run(session, handle) for session in sessions)
+    )
 
 
 @app.get("/api/work/{work_id}")

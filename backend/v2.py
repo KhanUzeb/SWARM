@@ -320,8 +320,9 @@ async def recoverable_runs() -> list[dict[str, Any]]:
     async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
-            "SELECT * FROM runs WHERE status IN ('queued', 'running', 'waiting_for_approval')"
-            " ORDER BY created_at")
+            "SELECT id, owner FROM runs "
+            "WHERE status IN ('queued', 'running', 'waiting_for_approval') "
+            "ORDER BY created_at")
         return [dict(row) for row in await cur.fetchall()]
 
 
@@ -335,15 +336,12 @@ async def get_run(run_id: str, owner: str) -> dict[str, Any] | None:
     return row
 
 
-async def get_run_any_owner(run_id: str) -> dict[str, Any] | None:
-    """Owner-blind run lookup for startup recovery only (never exposed via API)."""
+async def get_run_status_any_owner(run_id: str) -> dict[str, Any] | None:
+    """Owner-blind status lookup for startup recovery only (never exposed via API)."""
     async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT * FROM runs WHERE id=?", (run_id,))
-        row = _row(await cur.fetchone())
-    if row:
-        row["report"] = _decode(row.get("report"), None)
-    return row
+        cur = await conn.execute("SELECT id, status FROM runs WHERE id=?", (run_id,))
+        return _row(await cur.fetchone())
 
 
 async def update_run(run_id: str, owner: str, status: str, *, report: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -379,8 +377,8 @@ async def append_event(run_id: str, event_type: str, payload: dict[str, Any] | N
 
 
 async def list_events(run_id: str, owner: str, after: int = 0, limit: int = 2000) -> list[dict[str, Any]]:
-    if not await get_run(run_id, owner):
-        return []
+    # The event query's owner join is the authorization check; avoid loading
+    # and decoding the run report just to establish that the owner matches.
     async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT e.* FROM run_events e JOIN runs r ON r.id=e.run_id WHERE e.run_id=? AND r.owner=? AND e.seq>? ORDER BY e.seq LIMIT ?", (run_id, owner, after, min(max(limit, 1), 5000)))

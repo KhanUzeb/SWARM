@@ -197,6 +197,8 @@ _SMALLTALK = re.compile(
 )
 _MENTION_STRIP = re.compile(r"@\w+")
 _SLASH_SKILL = re.compile(r"/([a-zA-Z0-9_\-]+)")
+_WHITESPACE = re.compile(r"\s+")
+_SKILL_SLUG_INVALID = re.compile(r"[^a-zA-Z0-9_\-]")
 _TOOL_POLICY = (
     "You are a persistent named teammate. "
     # The agreement leads because the two common failures are a bot that
@@ -282,9 +284,30 @@ def should_offer_tools(
             if body.lstrip().startswith("/"):
                 return True
             clean = _MENTION_STRIP.sub(" ", body)
-            clean = re.sub(r"\s+", " ", clean)
+            clean = _WHITESPACE.sub(" ", clean)
             return not _SMALLTALK.match(clean)
     return False
+
+
+def _mention_position(body: str, slug: str) -> int | None:
+    """Find a whole-word @mention without compiling a name-specific regex."""
+    needle = f"@{slug}"
+    start = 0
+    while (index := body.find(needle, start)) >= 0:
+        end = index + len(needle)
+        before_is_word = index > 0 and (
+            body[index - 1].isalnum() or body[index - 1] == "_"
+        )
+        after_is_word = end < len(body) and (
+            body[end].isalnum() or body[end] == "_"
+        )
+        slug_ends_word = bool(slug) and (
+            slug[-1].isalnum() or slug[-1] == "_"
+        )
+        if not before_is_word and slug_ends_word != after_is_word:
+            return index
+        start = index + 1
+    return None
 
 
 def find_mentioned_agents(body: str, agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -296,9 +319,9 @@ def find_mentioned_agents(body: str, agents: list[dict[str, Any]]) -> list[dict[
     hits: list[tuple[int, dict[str, Any]]] = []
     lowered = body.lower()
     for a in agents:
-        match = re.search(rf"(?<!\w)@{re.escape(a['name'].lower())}\b", lowered)
-        if match:
-            hits.append((match.start(), a))
+        position = _mention_position(lowered, a["name"].lower())
+        if position is not None:
+            hits.append((position, a))
     hits.sort(key=lambda h: h[0])
     return [a for _, a in hits]
 
@@ -311,9 +334,9 @@ def find_mentioned_teams(body: str, teams: list[dict[str, Any]]) -> list[dict[st
         slug = (team.get("id") or "").lower()
         if not slug:
             continue
-        match = re.search(rf"(?<!\w)@{re.escape(slug)}\b", lowered)
-        if match:
-            hits.append((match.start(), team))
+        position = _mention_position(lowered, slug)
+        if position is not None:
+            hits.append((position, team))
     hits.sort(key=lambda h: h[0])
     return [t for _, t in hits]
 
@@ -502,7 +525,7 @@ async def _run_write_workspace(rel: str, content: str) -> str:
 
 
 async def _run_save_skill(name: str, body: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9_\-]", "", (name or "").strip())[:64]
+    slug = _SKILL_SLUG_INVALID.sub("", (name or "").strip())[:64]
     text = (body or "").strip()
     if not slug or not text:
         return "(need a slug name and a body)"

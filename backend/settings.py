@@ -48,6 +48,9 @@ from typing import Any, Iterator
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+_SYSTEM_PLACES_SEPARATORS_WINDOWS = re.compile(r"[;,]")
+_SYSTEM_PLACES_SEPARATORS_POSIX = re.compile(r"[;:,]")
+
 
 __all__ = [
     "Settings",
@@ -277,10 +280,14 @@ class Settings(BaseSettings):
         raw = (self.system_places or "").strip()
         if not raw:
             return []
-        separators = r"[;,]" if os.name == "nt" else r"[;:,]"
+        separators = (
+            _SYSTEM_PLACES_SEPARATORS_WINDOWS
+            if os.name == "nt"
+            else _SYSTEM_PLACES_SEPARATORS_POSIX
+        )
         out: list[str] = []
         seen: set[str] = set()
-        for part in re.split(separators, raw):
+        for part in separators.split(raw):
             text = part.strip().strip('"').strip("'")
             if not text:
                 continue

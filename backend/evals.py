@@ -30,13 +30,14 @@ HUMAN_EFFORT_SCALE = {
 }
 
 _TASKS: list[dict[str, Any]] = []
+_TASK_ID_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}")
 
 
 def register_task(task_id: str, category: str, prompt: str, checks: list[str] | None = None) -> dict[str, Any]:
     task_id = task_id.strip()
     prompt = prompt.strip()
     checks = checks or []
-    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}", task_id):
+    if not _TASK_ID_RE.fullmatch(task_id):
         raise ValueError("task id must be 1-80 letters, numbers, dots, underscores or hyphens")
     if category not in CATEGORIES:
         raise ValueError(f"unknown eval category: {category}")

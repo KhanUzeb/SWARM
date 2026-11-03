@@ -40,6 +40,7 @@ _QUOTES = re.compile(r"[\"'`]")
 # or `rm -rf ${HOME}` deletes the user's home while `rm -rf $HOME` is blocked.
 _BRACED_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _CMD_VAR = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
+_FORK_BOMB = re.compile(r":\s*\(\s*\)\s*\{")
 
 
 def normalize(command: str) -> str:
@@ -54,7 +55,7 @@ def normalize(command: str) -> str:
     raw = unicodedata.normalize("NFKC", command or "")
     # The classic fork bomb needs its parentheses intact, so check for the
     # self-referential shape before punctuation is flattened.
-    if re.search(r":\s*\(\s*\)\s*\{", raw):
+    if _FORK_BOMB.search(raw):
         return ":(){"
     text = raw.replace("`", " ").replace("$(", " ").replace(")", " ")
     # Quotes and both variable spellings go before the patterns see the text:
@@ -89,7 +90,7 @@ _DENY = (
     re.compile(r"remove-item\b[^|;&]*-recurse[^|;&]*[a-z]:\\"),
     re.compile(r"\bcipher\s+/w\b"),
     # fork bombs and resource exhaustion
-    re.compile(r":\s*\(\s*\)\s*\{"),
+    _FORK_BOMB,
     re.compile(r"\b(yes|curl|wget)\b[^|;&]*\|\s*(ba)?sh\b"),
     # credential harvesting and exfiltration to the network
     # Every common reader for a dotenv file, on both shell families: `type`

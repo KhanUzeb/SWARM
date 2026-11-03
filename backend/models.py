@@ -18,13 +18,14 @@ LEDGER_TOOLS = LEDGER_BUILTIN_TOOLS
 DEFAULT_JOB = "Teammate"
 AGENT_STATUSES = ("idle", "working", "needs_approval")
 HANDLE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+_HANDLE_SLUG_INVALID = re.compile(r"[^a-z0-9]+")
 MAX_GROUP_MEMBERS = 8
 MAX_TEAM_MEMBERS = 8
 USER_ROLES = ("admin", "member")
 
 
 def slugify_handle(text: str, fallback: str = "bot") -> str:
-    raw = re.sub(r"[^a-z0-9]+", "-", (text or "").strip().lower()).strip("-")[:32]
+    raw = _HANDLE_SLUG_INVALID.sub("-", (text or "").strip().lower()).strip("-")[:32]
     return raw if HANDLE_RE.match(raw) else fallback
 
 

@@ -652,6 +652,8 @@ PLUGINS_DIR = Path(__file__).resolve().parent.parent.parent / "plugins"
 PYTHON_PLUGIN_TIMEOUT = 30.0
 
 _VALID_PLUGIN_MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_VALID_PLUGIN_TOOL_NAME = re.compile(r"^[a-zA-Z0-9_\-]+$")
+_VALID_AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
 class ToolRegistry:
@@ -695,7 +697,7 @@ class ToolRegistry:
             })
             for tool in data.get("tools") or []:
                 name = tool.get("name")
-                if not name or not re.match(r"^[a-zA-Z0-9_\-]+$", name):
+                if not name or not _VALID_PLUGIN_TOOL_NAME.match(name):
                     continue
                 key = f"plugin:{slug}:{name}"
                 self._plugin_tools[key] = {
@@ -1004,7 +1006,7 @@ class ToolRegistry:
     async def _exec_create_agent(self, args: dict[str, Any]) -> str:
         """Provision a dedicated bot + DM channel for the user's need."""
         raw = (args.get("name") or "").strip().lower()
-        if not re.match(r"^[a-z0-9][a-z0-9_-]{0,31}$", raw):
+        if not _VALID_AGENT_NAME.match(raw):
             return "(need a bot name: lowercase letters, numbers, - or _, max 32 chars)"
         if await db.fetch_agent(raw):
             return f"(bot '{raw}' already exists — talk to it in #{db.dm_channel_id(raw)})"

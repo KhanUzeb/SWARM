@@ -103,9 +103,13 @@ async def create_session(
         )
         await conn.commit()
     await append_event(work_id, "work_queued", {"objective": objective or "", "source": source})
-    row = await get_session(work_id, owner)
-    assert row is not None
-    return row
+    return _public({
+        "id": work_id, "owner": owner, "source": source, "status": "queued",
+        "objective": objective or "", "channel_id": channel_id,
+        "root_message_id": root_message_id, "run_id": run_id,
+        "active_step": None, "summary": "", "requires_action": 0,
+        "created_at": now, "started_at": None, "finished_at": None,
+    })
 
 
 async def get_session(work_id: str, owner: str) -> dict[str, Any] | None:
@@ -221,14 +225,21 @@ async def append_event(
 
 
 async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str, Any]]:
-    session = await get_session(work_id, owner)
-    if not session:
-        return []
+    async with aiosqlite.connect(db.DB_PATH) as conn:
+        cur = await conn.execute(
+            "SELECT run_id FROM work_sessions WHERE id=? AND owner=?",
+            (work_id, owner),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return []
+        run_id = row[0]
     events: list[dict[str, Any]] = []
     async with aiosqlite.connect(db.DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
-            "SELECT e.* FROM work_events e JOIN work_sessions s ON s.id=e.work_id"
+            "SELECT e.seq, e.type, e.step_id, e.payload, e.created_at "
+            "FROM work_events e JOIN work_sessions s ON s.id=e.work_id"
             " WHERE e.work_id=? AND s.owner=? AND e.seq>? ORDER BY e.seq",
             (work_id, owner, after),
         )
@@ -243,7 +254,6 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
         (base,) = await cur.fetchone()
     # Reuse linked run events so run-backed sessions show the same trace
     # through the normalized interface without duplicating orchestration.
-    run_id = session.get("run_id")
     if run_id:
         from . import v2 as v2_mod
         run = await v2_mod.get_run(run_id, owner)
@@ -289,12 +299,12 @@ async def link_message(work_id: str, message_id: int) -> bool:
 
 
 async def linked_messages(work_id: str, owner: str) -> list[int]:
-    if not await get_session(work_id, owner):
-        return []
     async with aiosqlite.connect(db.DB_PATH) as conn:
         cur = await conn.execute(
-            "SELECT message_id FROM work_message_links WHERE work_id=? ORDER BY message_id",
-            (work_id,),
+            "SELECT l.message_id FROM work_message_links l "
+            "JOIN work_sessions s ON s.id=l.work_id "
+            "WHERE l.work_id=? AND s.owner=? ORDER BY l.message_id",
+            (work_id, owner),
         )
         return [r[0] for r in await cur.fetchall()]
 
@@ -333,7 +343,7 @@ async def recover_interrupted() -> int:
     for session in stuck:
         run_id = session.get("run_id")
         if run_id:
-            run = await v2_mod.get_run_any_owner(run_id)
+            run = await v2_mod.get_run_status_any_owner(run_id)
             if run and run.get("status") in {"queued", "running", "waiting_for_approval"}:
                 continue
         with suppress(Exception):
