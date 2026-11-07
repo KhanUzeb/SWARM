@@ -32,7 +32,7 @@ _fts_available: bool | None = None
 
 async def init_db() -> None:
     global _fts_available
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         await conn.executescript(SCHEMA)
         try:
             await conn.execute(
@@ -96,7 +96,7 @@ async def create_doc(
         raise ValueError("knowledge body cap is 32000 characters")
     doc_id = f"kb_{uuid.uuid4().hex[:12]}"
     now = time.time()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         await conn.execute(
             "INSERT INTO knowledge_docs(id, owner, channel_id, title, body, tags, source,"
             " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -110,7 +110,7 @@ async def create_doc(
 
 
 async def get_doc(doc_id: str, owner: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM knowledge_docs WHERE id = ? AND owner = ?", (doc_id, owner))
@@ -118,7 +118,7 @@ async def get_doc(doc_id: str, owner: str) -> dict[str, Any] | None:
 
 
 async def list_docs(owner: str, limit: int = 50) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM knowledge_docs WHERE owner = ? ORDER BY updated_at DESC LIMIT ?",
@@ -135,7 +135,7 @@ async def update_doc(doc_id: str, owner: str, patch: dict[str, Any]) -> dict[str
     body = str(patch.get("body", current["body"]))[:32_000]
     tags = str(patch.get("tags", current["tags"]))[:500]
     now = time.time()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         await conn.execute(
             "UPDATE knowledge_docs SET title=?, body=?, tags=?, updated_at=? WHERE id=? AND owner=?",
             (title, body, tags, now, doc_id, owner),
@@ -145,7 +145,7 @@ async def update_doc(doc_id: str, owner: str, patch: dict[str, Any]) -> dict[str
 
 
 async def delete_doc(doc_id: str, owner: str) -> bool:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         cur = await conn.execute(
             "DELETE FROM knowledge_docs WHERE id = ? AND owner = ?", (doc_id, owner))
         await conn.commit()
@@ -153,7 +153,7 @@ async def delete_doc(doc_id: str, owner: str) -> bool:
 
 
 async def count_docs(owner: str) -> int:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         cur = await conn.execute("SELECT COUNT(*) FROM knowledge_docs WHERE owner = ?", (owner,))
         (count,) = await cur.fetchone()
         return count
@@ -190,7 +190,7 @@ async def search_docs(
         clauses.append(f"owner IN ({','.join('?' for _ in owners)})")
         params.extend(owners)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         rows: list[dict[str, Any]] = []
         if await fts_available():

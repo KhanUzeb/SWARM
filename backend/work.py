@@ -62,7 +62,7 @@ def _event_lock() -> asyncio.Lock:
 
 
 async def init_db() -> None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         await conn.executescript(SCHEMA)
         await conn.commit()
 
@@ -94,7 +94,7 @@ async def create_session(
 ) -> dict[str, Any]:
     work_id = f"work_{uuid.uuid4().hex[:12]}"
     now = time.time()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         await conn.execute(
             "INSERT INTO work_sessions(id, owner, source, status, objective, channel_id,"
             " root_message_id, run_id, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -113,7 +113,7 @@ async def create_session(
 
 
 async def get_session(work_id: str, owner: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM work_sessions WHERE id=? AND owner=?", (work_id, owner))
@@ -122,7 +122,7 @@ async def get_session(work_id: str, owner: str) -> dict[str, Any] | None:
 
 
 async def get_session_any_owner(work_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute("SELECT * FROM work_sessions WHERE id=?", (work_id,))
         row = _row(await cur.fetchone())
@@ -130,7 +130,7 @@ async def get_session_any_owner(work_id: str) -> dict[str, Any] | None:
 
 
 async def list_sessions(owner: str, limit: int = 50) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM work_sessions WHERE owner=? ORDER BY created_at DESC LIMIT ?",
@@ -141,7 +141,7 @@ async def list_sessions(owner: str, limit: int = 50) -> list[dict[str, Any]]:
 
 
 async def find_by_run(run_id: str, owner: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM work_sessions WHERE run_id=? AND owner=? ORDER BY created_at DESC LIMIT 1",
@@ -177,7 +177,7 @@ async def append_event(
     # Strip anything that must never leak to the UI.
     safe = _strip_sensitive(payload)
     async with _event_lock():
-        async with aiosqlite.connect(db.DB_PATH) as conn:
+        async with db.open_db() as conn:
             cur = await conn.execute(
                 "SELECT COALESCE(MAX(seq), 0) + 1 FROM work_events WHERE work_id=?", (work_id,))
             (seq,) = await cur.fetchone()
@@ -225,7 +225,7 @@ async def append_event(
 
 
 async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         cur = await conn.execute(
             "SELECT run_id FROM work_sessions WHERE id=? AND owner=?",
             (work_id, owner),
@@ -235,7 +235,7 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
             return []
         run_id = row[0]
     events: list[dict[str, Any]] = []
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT e.seq, e.type, e.step_id, e.payload, e.created_at "
@@ -288,7 +288,7 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
 
 async def link_message(work_id: str, message_id: int) -> bool:
     """Idempotent message-to-work linking. Returns True if newly linked."""
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         cur = await conn.execute(
             "INSERT OR IGNORE INTO work_message_links(work_id, message_id) VALUES(?,?)",
             (work_id, message_id),
@@ -298,7 +298,7 @@ async def link_message(work_id: str, message_id: int) -> bool:
 
 
 async def linked_messages(work_id: str, owner: str) -> list[int]:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         cur = await conn.execute(
             "SELECT l.message_id FROM work_message_links l "
             "JOIN work_sessions s ON s.id=l.work_id "
@@ -332,7 +332,7 @@ async def recover_interrupted() -> int:
     "running" work after a restart. Returns the settled count.
     """
     from . import v2 as v2_mod
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM work_sessions WHERE status IN"

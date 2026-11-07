@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 // The API client lives in lib.js, which is its only owner.
 import { apiJson, bustCache, CACHE_TTL, HISTORY_LIMIT, fmtBytes, isUnauthorized, quickCreatePayload, safeStorageGet, safeStorageSet } from "./lib.js";
 import {
@@ -15,19 +15,24 @@ import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { MessageList } from "./components/MessageList";
 import { Composer } from "./components/Composer";
-import { ComputerPanel } from "./components/ComputerPanel.jsx";
 import { CommandPalette } from "./components/CommandPalette";
 import { LoginScreen } from "./components/LoginScreen";
 import { CommandCenter } from "./components/CommandCenter.jsx";
-import { WorkHome, WorkDetail as WorkRunDetail } from "./components/WorkHome.jsx";
 import { ContextDrawer } from "./components/ContextDrawer.jsx";
-import { KnowledgeView } from "./components/KnowledgeView.jsx";
-import { WorkRail, WorkRailSheet, WorkDetail } from "./components/WorkRail.jsx";
+// Heavy views load on demand so the talk surface does not carry them.
+const ComputerPanel = lazy(() => import("./components/ComputerPanel.jsx").then((m) => ({ default: m.ComputerPanel })));
+const WorkHome = lazy(() => import("./components/WorkHome.jsx").then((m) => ({ default: m.WorkHome })));
+const WorkRunDetail = lazy(() => import("./components/WorkHome.jsx").then((m) => ({ default: m.WorkDetail })));
+const KnowledgeView = lazy(() => import("./components/KnowledgeView.jsx").then((m) => ({ default: m.KnowledgeView })));
+const WorkRail = lazy(() => import("./components/WorkRail.jsx").then((m) => ({ default: m.WorkRail })));
+const WorkRailSheet = lazy(() => import("./components/WorkRail.jsx").then((m) => ({ default: m.WorkRailSheet })));
+const WorkDetail = lazy(() => import("./components/WorkRail.jsx").then((m) => ({ default: m.WorkDetail })));
 import { ApprovalsInbox } from "./components/ApprovalsInbox";
 import { pairAuditLines } from "./work/inspectorModel";
 import { Flap, Lamp } from "./components/Flap";
 import { X, MessageSquare, Folder, FileText } from "lucide-react";
 import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js";
+import { useFocusTrap } from "./lib/focusTrap";
 
 // PANEL_GROUPS is owned by ComputerPanel.jsx. The copy that lived here was
 // dead and had drifted from it.
@@ -115,6 +120,8 @@ export default function App() {
   tokenRef.current = token; channelRef.current = channel;
   const ingestWorkEventRef = useRef(null);
   const handleChannelDeletedRef = useRef(null);
+  const runMonitorRef = useRef(null);
+  useFocusTrap(runMonitorRef, !!selectedRun);
 
   useEffect(() => () => {
     if (outboxRetryTimer.current) {
@@ -428,10 +435,15 @@ export default function App() {
     const gen = ++wsGen.current;
     const ws = new WebSocket(url);
     wsRef.current = ws;
+    let opened = false;
+    const openTimer = window.setTimeout(() => { if (!opened) ws.close(); }, 8000);
 
     ws.onopen = () => {
       if (gen !== wsGen.current) { ws.close(); return; }
+      opened = true;
+      window.clearTimeout(openTimer);
       reconnectAttempt.current = 0;
+      outboxBackoff.current = 1000;
       setWsStatus("connected");
       ws.send(JSON.stringify({ token: t, last_seen_id: lastSeenId.current[channelRef.current] || null }));
     };
@@ -471,13 +483,17 @@ export default function App() {
       else if (msg.type === "error") flash(msg.detail || "Error", "error");
     };
     ws.onclose = (ev) => {
+      window.clearTimeout(openTimer);
       if (gen !== wsGen.current) return; // superseded by a newer connection
       if (intentionalClose.current || ev.code === 4001) { setWsStatus("offline"); return; }
       setWsStatus("offline");
       // Nothing to re-handshake with: the token is gone, so a retry loop would
       // just spin against a server that closes it the instant it opens.
       if (!tokenRef.current) return;
-      const delay = Math.min(1000 * 2 ** reconnectAttempt.current, 15000);
+      // A socket that never opened is a failed open: restart its backoff so a
+      // short outage does not pin the next attempt at the 15s cap.
+      if (!opened) reconnectAttempt.current = 0;
+      const delay = Math.min(1000 * 2 ** reconnectAttempt.current, 15000) + Math.floor(Math.random() * 250);
       reconnectAttempt.current++;
       reconnectTimer.current = setTimeout(connectWs, delay);
     };
@@ -746,11 +762,12 @@ export default function App() {
         outboxBackoff.current = Math.min(outboxBackoff.current * 2, 30000);
         if (outboxRetryTimer.current) return;
         outboxRetryChannel.current = channelId;
+        const jittered = delay + Math.floor(Math.random() * 250);
         outboxRetryTimer.current = window.setTimeout(() => {
           outboxRetryTimer.current = null;
           outboxRetryChannel.current = null;
           setOutboxRetryTick(n => n + 1);
-        }, delay);
+        }, jittered);
       };
       for (let i = 0; i < pending.length; i += 1) {
         // Signing out or switching accounts mid-drain leaves the rest of this
@@ -991,6 +1008,7 @@ export default function App() {
 
   return (
     <div className={`app workspace ${threadId ? "thread-open" : ""} ${workRailOpen ? "work-rail-open" : ""} ${rosterFolded ? "roster-folded" : ""}`}>
+      <a href="#log" className="skip-link">Skip to transcript</a>
       <Sidebar
         user={user}
         channels={channels}
@@ -1049,7 +1067,7 @@ export default function App() {
 
         <main id="main">
           {["dashboard", "home"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} onOpenConnect={() => setMainView("connect")} />}
-          {["work", "workflows", "runs"].includes(mainView) && <WorkHome token={token} onOpenRun={setSelectedRun} />}
+          {["work", "workflows", "runs"].includes(mainView) && (<Suspense fallback={<div className="log-empty"><span className="spinner" aria-hidden="true" /></div>}><WorkHome token={token} onOpenRun={setSelectedRun} /></Suspense>)}
           {mainView === "talk" && (
             <MessageList
               messages={messages}
@@ -1100,22 +1118,24 @@ export default function App() {
           )}
 
           {["places", "connect"].includes(mainView) && (
-            <ComputerPanel
-              key={mainView}
-              group={mainView}
-              computer={computer}
-              token={token}
-              meRole={meRole}
-              onRefresh={loadComputer}
-              flash={flash}
-            />
+            <Suspense fallback={<div className="log-empty"><span className="spinner" aria-hidden="true" /></div>}>
+              <ComputerPanel
+                key={mainView}
+                group={mainView}
+                computer={computer}
+                token={token}
+                meRole={meRole}
+                onRefresh={loadComputer}
+                flash={flash}
+              />
+            </Suspense>
           )}
           {mainView === "paper" && <PaperView messages={roots} title={current.name} />}
           {mainView === "files" && <FilesView computer={computer} />}
           {mainView === "agents" && <AgentsView agents={allAgents} onOpenChannel={(id) => { setChannel(id); setMainView("talk"); }} />}
-          {mainView === "knowledge" && <KnowledgeView token={token} flash={flash} />}
+          {mainView === "knowledge" && (<Suspense fallback={<div className="log-empty"><span className="spinner" aria-hidden="true" /></div>}><KnowledgeView token={token} flash={flash} /></Suspense>)}
           {mainView === "approvals" && (
-            <div id="log" className="approvals-view">
+            <div id="log" className="approvals-view" tabIndex={-1}>
               <header className="page-header">
                 <div>
                   <h1>Approvals</h1>
@@ -1192,33 +1212,35 @@ export default function App() {
         )}
       </div>
 
-      <WorkRail
-        sessions={mainView === "talk" ? workSessions.filter(s => !s.channel_id || s.channel_id === channel) : workSessions}
-        eventsByWork={eventsByWork}
-        agents={allAgents}
-        approvals={approvals}
-        token={token}
-        channelId={channel}
-        selectedWork={selectedWork}
-        onSelectWork={setSelectedWork}
-        onCancelWork={refreshWork}
-        onResolveApproval={resolveApproval}
-        onOpenThread={onReply}
-        collapsed={!workRailOpen}
-        connected={workConnected}
-        error={workError}
-        onRetry={refreshWork}
-        onToggle={() => setWorkRailOpen(o => {
-          safeStorageSet("swarm_work_rail", o ? "0" : "1");
-          return !o;
-        })}
-      />
+      <Suspense fallback={null}>
+        <WorkRail
+          sessions={mainView === "talk" ? workSessions.filter(s => !s.channel_id || s.channel_id === channel) : workSessions}
+          eventsByWork={eventsByWork}
+          agents={allAgents}
+          approvals={approvals}
+          token={token}
+          channelId={channel}
+          selectedWork={selectedWork}
+          onSelectWork={setSelectedWork}
+          onCancelWork={refreshWork}
+          onResolveApproval={resolveApproval}
+          onOpenThread={onReply}
+          collapsed={!workRailOpen}
+          connected={workConnected}
+          error={workError}
+          onRetry={refreshWork}
+          onToggle={() => setWorkRailOpen(o => {
+            safeStorageSet("swarm_work_rail", o ? "0" : "1");
+            return !o;
+          })}
+        />
+      </Suspense>
 
       {selectedRun && (
         <div className="run-monitor-backdrop" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setSelectedRun(null); }}>
-          <section className="run-monitor">
+          <section ref={runMonitorRef} className="run-monitor">
             <button className="panel-close" onClick={() => setSelectedRun(null)} aria-label="Close run detail"><X size={14} /></button>
-            <WorkRunDetail run={selectedRun} token={token} onStatusChange={setSelectedRun} />
+            <Suspense fallback={<span className="spinner" aria-hidden="true" />}><WorkRunDetail run={selectedRun} token={token} onStatusChange={setSelectedRun} /></Suspense>
           </section>
         </div>
       )}
@@ -1226,25 +1248,27 @@ export default function App() {
         const detail = workSessions.find(s => s.id === selectedWork);
         if (!detail) return null;
         return (
-          <WorkRailSheet open onClose={() => setSelectedWork(null)}>
-            <WorkDetail
-              session={detail}
-              events={eventsByWork[detail.id] || []}
-              token={token}
-              agents={allAgents}
-              approvals={approvals}
-              onCancel={async () => {
-                try { await cancelWork(tokenRef.current, detail.id); refreshWork(); }
-                catch { flash("Could not cancel work", "error"); }
-              }}
-              onResolveApproval={async (approvalId, decision) => {
-                if (!approvalId) return;
-                await resolveApproval(approvalId, decision);
-              }}
-              onOpenThread={onReply}
-              onClose={() => setSelectedWork(null)}
-            />
-          </WorkRailSheet>
+          <Suspense fallback={null}>
+            <WorkRailSheet open onClose={() => setSelectedWork(null)}>
+              <WorkDetail
+                session={detail}
+                events={eventsByWork[detail.id] || []}
+                token={token}
+                agents={allAgents}
+                approvals={approvals}
+                onCancel={async () => {
+                  try { await cancelWork(tokenRef.current, detail.id); refreshWork(); }
+                  catch { flash("Could not cancel work", "error"); }
+                }}
+                onResolveApproval={async (approvalId, decision) => {
+                  if (!approvalId) return;
+                  await resolveApproval(approvalId, decision);
+                }}
+                onOpenThread={onReply}
+                onClose={() => setSelectedWork(null)}
+              />
+            </WorkRailSheet>
+          </Suspense>
         );
       })()}
       {quickAction && <QuickCreateModal action={quickAction} token={token} agents={allAgents} flash={flash} onClose={() => setQuickAction(null)} onCreated={async (id) => { setQuickAction(null); await loadChannels(); await loadAllAgents(); await loadTeams(); if (id) { setChannel(id); setMainView("talk"); } flash("Created", "success"); }} />}
@@ -1313,7 +1337,7 @@ function PaperView({ messages, title }) {
     return { code: codeParts.slice(0, 12), math: mathParts.slice(0, 12) };
   }, [messages]);
   return (
-    <div id="log" className="paper-log">
+    <div id="log" className="paper-log" tabIndex={-1}>
       <article className="paper-doc">
         <h1>{title}</h1>
         <p className="paper-meta">
@@ -1357,7 +1381,7 @@ function FilesView({ computer }) {
   const [query, setQuery] = useState("");
   if (!computer) {
     return (
-      <div id="log" className="files-view">
+      <div id="log" className="files-view" tabIndex={-1}>
         <EmptyState
           kind="folder"
           title="No sandbox connected"
@@ -1370,7 +1394,7 @@ function FilesView({ computer }) {
   const q = query.trim().toLowerCase();
   const visible = q ? files.filter(f => String(f.name || f.path || "").toLowerCase().includes(q)) : files;
   return (
-    <div id="log" className="files-view">
+    <div id="log" className="files-view" tabIndex={-1}>
       <div className="files-header">
         <div className="files-header-main">
           <span className="mono muted" title={computer.cwd}>{computer.cwd}</span>
@@ -1428,7 +1452,7 @@ function AgentsView({ agents, onOpenChannel }) {
     || (a.display_name || "").toLowerCase().includes(q)
     || (a.job || "").toLowerCase().includes(q));
   return (
-    <div id="log" className="agents-view">
+    <div id="log" className="agents-view" tabIndex={-1}>
       <header className="agents-view-head">
         <div>
           <h2 className="agents-view-title">Roster</h2>
@@ -1527,6 +1551,8 @@ function ThreadPanel({ parentId, messages, threadReplies, allAgents, user, onClo
 }
 
 function QuickCreateModal({ action, token, agents, flash, onClose, onCreated }) {
+  const modalRef = useRef(null);
+  useFocusTrap(modalRef, true);
   const [name, setName] = useState("");
   const [detail, setDetail] = useState("");
   const [avatar, setAvatar] = useState("");
@@ -1598,7 +1624,7 @@ function QuickCreateModal({ action, token, agents, flash, onClose, onCreated }) 
       aria-label={labels[action]}
       onClick={e => { if (e.target === e.currentTarget) onClose?.(); }}
     >
-      <section className="quick-create">
+      <section ref={modalRef} className="quick-create">
         <header className="run-monitor-head">
           <div>
             <h2>{labels[action]}</h2>

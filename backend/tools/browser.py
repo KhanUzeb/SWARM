@@ -99,7 +99,7 @@ async def close() -> str:
                 await _browser.close()
             if _playwright:
                 await _playwright.stop()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — browser probes are best-effort, never 500
             pass
         _playwright = _browser = _context = _page = None
         LAST_URL = ""
@@ -132,7 +132,7 @@ async def navigate(url: str) -> str:
             LAST_URL = page.url
             title = await page.title()
             return f"opened {LAST_URL} - {title}"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — browser probes are best-effort, never 500
             LAST_ERROR = str(exc)
             if "playwright" in str(exc).lower() or "SWARM_BROWSER" in str(exc):
                 return _unavailable(str(exc))
@@ -178,7 +178,7 @@ async def snapshot() -> str:
                 f"url: {LAST_URL}\ntitle: {title}\n\n"
                 f"{body or '(empty page)'}\n\nlinks:\n{link_lines or '(none)'}"
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — browser probes are best-effort, never 500
             return _unavailable(str(exc)) if "playwright" in str(exc).lower() else f"(browser snapshot error: {exc})"
 
 
@@ -198,7 +198,7 @@ async def click(selector: str) -> str:
                 )
             LAST_URL = page.url
             return f"clicked {sel} — now {LAST_URL}"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — browser probes are best-effort, never 500
             return f"(browser click error: {exc})"
 
 
@@ -211,7 +211,7 @@ async def type_text(selector: str, text: str) -> str:
             page = await _ensure_page()
             await page.fill(sel, text or "")
             return f"typed {len(text or '')} chars into {sel}"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — browser probes are best-effort, never 500
             return f"(browser type error: {exc})"
 
 
@@ -227,7 +227,7 @@ async def press(key: str) -> str:
                     "space; it was closed. Navigate to a public URL."
                 )
             return f"pressed {name}"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — browser probes are best-effort, never 500
             return f"(browser press error: {exc})"
 
 
@@ -262,7 +262,7 @@ async def screenshot() -> str:
             await page.screenshot(path=str(dest), full_page=False)
             LAST_URL = page.url
             return f"saved screenshots/{name} ({dest.stat().st_size} bytes) of {LAST_URL}"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — browser probes are best-effort, never 500
             return _unavailable(str(exc)) if "playwright" in str(exc).lower() else f"(browser screenshot error: {exc})"
 
 

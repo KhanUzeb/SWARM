@@ -186,7 +186,7 @@ async def context_stats(
         out["memory_notes"] = counts["notes"]
         try:
             notes, summary = await db.get_context_memories(agent_name, channel_id, 12)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — stats must never break context build
             notes, summary = [], None
         notes_chars = sum(_chars(n.get("body")) for n in (notes or []))
         summary_chars = _chars((summary or {}).get("body"))
@@ -201,7 +201,7 @@ async def context_stats(
         chars += notes_chars + summary_chars
         try:
             out["kb_docs"] = await kb_mod.count_docs(f"agent:{agent_name}")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — unknown inventory stays None, never 0
             pass  # Unknown inventory stays None, never an empty 0
     out["total_chars"] = chars
     return out

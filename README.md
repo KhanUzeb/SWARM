@@ -269,8 +269,7 @@ swarm/
   profiles/           bot profile.md (seeded bots + job templates)
   cli/swarm_cli.py    JSON in / JSON out — scripts and other agents post here
   tests/              pytest (providers mocked, deterministic + offline)
-  docs/               DEPLOY.md, PRODUCT.md, CHANGELOG.md, adr/
-  SPEC.md             API + agent contract (source of truth)
+  docs/               DEPLOY.md, PRODUCT.md, CHANGELOG.md
   AGENTS.md           guide for coding agents working in this repo
 ```
 
@@ -280,9 +279,7 @@ swarm/
 
 | File | Purpose |
 | ---- | ------- |
-| [docs/CODEBASE-GUIDE.md](docs/CODEBASE-GUIDE.md) | **New here:** how a message travels, which files to read, where the sharp edges are |
 | [docs/PRODUCT.md](docs/PRODUCT.md) | Product thesis, competition, scope |
-| [docs/FAQ.md](docs/FAQ.md) | Is it safe to expose? Offline with Ollama? How keys are stored? |
 | [AGENTS.md](AGENTS.md) | Product rules and the visual system, for coding agents |
 
 **Operating it**
@@ -297,27 +294,9 @@ swarm/
 
 | File | Purpose |
 | ---- | ------- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Request flow, WebSocket fanout, ER data model |
-| [docs/COMPARISON.md](docs/COMPARISON.md) | Honest positioning vs libraries and chat platforms |
-| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Feature layers + revert map |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Feature layers + revert map (includes merged audit, positioning, and launch facts) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, checks, PR rules |
-
-**Audits** — read before changing these areas
-
-| File | Covers |
-| ---- | ------ |
-| [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md) | 13 findings with file:line evidence |
-| [docs/AGENT-AUDIT.md](docs/AGENT-AUDIT.md) | Agent loop, budgets, untrusted tool data |
-| [docs/BACKEND-AUDIT.md](docs/BACKEND-AUDIT.md) | Schema, concurrency, WebSocket, config sprawl |
-| [docs/FRONTEND-AUDIT.md](docs/FRONTEND-AUDIT.md) | Bundle, render cost, a11y, mobile |
-
-**Pre-release**
-
-| File | Purpose |
-| ---- | ------- |
-| [docs/launch/release-v0.1.0.md](docs/launch/release-v0.1.0.md) | Release notes and known gaps |
-| [docs/launch/pr-triage.md](docs/launch/pr-triage.md) | Triage for the open dependency PRs |
-| [docs/launch/good-first-issues.md](docs/launch/good-first-issues.md) | Ten scoped first-contributor issues |
+| [ai-support/README.md](ai-support/README.md) | Provider settings user guide |
 
 ## Tests
 

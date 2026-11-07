@@ -316,7 +316,7 @@ class Hub:
                 # One slow client must not stall the room: bound each send.
                 await asyncio.wait_for(ws.send_json(payload), timeout=5.0)
                 return None
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - dead socket is evicted, never fails fanout
                 return ws
 
         # Concurrent fan-out: sequential await stalled the whole room behind
@@ -343,6 +343,10 @@ _gc_task: asyncio.Task | None = None
 ROUTINE_TICK_SECONDS = 20
 GC_SWEEP_INTERVAL_SECONDS = 300
 HANDOFF_DEPTH = 3
+# WS heartbeat: server sends {"type":"ping"} when no frame arrives within
+# HEARTBEAT seconds and closes after DEADLINE without any client frame.
+WS_HEARTBEAT_SECONDS = 30
+WS_HEARTBEAT_DEADLINE_SECONDS = 90
 
 
 @asynccontextmanager
@@ -401,6 +405,29 @@ app.router.lifespan_context = lifespan
 
 
 _channel_tasks: dict[str, set[asyncio.Task]] = {}
+# One lock per (loop, channel) serialises agent batches in that channel
+# without stalling other channels. Per-loop registry mirrors work_state
+# event_lock: a module-global Lock binds to its first loop and then raises
+# "bound to a different event loop" under TestClient portals/reload.
+_channel_locks: dict[tuple[int, str], asyncio.Lock] = {}
+_loop_objects: dict[int, asyncio.AbstractEventLoop] = {}
+
+
+def _channel_lock(channel_id: str) -> asyncio.Lock:
+    """Return the run-queue lock for this channel on the running loop."""
+    loop = asyncio.get_running_loop()
+    key = (id(loop), channel_id)
+    entry = _channel_locks.get(key)
+    if entry is not None:
+        return entry
+    for stale_id in [lid for lid, lk in _loop_objects.items() if lk.is_closed()]:
+        stale_loop = _loop_objects.pop(stale_id, None)
+        for ck in [k for k in _channel_locks if k[0] == stale_id]:
+            _channel_locks.pop(ck, None)
+    _loop_objects[id(loop)] = loop
+    fresh = asyncio.Lock()
+    _channel_locks[key] = fresh
+    return fresh
 
 
 def _track_task(coro: Any, label: str, channel_id: str | None = None) -> asyncio.Task:
@@ -499,7 +526,7 @@ async def api_v2_oauth_callback(code: str, state: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - exchange failures are 502, not 500
         _logger.warning("provider OAuth callback failed: %s", exc)
         raise HTTPException(status_code=502, detail="provider OAuth exchange failed")
 
@@ -927,7 +954,7 @@ async def ws_v2_run(websocket: WebSocket, run_id: str):
             await asyncio.sleep(0.75)
     except WebSocketDisconnect:
         pass
-    except Exception:
+    except Exception:  # noqa: BLE001 - close is all we can do for a dead run socket
         with suppress(Exception):
             await websocket.close(code=1011)
 
@@ -2353,7 +2380,7 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
     # token let unauthenticated callers enumerate channel ids via 4004/4001.
     try:
         first = await websocket.receive_json()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - bad first frame is a bad handshake (4001)
         await websocket.close(code=4001)
         return
 
@@ -2389,7 +2416,7 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
             if after is None:
                 try:
                     await websocket.send_json({"type": "error", "detail": "invalid last_seen_id"})
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 - dead socket ends via outer finally
                     pass
             else:
                 # Page through the entire gap. A single 200-row page silently
@@ -2406,53 +2433,80 @@ async def ws_channel(websocket: WebSocket, channel_id: str):
                         break
                     cursor = int(page[-1]["id"])
 
-        while True:
-            try:
-                data = await websocket.receive_json()
-            except WebSocketDisconnect:
-                raise
-            except Exception:  # noqa: BLE001 - one bad frame must not kill chat
-                await websocket.send_json({"type": "error", "detail": "invalid JSON frame"})
-                continue
-            if not isinstance(data, dict):
-                await websocket.send_json({"type": "error", "detail": "invalid message frame"})
-                continue
-            raw_body = data.get("body")
-            if not isinstance(raw_body, str):
-                await websocket.send_json({"type": "error", "detail": "body must be text"})
-                continue
-            body = raw_body.strip()
-            if not body:
-                continue
-            if len(body) > 8000:
-                await websocket.send_json({"type": "error", "detail": "body too long (max 8000 chars)"})
-                continue
-            parent_id = data.get("parent_id")
-            if parent_id is not None:
-                # Strict int: bool and float wire values must not coerce.
-                # int(3.9) == 3 would attach the reply to the wrong parent.
-                if isinstance(parent_id, bool) or not isinstance(parent_id, int):
+        # Heartbeat: a client that stops answering is closed instead of
+        # holding a room slot forever. asyncio.wait (not wait_for) so a
+        # ping timeout never cancels the pending starlette receive.
+        _recv_task: asyncio.Task | None = None
+        _last_alive = time.monotonic()
+        try:
+            while True:
+                if _recv_task is None or _recv_task.done():
+                    _recv_task = asyncio.create_task(websocket.receive_json())
+                _done, _ = await asyncio.wait({_recv_task}, timeout=WS_HEARTBEAT_SECONDS)
+                if _recv_task not in _done:
                     try:
-                        coerced = int(str(parent_id).strip())
-                        if str(coerced) != str(parent_id).strip():
-                            raise ValueError("not an int")
-                        parent_id = coerced
-                    except (TypeError, ValueError, AttributeError):
-                        await websocket.send_json({"type": "error", "detail": "invalid parent message"})
-                        continue
-                if not await db.message_in_channel(parent_id, channel_id):
-                    await websocket.send_json({"type": "error", "detail": "parent message does not exist"})
+                        await websocket.send_json({"type": "ping", "ts": time.time()})
+                    except Exception:  # noqa: BLE001 - dead socket ends via finally
+                        raise WebSocketDisconnect(code=1008)
+                    if time.monotonic() - _last_alive > WS_HEARTBEAT_DEADLINE_SECONDS:
+                        await websocket.close(code=1008)
+                        break
                     continue
-            if _rate_limited(handle):
-                await websocket.send_json({"type": "error", "detail": "slow down"})
-                continue
-            try:
-                msg = await db.add_message(channel_id, handle, body, "human", parent_id)
-            except Exception:  # noqa: BLE001 - channel deleted mid-connection
-                await websocket.send_json({"type": "error", "detail": "channel is gone"})
-                break
-            await hub.broadcast(channel_id, {"type": "message", "message": msg})
-            await _maybe_trigger_agents(channel_id, msg)
+                try:
+                    data = _recv_task.result()
+                except WebSocketDisconnect:
+                    raise
+                except Exception:  # noqa: BLE001 - one bad frame must not kill chat
+                    await websocket.send_json({"type": "error", "detail": "invalid JSON frame"})
+                    continue
+                _last_alive = time.monotonic()
+                if not isinstance(data, dict):
+                    await websocket.send_json({"type": "error", "detail": "invalid message frame"})
+                    continue
+                if data.get("type") == "pong":
+                    continue
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong", "ts": time.time()})
+                    continue
+                raw_body = data.get("body")
+                if not isinstance(raw_body, str):
+                    await websocket.send_json({"type": "error", "detail": "body must be text"})
+                    continue
+                body = raw_body.strip()
+                if not body:
+                    continue
+                if len(body) > 8000:
+                    await websocket.send_json({"type": "error", "detail": "body too long (max 8000 chars)"})
+                    continue
+                parent_id = data.get("parent_id")
+                if parent_id is not None:
+                    # Strict int: bool and float wire values must not coerce.
+                    # int(3.9) == 3 would attach the reply to the wrong parent.
+                    if isinstance(parent_id, bool) or not isinstance(parent_id, int):
+                        try:
+                            coerced = int(str(parent_id).strip())
+                            if str(coerced) != str(parent_id).strip():
+                                raise ValueError("not an int")
+                            parent_id = coerced
+                        except (TypeError, ValueError, AttributeError):
+                            await websocket.send_json({"type": "error", "detail": "invalid parent message"})
+                            continue
+                    if not await db.message_in_channel(parent_id, channel_id):
+                        await websocket.send_json({"type": "error", "detail": "parent message does not exist"})
+                        continue
+                if _rate_limited(handle):
+                    await websocket.send_json({"type": "error", "detail": "slow down"})
+                    continue
+                try:
+                    msg = await db.add_message(channel_id, handle, body, "human", parent_id)
+                except Exception:  # noqa: BLE001 - channel deleted mid-connection
+                    await websocket.send_json({"type": "error", "detail": "channel is gone"})
+                    break
+                await hub.broadcast(channel_id, {"type": "message", "message": msg})
+                await _maybe_trigger_agents(channel_id, msg)
+        finally:
+            if _recv_task is not None and not _recv_task.done():
+                _recv_task.cancel()
     except WebSocketDisconnect:
         pass
     finally:
@@ -2494,6 +2548,8 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
                               model_override: str | None = None,
                               session: Any = None) -> None:
     if depth > HANDOFF_DEPTH:
+        # HANDOFF_DEPTH is the handoff cycle cap: A -> B -> A ping-pong is
+        # bounded by depth (3 hops, 4 bots), pinned by flagship flows.
         return
     kind = msg.get("author_kind")
     body = msg.get("body") or ""
@@ -2579,9 +2635,13 @@ async def _maybe_trigger_agents(channel_id: str, msg: dict, *, depth: int = 0,
 async def _run_agents_in_order(channel_id: str, agents: list[dict], *, depth: int = 0,
                                model_override: str | None = None,
                                session: Any = None) -> None:
-    for a in agents:
-        await _run_agent(channel_id, a, depth=depth, model_override=model_override,
-                         session=session)
+    # One batch per channel at a time: two triggers in the same channel
+    # queue on this lock instead of interleaving tool/audit writes.
+    # Other channels keep their own lock and still run in parallel.
+    async with _channel_lock(channel_id):
+        for a in agents:
+            await _run_agent(channel_id, a, depth=depth, model_override=model_override,
+                             session=session)
 
 
 async def _set_status(name: str, status: str) -> None:
@@ -2755,7 +2815,7 @@ async def _run_agent(channel_id: str, agent_row: dict, *, depth: int = 0,
             await _emit_work_event(channel_id, session, "work_cancelled", {}, name)
             await _set_status(name, "idle")
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - agent failures become [agent error:], not 500s
         _logger.error(
             "agent run failed for %s",
             name,
@@ -2793,14 +2853,17 @@ async def _execute_routine(row: dict, *, test_run: bool = False) -> None:
         )
         msg = await db.add_message(channel_id, "routine", body, "system")
         await hub.broadcast(channel_id, {"type": "message", "message": msg})
-        result = await _run_agent(channel_id, agent_row, source="routine")
+        # Same run-queue as chat batches: a routine for this DM waits behind
+        # any live batch in the same channel instead of interleaving with it.
+        async with _channel_lock(channel_id):
+            result = await _run_agent(channel_id, agent_row, source="routine")
         excerpt = (result.get("reply") or "")[:240]
         await db.mark_routine_run(
             row["id"], status="ok", excerpt=excerpt,
             interval_minutes=row["interval_minutes"],
             advance_schedule=not test_run,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - routine failures are logged, never raise
         _logger.error(
             "routine %s failed",
             row.get("id"),
@@ -2812,7 +2875,7 @@ async def _execute_routine(row: dict, *, test_run: bool = False) -> None:
                 interval_minutes=row["interval_minutes"],
                 advance_schedule=not test_run,
             )
-        except Exception as persist_exc:  # noqa: BLE001
+        except Exception as persist_exc:  # noqa: BLE001 - log-only; original failure already kept
             _logger.error(
                 "could not persist routine failure %s",
                 row.get("id"),

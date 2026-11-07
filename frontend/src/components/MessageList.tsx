@@ -103,6 +103,146 @@ function useLatest<T>(value: T) {
   return ref;
 }
 
+// Stream buffer isolation: streaming tokens update only this memoized
+// subtree, so the finished rows do not re-render per token.
+const StreamLines = React.memo(function StreamLines({
+  streamText,
+  allAgents,
+  typing,
+}: {
+  streamText: Record<string, string>;
+  allAgents: Agent[];
+  typing?: string | null;
+}) {
+  const live = Object.entries(streamText).filter(([, t]) => t && t.length > 0);
+  return (
+    <>
+      {live.length > 0 && (
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {live.map(([a]) => allAgents.find((x) => x.name === a)?.display_name || a).join(", ")}{" "}
+          {live.length > 1 ? "are" : "is"} still writing
+        </p>
+      )}
+      {live.map(([author, text]) => {
+        const who = allAgents.find((a) => a.name === author);
+        return (
+          <div className="entry streaming-entry" key={`stream-${author}`} inert={true}>
+            <div className="entry-head">
+              <span className="entry-author">{who?.display_name || author}</span>
+              <span className="entry-time">now</span>
+            </div>
+            <div className="entry-body">
+              <RichBody body={text} />
+              <span className="streaming-cursor" aria-hidden="true" />
+            </div>
+          </div>
+        );
+      })}
+      {typing && !live.length && (
+        <div className="entry">
+          <div className="entry-head">
+            <span className="entry-author">{typing}</span>
+          </div>
+          <div className="entry-body">
+            <span className="bui-loading">
+              <span className="spinner spinner-sm" aria-hidden="true" />
+              reading the room
+            </span>
+          </div>
+        </div>
+      )}
+    </>
+  );
+});
+
+const RootRows = React.memo(function RootRows({
+  roots,
+  allAgents,
+  user,
+  reactions,
+  replyCounts,
+  groupedWith,
+  retryingId,
+  streamingAgents,
+  workByMessage,
+  eventsByWork,
+  auditByWork,
+  canModerate,
+  onReply,
+  onReact,
+  onUnreact,
+  onDelete,
+  onOpenThread,
+  onRetry,
+}: {
+  roots: Message[];
+  allAgents: Agent[];
+  user?: { handle?: string };
+  reactions: Record<string | number, Reaction[]>;
+  replyCounts: Record<string | number, number>;
+  groupedWith: (prev?: Message, cur?: Message) => boolean;
+  retryingId?: number | string | null;
+  streamingAgents?: Record<string, boolean>;
+  workByMessage?: Record<string | number, WorkSession>;
+  eventsByWork?: Record<string, WorkEvent[]>;
+  auditByWork?: Record<string, AuditLine[]>;
+  canModerate?: boolean;
+  onReply?: (id: number | string) => void;
+  onReact: (id: number | string, emoji: string) => void;
+  onUnreact?: (id: number | string, emoji: string) => void;
+  onDelete?: (m: Message) => void;
+  onOpenThread?: (id: number | string) => void;
+  onRetry?: (m: Message) => void;
+}) {
+  return (
+    <>
+      {roots.map((m, i) => {
+        const prev = roots[i - 1];
+        const dayLabel = daySeparator(prev, m);
+        const grouped = groupedWith(prev, m);
+        const label =
+          m.author_kind === "agent"
+            ? allAgents.find((a) => a.name === m.author)?.display_name || m.author
+            : m.author;
+        const agent =
+          m.author_kind === "agent" ? allAgents.find((a) => a.name === m.author) : undefined;
+        return (
+          <React.Fragment key={m.id}>
+            {dayLabel && (
+              <div className="day-sep" role="heading" aria-level={2}>
+                {dayLabel}
+              </div>
+            )}
+            <MessageRow
+              m={m}
+              grouped={grouped}
+              label={label}
+              agent={agent}
+              reactions={reactions[m.id] ?? EMPTY_REACTIONS}
+              replyCount={replyCounts[m.id] || 0}
+              onReply={onReply}
+              onReact={onReact}
+              onUnreact={onUnreact}
+              onDelete={onDelete}
+              onOpenThread={onOpenThread}
+              onRetry={onRetry}
+              retrying={retryingId === m.id}
+              myHandle={user?.handle}
+              streaming={!!(streamingAgents && streamingAgents[m.author])}
+              work={workByMessage?.[m.id]}
+              workEvents={
+                (workByMessage?.[m.id] && eventsByWork?.[workByMessage[m.id].id]) || EMPTY_WORK_EVENTS
+              }
+              workAudit={auditByWork?.[workByMessage?.[m.id]?.id] || EMPTY_WORK_AUDIT}
+              canDelete={m.author === user?.handle || !!canModerate}
+            />
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+});
+
 function workFlap(status?: string): { value: string; tone: "go" | "hold" | "unlit" } {
   switch (status) {
     case "waiting_for_approval":
@@ -155,6 +295,7 @@ export function MessageList({
 }: MessageListProps) {
   const endRef = React.useRef<HTMLDivElement>(null);
   const logRef = React.useRef<HTMLDivElement>(null);
+  const lastScrollRef = React.useRef(0);
   const [pinned, setPinned] = React.useState(true);
 
   React.useEffect(() => {
@@ -177,16 +318,22 @@ export function MessageList({
     0,
   );
 
+  // Throttled instant scroll: a smooth scroll per token kept the roll
+  // chasing the cursor and re-laid-out the whole log on every token.
   React.useEffect(() => {
     if (endRef.current && pinned && !hasMore) {
-      endRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+      const now = Date.now();
+      if (now - lastScrollRef.current < 120) return;
+      lastScrollRef.current = now;
+      endRef.current.scrollIntoView({ behavior: "auto", block: "end" });
     }
   }, [order.length, hasMore, pinned, streamChars]);
 
-  const roots = order.map((id) => messages[id]).filter(Boolean);
-  const liveStreams = Object.entries(streamText).filter(
-    ([, text]) => text && text.length > 0,
+  const roots = React.useMemo(
+    () => order.map((id) => messages[id]).filter(Boolean),
+    [messages, order],
   );
+  const streamActive = Object.values(streamText).some((t) => t && t.length > 0);
   const quickStarts = buildQuickStarts(agents, allAgents, channelName);
 
   const onReplyRef = useLatest(onReply);
@@ -221,7 +368,7 @@ export function MessageList({
   );
 
   // ── Empty room: the board is set, nothing has run on it yet ──
-  if (roots.length === 0 && !loadingMore && liveStreams.length === 0 && !typing) {
+  if (roots.length === 0 && !loadingMore && !streamActive && !typing) {
     return (
       // A channel switch remounts the region: a live region's initial content
       // is not announced, so the next room's backlog stays silent instead of
@@ -311,96 +458,32 @@ export function MessageList({
           </div>
         )}
 
-        {roots.map((m, i) => {
-          const prev = roots[i - 1];
-          const dayLabel = daySeparator(prev, m);
-          const grouped = groupedWith(prev, m);
-          const label =
-            m.author_kind === "agent"
-              ? allAgents.find((a) => a.name === m.author)?.display_name || m.author
-              : m.author;
-          const agent =
-            m.author_kind === "agent"
-              ? allAgents.find((a) => a.name === m.author)
-              : undefined;
-
-          return (
-            <React.Fragment key={m.id}>
-              {dayLabel && (
-                <div className="day-sep" role="heading" aria-level={2}>
-                  {dayLabel}
-                </div>
-              )}
-              <MessageRow
-                m={m}
-                grouped={grouped}
-                label={label}
-                agent={agent}
-                reactions={reactions[m.id] ?? EMPTY_REACTIONS}
-                replyCount={replyCounts[m.id] || 0}
-                onReply={onReply ? stableOnReply : undefined}
-                onReact={stableOnReact}
-                onUnreact={onUnreact ? stableOnUnreact : undefined}
-                onDelete={onDelete ? stableOnDelete : undefined}
-                onOpenThread={onOpenThread ? stableOnOpenThread : undefined}
-                onRetry={onRetry ? stableOnRetry : undefined}
-                retrying={retryingId === m.id}
-                myHandle={user?.handle}
-                streaming={!!(streamingAgents && streamingAgents[m.author])}
-                work={workByMessage?.[m.id]}
-                workEvents={
-                  (workByMessage?.[m.id] && eventsByWork?.[workByMessage[m.id].id]) ||
-                  EMPTY_WORK_EVENTS
-                }
-                workAudit={auditByWork?.[workByMessage?.[m.id]?.id] || EMPTY_WORK_AUDIT}
-                canDelete={m.author === user?.handle || !!canModerate}
-              />
-            </React.Fragment>
-          );
-        })}
-
+        <RootRows
+          roots={roots}
+          allAgents={allAgents}
+          user={user}
+          reactions={reactions}
+          replyCounts={replyCounts}
+          groupedWith={groupedWith}
+          retryingId={retryingId}
+          streamingAgents={streamingAgents}
+          workByMessage={workByMessage}
+          eventsByWork={eventsByWork}
+          auditByWork={auditByWork}
+          canModerate={canModerate}
+          onReply={onReply ? stableOnReply : undefined}
+          onReact={stableOnReact}
+          onUnreact={onUnreact ? stableOnUnreact : undefined}
+          onDelete={onDelete ? stableOnDelete : undefined}
+          onOpenThread={onOpenThread ? stableOnOpenThread : undefined}
+          onRetry={onRetry ? stableOnRetry : undefined}
+        />
         {/* Live lines: the machine is still setting type. The row is inert
             while tokens land — a polite region would otherwise read the answer
             out one keystroke at a time — and inert (not aria-hidden) also keeps
             the partial markdown's links out of the tab order. One status line
             outside the rows says who is writing. */}
-        {liveStreams.length > 0 && (
-          <p className="sr-only" role="status">
-            {liveStreams
-              .map(([author]) => allAgents.find((a) => a.name === author)?.display_name || author)
-              .join(", ")}{" "}
-            {liveStreams.length > 1 ? "are" : "is"} still writing
-          </p>
-        )}
-        {liveStreams.map(([author, text]) => {
-          const who = allAgents.find((a) => a.name === author);
-          return (
-            <div className="entry streaming-entry" key={`stream-${author}`} inert={true}>
-              <div className="entry-head">
-                <span className="entry-author">{who?.display_name || author}</span>
-                <span className="entry-time">now</span>
-              </div>
-              <div className="entry-body">
-                <RichBody body={text} />
-                <span className="streaming-cursor" aria-hidden="true" />
-              </div>
-            </div>
-          );
-        })}
-
-        {typing && !liveStreams.length && (
-          <div className="entry">
-            <div className="entry-head">
-              <span className="entry-author">{typing}</span>
-            </div>
-            <div className="entry-body">
-              <span className="bui-loading">
-                <span className="spinner spinner-sm" aria-hidden="true" />
-                reading the room
-              </span>
-            </div>
-          </div>
-        )}
+        <StreamLines streamText={streamText} allAgents={allAgents} typing={typing} />
 
         {/* The jump key is the last thing on the roll: sticky against #log's
             own scrollport, so it can never land on the composer. */}

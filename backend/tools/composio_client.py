@@ -124,7 +124,7 @@ async def list_toolkits(query: str = "") -> str:
             name = row.get("name") or slug
             names.append(f"{slug} — {name}")
         return "\n".join(names[:40]) if names else "(no toolkits returned)"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — composio calls are best-effort wrappers
         return f"(composio list error: {exc})"
 
 
@@ -158,7 +158,7 @@ async def search_tools(query: str) -> str:
             desc = row.get("description") or ""
             lines.append(f"{slug}: {str(desc)[:160]}")
         return "\n".join(lines) if lines else "(no tools matched)"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — composio calls are best-effort wrappers
         return f"(composio search error: {exc})"
 
 
@@ -193,7 +193,7 @@ async def connect_toolkit(toolkit: str) -> str:
         if not url:
             return _format(data)
         return f"Connect {slug} in the browser, then tell the Bot to continue:\n{url}"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — composio calls are best-effort wrappers
         return f"(composio connect error: {exc})"
 
 
@@ -232,5 +232,5 @@ async def execute(tool_slug: str, arguments: Any = None) -> str:
             body={"user_id": user_id(), "arguments": args},
         )
         return _format(data)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — composio calls are best-effort wrappers
         return f"(composio execute error: {exc})"

@@ -14,3 +14,18 @@ langfuse>=4.15.2
 #   playwright          — browser-use (then: playwright install chromium)
 #   composio            — official Composio SDK; REST is used if missing
 
+# --- Lockfile proposal (Lane D, 2026-11-07): not generated — needs root files ---
+# The venv is uv-managed (`.venv` via `uv pip install`) and `uv` is on PATH,
+# but this repo has no `pyproject.toml`, so `uv lock` / `uv pip compile`
+# cannot produce a canonical `uv.lock` yet. A lockfile also needs to match the
+# Docker build (which installs from this file), and adding `pyproject.toml` +
+# `uv.lock` lives outside Lane D's file scope (tests/ + requirements*.txt +
+# pytest.ini + frontend test files), so generating a partial lock here would
+# diverge from the Docker path. Recommended follow-up, outside Lane D scope:
+#   1. Add `pyproject.toml` mirroring these >= pins as the dependency source.
+#   2. Run `uv lock` to produce a canonical `uv.lock` (transitive pins).
+#   3. Keep this file as the human-readable minimum for local installs.
+# pip-tools equivalent: `pip-compile requirements.txt --generate-hashes`.
+# Frontend already pins via `frontend/bun.lock` (bun); only the Python side
+# lacks a lockfile.
+

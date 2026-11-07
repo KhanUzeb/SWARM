@@ -100,7 +100,7 @@ def computer_run(command: str) -> str:
         if code:
             return f"(exit {code})\n{body}"
         return body
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — computer status must never 500
         return f"(computer error: {exc})"
 
 

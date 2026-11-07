@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge, Button, EmptyState, fmtTime } from "../ui.jsx";
 import { WORK_ACTIVE, cancelWork, fetchWorkMessages, workStatusLabel, workStatusTone } from "../work/sessionStore.js";
 import { X, ChevronRight, PanelRightClose } from "lucide-react";
+import { useFocusTrap } from "../lib/focusTrap";
 
 const EVENT_LABEL = {
   work_queued: "Queued", work_started: "Started", agent_started: "Agent working",
@@ -334,6 +335,8 @@ export function WorkDetail({ session, events, token, agents, approvals, busy, on
 }
 
 export function WorkRailSheet({ open, onClose, children }) {
+  const sheetRef = useRef(null);
+  useFocusTrap(sheetRef, open);
   useEffect(() => {
     if (!open) return undefined;
     function onKey(e) { if (e.key === "Escape") onClose?.(); }
@@ -343,7 +346,7 @@ export function WorkRailSheet({ open, onClose, children }) {
   if (!open) return null;
   return (
     <div className="work-sheet-backdrop" onClick={onClose}>
-      <div className="work-sheet" role="dialog" aria-modal="true" aria-label="Work details" onClick={e => e.stopPropagation()}>
+      <div ref={sheetRef} className="work-sheet" role="dialog" aria-modal="true" aria-label="Work details" onClick={e => e.stopPropagation()}>
         <button className="panel-close" onClick={onClose} aria-label="Close work details"><X size={14} /></button>
         {children}
       </div>

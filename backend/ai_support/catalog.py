@@ -184,7 +184,7 @@ async def list_provider_models(
             body["models"] = live
             body.pop("note", None)
             return body
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — provider probe is best-effort, never breaks catalog
         body["error"] = _safe_error(exc, auth)
         body["note"] = "Couldn't reach the provider — showing catalog defaults."
     return body

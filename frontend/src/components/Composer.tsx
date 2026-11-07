@@ -520,6 +520,7 @@ export function Composer({
           placeholder={placeholder || `Message ${channelName || "this room"} — @ to hand it to a teammate, / for commands`}
           rows={1}
           role="combobox"
+          aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-label={placeholder || `Message ${channelName || "this room"}`}
           aria-expanded={mentionOpen || commandOpen}

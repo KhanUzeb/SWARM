@@ -1111,7 +1111,7 @@ class ToolRegistry:
                 )
                 out = (result.stdout or "") + (result.stderr or "")
                 return out[:4000] or "(no output)"
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — registry is best-effort, never 500
                 return f"(plugin shell error: {exc})"
         if htype == "python":
             return await self._exec_python_plugin(
@@ -1176,9 +1176,9 @@ class ToolRegistry:
                             result, PYTHON_PLUGIN_TIMEOUT)
             except (asyncio.TimeoutError, TimeoutError):
                 return f"(plugin timed out after {PYTHON_PLUGIN_TIMEOUT:g}s)"
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — registry is best-effort, never 500
                 return f"(plugin python error: {exc})"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — registry is best-effort, never 500
             return f"(plugin python error: {exc})"
         if result is None:
             return "(empty plugin result)"
@@ -1277,7 +1277,7 @@ def _fetch_url_text(url: str) -> str:
             return raw.decode(charset, errors="replace")[:8000]
     except urllib.error.URLError as exc:
         return f"(fetch error: {exc.reason})"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — registry is best-effort, never 500
         return f"(fetch error: {exc})"
 
 

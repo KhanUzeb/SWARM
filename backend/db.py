@@ -134,6 +134,12 @@ async def open_db() -> AsyncIterator[aiosqlite.Connection]:
         await db.close()
 
 
+# Lane B.1 names this helper `connect()`; open_db is that helper
+# (WAL + foreign_keys + busy_timeout, every connection). Kept as an
+# alias so callers can use either spelling without a second code path.
+connect = open_db
+
+
 async def pragma_report() -> dict[str, Any]:
     """Live pragmas for the current database file. Never raises."""
     try:
@@ -1420,7 +1426,7 @@ async def create_first_user(
                  hash_password(password) if password else None),
             )
             await db.commit()
-        except Exception:
+        except Exception:  # noqa: BLE001 — roll back the transaction, then re-raise
             await db.rollback()
             raise
     return {"handle": handle, "role": "admin"}

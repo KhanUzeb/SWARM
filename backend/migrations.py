@@ -123,7 +123,7 @@ async def apply_migrations(db: aiosqlite.Connection) -> list[int]:
                 "VALUES (?, ?, ?)",
                 (version, name, time.time()),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — roll back the migration, then re-raise
             await db.rollback()
             raise
         await db.commit()

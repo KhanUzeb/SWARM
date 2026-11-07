@@ -540,7 +540,7 @@ async def execute_run(run_id: str, owner: str) -> None:
         await update_run(run_id, owner, "cancelled")
         await append_event(run_id, "run_cancelled", {})
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — degraded path is preferable to 500
         await update_run(run_id, owner, "failed", report={**report, "error": str(exc)[:500]})
         await append_event(run_id, "run_failed", {"error": str(exc)[:500]})
     finally:

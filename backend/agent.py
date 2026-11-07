@@ -169,7 +169,7 @@ async def set_sandbox_root(path: str) -> dict[str, str]:
             unrestricted = _get_settings().system_unrestricted_ok()
             if not unrestricted:
                 return {"ok": False, "error": "filesystem root needs SWARM_SYSTEM_UNRESTRICTED=1"}  # type: ignore[return-value]
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — root check is best-effort; bind proceeds
         pass
     SANDBOX_DIR = str(resolved)
     try:
@@ -410,7 +410,7 @@ def _run_shell_tool(command: str) -> str:
         return output[:SHELL_OUTPUT_CAP] or "(no output)"
     except subprocess.TimeoutExpired:
         return f"(timed out after {SHELL_TIMEOUT_SECONDS}s)"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — shell failures are tool results, not 500s
         return f"(shell error: {exc})"
 
 
@@ -870,7 +870,7 @@ async def _complete_stream(
                     started = True
                 if on_token is not None:
                     await on_token(delta.content)
-    except Exception:
+    except Exception:  # noqa: BLE001 — mid-stream failures return partial + cutoff
         if content and not saw_tools:
             note = CUTOFF_NOTE
             if on_token is not None:
@@ -1167,7 +1167,7 @@ async def _run_with_client(
                     output=content or tool_calls, usage=usage_total,
                     metadata={"latency_s": latency},
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — tracing is best-effort, never blocks reply
                 pass
 
         if not tool_calls:
@@ -1250,7 +1250,7 @@ async def _run_with_client(
                     f"agent - {reason})"
                 )
                 review_block = {"blocked": "deny"}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — tool failures are results, not 500s
                 # A tool that raises must still be audited like any other tool
                 # call (AGENTS.md s6) and must not take the turn down with a
                 # raw exception. Only the class and first line reach the
@@ -1565,7 +1565,7 @@ async def generate_reply(
                 name=f"swarm.agent.{name}",
                 metadata={"channel_id": channel_id, "agent": name},
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — tracing is best-effort, never blocks reply
             trace = None
 
     async def attempt(client: Any, used_model: str) -> dict[str, Any]:
@@ -1613,7 +1613,7 @@ async def generate_reply(
             result["context"] = package["stats"]
             result["model"] = used_model
             return result
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — try next provider; [agent error:] on full failure
             last_exc = exc
             if is_retryable(exc):
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
@@ -1623,7 +1623,7 @@ async def generate_reply(
                     result["context"] = package["stats"]
                     result["model"] = used_model
                     return result
-                except Exception as retry_exc:  # noqa: BLE001
+                except Exception as retry_exc:  # noqa: BLE001 — final attempt; classify below
                     last_exc = retry_exc
 
     if (model_override or "").strip() and is_model_not_found(last_exc):

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Search, CornerDownLeft } from "lucide-react";
+import { useFocusTrap } from "../lib/focusTrap";
 
 interface CommandItem {
   id: string;
@@ -22,6 +23,10 @@ export function CommandPalette({ open, onClose, commands = [], onCommand }: Comm
   const [index, setIndex] = React.useState(0);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const ids = React.useId();
+  const listId = `${ids}-list`;
+  useFocusTrap(panelRef, open);
 
   const filtered = React.useMemo(() => {
     if (!query.trim()) return commands;
@@ -96,7 +101,7 @@ export function CommandPalette({ open, onClose, commands = [], onCommand }: Comm
 
   return (
     <div className="cmd-palette" role="dialog" aria-modal="true" aria-label="Command palette" onClick={onClose}>
-      <div className="cmd-panel" onClick={(e) => e.stopPropagation()}>
+      <div ref={panelRef} className="cmd-panel" onClick={(e) => e.stopPropagation()}>
         <div className="cmd-input-row">
           <Search size={15} className="shrink-0" style={{ color: "var(--ink-3)" }} />
           <input
@@ -109,11 +114,16 @@ export function CommandPalette({ open, onClose, commands = [], onCommand }: Comm
             className="input"
             style={{ border: 0, boxShadow: "none", background: "transparent", padding: 0 }}
             aria-label="Search commands"
+            role="combobox"
+            aria-expanded={true}
+            aria-controls={listId}
+            aria-activedescendant={filtered[index] ? `${listId}-${index}` : undefined}
+            aria-autocomplete="list"
           />
           <span className="reg">esc</span>
         </div>
 
-        <div ref={listRef} className="cmd-list scroll-y">
+        <div ref={listRef} id={listId} role="listbox" aria-label="Commands" className="cmd-list scroll-y">
           {filtered.length === 0 && (
             <div className="cmd-empty">
               Nothing on the board matches “{query.trim()}”.
@@ -130,8 +140,11 @@ export function CommandPalette({ open, onClose, commands = [], onCommand }: Comm
                 return (
                   <button
                     key={item.id}
+                    id={`${listId}-${fi}`}
                     data-index={fi}
                     type="button"
+                    role="option"
+                    aria-selected={isActive}
                     onMouseEnter={() => setIndex(fi)}
                     onClick={() => {
                       onCommand(item);

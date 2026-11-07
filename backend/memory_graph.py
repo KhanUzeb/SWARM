@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_relations_dst ON knowledge_relations(dst);
 
 
 async def init_tables() -> None:
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         await conn.executescript(SCHEMA)
         await conn.commit()
 
@@ -60,7 +60,7 @@ def memory_record(
 
 async def save_memory_meta(record: dict[str, Any]) -> dict[str, Any]:
     await init_tables()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         await conn.execute(
             "INSERT OR REPLACE INTO memory_meta(memory_id, source, confidence, scope, owner, sensitivity, created_at, last_confirmed)"
             " VALUES(?,?,?,?,?,?,?,?)",
@@ -81,7 +81,7 @@ async def add_relation(src: str, rel: str, dst: str, metadata: dict[str, Any] | 
     import json
 
     now = time.time()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         cur = await conn.execute(
             "INSERT INTO knowledge_relations(src, rel, dst, metadata, created_at) VALUES(?,?,?,?,?)",
             (src, rel, dst, json.dumps(metadata or {}), now),
@@ -93,7 +93,7 @@ async def add_relation(src: str, rel: str, dst: str, metadata: dict[str, Any] | 
 
 async def related(entity: str, limit: int = 25) -> list[dict[str, Any]]:
     await init_tables()
-    async with aiosqlite.connect(db.DB_PATH) as conn:
+    async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT * FROM knowledge_relations WHERE src = ? OR dst = ? ORDER BY created_at DESC LIMIT ?",

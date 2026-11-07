@@ -835,5 +835,5 @@ def system_run(command: str, cwd: str = "") -> str:
         return body
     except subprocess.TimeoutExpired:
         return f"(timed out after {SHELL_TIMEOUT}s)"
-    except Exception as extra:  # noqa: BLE001
+    except Exception as extra:  # noqa: BLE001 — extra bind info is best-effort
         return f"(system error: {extra})"

@@ -39,3 +39,7 @@ jobs:
       - name: Production build
         working-directory: frontend
         run: bun run build
+      - name: Bundle budget
+        working-directory: frontend
+        run: |
+          node -e "const fs=require('fs');const zlib=require('zlib');const path=require('path');const dir='dist/assets';const files=fs.readdirSync(dir).filter(function(f){return f.endsWith('.js')});let gzipTotal=0;let fail=false;for(const f of files){const p=path.join(dir,f);const buf=fs.readFileSync(p);const gz=zlib.gzipSync(buf).length;gzipTotal+=gz;console.log(f+' raw='+buf.length+' gzip='+gz);if(buf.length>260*1024){console.error('chunk over 260kB raw budget: '+f);fail=true;}}console.log('total gzip JS '+gzipTotal);if(gzipTotal>170*1024){console.error('gzip total over 170kB budget');fail=true;}if(fail){process.exit(1);}"

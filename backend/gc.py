@@ -80,7 +80,7 @@ def _refuse_gc_reason(root: Path) -> str | None:
     try:
         if resolved.parent == resolved:
             return "filesystem root is never garbage-collected"
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — unresolvable root is refused, never GC'd
         return "unresolvable root"
     try:
         home = Path.home().resolve()

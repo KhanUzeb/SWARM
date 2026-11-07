@@ -97,7 +97,7 @@ export function KnowledgeView({ token, flash }) {
   const shown = results || docs;
 
   return (
-    <div id="log" className="knowledge-view">
+    <div id="log" className="knowledge-view" tabIndex={-1}>
       <div className="knowledge-head">
         <div>
           <h2 className="knowledge-title">What should agents remember?</h2>

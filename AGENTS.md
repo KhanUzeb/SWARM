@@ -198,6 +198,14 @@ Do not reintroduce any of them, root-level vision/project/problem docs, or
 nested frontend copies. Record a decision's rationale in the code comment or the
 section below that it affects, and add a row to `docs/CHANGELOG.md`.
 
+Docs prune (2026-11-07): `docs/BACKEND-AUDIT.md`, `docs/AGENT-AUDIT.md`,
+`docs/FRONTEND-AUDIT.md`, `docs/SECURITY-REVIEW.md`, `docs/ARCHITECTURE.md`,
+`docs/CODEBASE-GUIDE.md`, `docs/COMPARISON.md`, `docs/FAQ.md`,
+`docs/design/AUDIT.md`, `docs/design/PRINCIPLES.md`, and
+`docs/launch/{good-first-issues,pr-triage,release-v0.1.0}.md` were deleted
+after their unique facts were merged into `docs/CHANGELOG.md`. Do not
+reintroduce them as standalone docs.
+
 ## 8a. Design system
 
 **Section 8a is the contract for anything visual.** Read it before touching

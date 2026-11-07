@@ -152,7 +152,7 @@ def _run_argv(argv: list[str], *, cwd: str | None = None) -> str:
         return f"(command not found: {argv[0]})"
     except subprocess.TimeoutExpired:
         return f"(timed out after {CLI_TIMEOUT}s)"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — connector probes are best-effort, never 500
         return f"(cli error: {exc})"
     out = (result.stdout or "") + (result.stderr or "")
     body = (out.strip() or "(no output)")[:OUTPUT_CAP]
@@ -222,7 +222,7 @@ async def exa_search(query: str, *, num_results: int = 5) -> str:
                 "contents": {"text": True, "highlights": True},
             },
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — connector probes are best-effort, never 500
         return f"(exa search error: {exc})"
     rows = data.get("results") or data.get("data") or []
     lines = []
@@ -263,7 +263,7 @@ async def tavily_search(query: str, *, max_results: int = 5) -> str:
             },
             body={"query": q, "max_results": n, "include_answer": True},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — connector probes are best-effort, never 500
         return f"(tavily search error: {exc})"
     lines = []
     answer = data.get("answer")
@@ -296,7 +296,7 @@ async def firecrawl_scrape(url: str) -> str:
             },
             body={"url": target, "formats": ["markdown"]},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — connector probes are best-effort, never 500
         return f"(firecrawl scrape error: {exc})"
     payload = data.get("data") if isinstance(data, dict) else None
     if isinstance(payload, dict):
@@ -449,15 +449,15 @@ async def _cua_sdk_screenshot() -> str | None:
             mime = getattr(desktop.images[0], "mime_type", "") or ""
         size = dest.stat().st_size if dest.is_file() else 0
         return f"saved screenshots/cua-desktop.png ({size} bytes) {mime}".strip()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — connector probes are best-effort, never 500
         return f"(cua sdk error: {exc})"
     finally:
         if driver is not None:
             try:
                 await driver.end_session(EndSessionInput(session="swarm"))
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — connector probes are best-effort, never 500
                 pass
             try:
                 await driver.shutdown()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — connector probes are best-effort, never 500
                 pass

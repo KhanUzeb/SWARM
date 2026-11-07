@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { Monitor, RefreshCw, X, FileText } from "lucide-react";
 import { apiJson, Button, EmptyState, ScrollArea, Tooltip } from "../ui.jsx";
 import { api, fmtBytes } from "../lib.js";
-import SystemPanel from "../ai-support/SystemPanel.jsx";
-import BrowserPanel from "../ai-support/BrowserPanel.jsx";
-import ToolsPanel from "../ai-support/ToolsPanel.jsx";
-import AppsPanel from "../ai-support/AppsPanel.jsx";
-import ProviderPanel from "../ai-support/ProviderPanel.jsx";
-import PluginsPanel from "../ai-support/PluginsPanel.jsx";
+// AI panels load on tab so the sandbox surface does not carry them.
+const SystemPanel = lazy(() => import("../ai-support/SystemPanel.jsx"));
+const BrowserPanel = lazy(() => import("../ai-support/BrowserPanel.jsx"));
+const ToolsPanel = lazy(() => import("../ai-support/ToolsPanel.jsx"));
+const AppsPanel = lazy(() => import("../ai-support/AppsPanel.jsx"));
+const ProviderPanel = lazy(() => import("../ai-support/ProviderPanel.jsx"));
+const PluginsPanel = lazy(() => import("../ai-support/PluginsPanel.jsx"));
 
 // PANEL_GROUPS owns the Places/Connect destination list, and nothing keeps a
 // second copy. A group *is* a destination: the user arrives at "Places" or
@@ -77,13 +78,15 @@ export function ComputerPanel({ computer, token, meRole, onRefresh, flash, group
       </div>
 
       <ScrollArea className="panel-body-wrap">
-        {activeTab === "files" && <SandboxView computer={computer} token={token} flash={panelFlash} onRootChange={onRefresh} />}
-        {activeTab === "system" && <SystemPanel token={token} flash={panelFlash} onRootChange={onRefresh} />}
-        {activeTab === "browser" && <BrowserPanel token={token} flash={panelFlash} />}
-        {activeTab === "ai" && <ProviderPanel token={token} flash={panelFlash} onStatusChange={onRefresh} />}
-        {activeTab === "apps" && <AppsPanel token={token} flash={panelFlash} />}
-        {activeTab === "tools" && <ToolsPanel token={token} flash={panelFlash} />}
-        {activeTab === "plugins" && <PluginsPanel token={token} flash={panelFlash} meRole={meRole} />}
+        <Suspense fallback={<span className="spinner" aria-hidden="true" />}>
+          {activeTab === "files" && <SandboxView computer={computer} token={token} flash={panelFlash} onRootChange={onRefresh} />}
+          {activeTab === "system" && <SystemPanel token={token} flash={panelFlash} onRootChange={onRefresh} />}
+          {activeTab === "browser" && <BrowserPanel token={token} flash={panelFlash} />}
+          {activeTab === "ai" && <ProviderPanel token={token} flash={panelFlash} onStatusChange={onRefresh} />}
+          {activeTab === "apps" && <AppsPanel token={token} flash={panelFlash} />}
+          {activeTab === "tools" && <ToolsPanel token={token} flash={panelFlash} />}
+          {activeTab === "plugins" && <PluginsPanel token={token} flash={panelFlash} meRole={meRole} />}
+        </Suspense>
       </ScrollArea>
     </section>
   );

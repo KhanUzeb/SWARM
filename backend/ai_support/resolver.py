@@ -1,7 +1,6 @@
 """Resolve provider credentials and OpenAI-compatible clients (tau-style)."""
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from ..models import DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, resolve_groq_model
@@ -11,10 +10,6 @@ from .providers import get_provider, providers_by_priority
 from . import store
 
 _DEFAULT_AGENT_MODELS = frozenset({DEFAULT_GROQ_MODEL, FAST_GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-70b-versatile"})
-
-
-def _env_key(name: str) -> str:
-    return (os.environ.get(name) or "").strip().strip('"').strip("'")
 
 
 async def resolve_runtime_auth(provider_id: str) -> RuntimeProviderAuth | None:

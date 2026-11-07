@@ -110,10 +110,27 @@ _RESOLVE_CACHE: dict[tuple[str, str, str, str, str], tuple[float, Any]] = {}
 _RESOLVE_CACHE_TTL = 5.0
 
 
+def _settings_env_value(env_fallback: str) -> str:
+    """Environment fallback value, SWARM_* ones through the one settings object.
+
+    Provider keys (GROQ_API_KEY, HF_TOKEN, ...) are the provider's own
+    vocabulary and stay a direct env read. SWARM_OPENAI_COMPAT_API_KEY is a
+    SWARM_* flag, so it reads from Settings (AGENTS.md s2: one settings
+    object, truths through truthy()). Same routing as main._key_set and
+    doctor.check_providers. Value is for resolution/cache only; never
+    returned by an API (AGENTS.md s4).
+    """
+    settings = get_settings()
+    attr = env_fallback[len("SWARM_"):].lower()
+    if hasattr(settings, attr):
+        return (getattr(settings, attr) or "").strip().strip('"').strip("'")
+    return (os.environ.get(env_fallback) or "").strip().strip('"').strip("'")
+
+
 def _cache_key(
     provider_id: str, env_fallback: str | None
 ) -> tuple[str, str, str, str, str]:
-    env_val = (os.environ.get(env_fallback) or "") if env_fallback else ""
+    env_val = _settings_env_value(env_fallback) if env_fallback and env_fallback.startswith("SWARM_") else ((os.environ.get(env_fallback) or "") if env_fallback else "")
     # The secret fingerprint makes a rotated SWARM_SECRET an immediate miss:
     # a cached plaintext from the old key must never be served after rotation.
     secret = _secret_text()
@@ -225,7 +242,10 @@ async def _resolve_key_uncached(provider_id: str, *, env_fallback: str | None = 
                     _logger.warning("could not migrate legacy credential for %s", provider_id)
             return plain
     if env_fallback:
-        val = (os.environ.get(env_fallback) or "").strip().strip('"').strip("'")
+        if env_fallback.startswith("SWARM_"):
+            val = _settings_env_value(env_fallback)
+        else:
+            val = (os.environ.get(env_fallback) or "").strip().strip('"').strip("'")
         return val or None
     return None
 
@@ -253,7 +273,7 @@ async def _refresh_oauth(provider_id: str, row: dict[str, Any]) -> str | None:
             return None
         await connect_oauth(provider_id, access, body.get("refresh_token") or refresh, body.get("expires_in"), model=row.get("model"))
         return access
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — log-only fallback; cached value stays authoritative
         return None
 
 
