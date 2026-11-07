@@ -148,16 +148,19 @@ optionally set an admin password — stored as a PBKDF2 hash, never plain
 text), connect a provider in **Connect → AI**, pick your
 first bot, and open its 1:1.
 
-**Docker:**
+**Docker (prebuilt image):**
 
 ```bash
 docker compose up -d
 ```
 
-`docker compose up -d` pulls the prebuilt image from
-`ghcr.io/khanuzeb/swarm:latest`. To build locally instead, uncomment the
-`build:` block in `docker-compose.yml`, then `docker compose up --build -d`.
-
+`docker compose up -d` pulls the prebuilt multi-arch image
+(`linux/amd64`, `linux/arm64`) from `ghcr.io/khanuzeb/swarm:latest`
+(pinned release: `ghcr.io/khanuzeb/swarm:v0.1.0` — see the
+[GitHub release](https://github.com/KhanUzeb/SWARM/releases/tag/v0.1.0)).
+To build locally instead, uncomment the `build:` block in
+`docker-compose.yml`, then `docker compose up --build -d`. Pushing a new
+`v*` tag republishes `:latest` and creates a release automatically.
 Health: `GET http://localhost:8000/health` → `{"status":"ok",…}`.
 Full guide: [docs/DEPLOY.md](docs/DEPLOY.md).
 
