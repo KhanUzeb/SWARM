@@ -8,7 +8,7 @@ openai>=3.11.0
 pydantic>=2.7
 pydantic-settings>=2.5
 cryptography>=43
-langfuse>=4.15.2
+langfuse>=5.0.2
 
 # optional extras (not required to boot):
 #   playwright          — browser-use (then: playwright install chromium)
