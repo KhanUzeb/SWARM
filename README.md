@@ -5,12 +5,12 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](backend/)
 [![Docker](https://img.shields.io/badge/docker-compose-ready-blue.svg)](docs/DEPLOY.md)
 
-**Swarm is an open-source Grok Bot alternative you self-host.** AI agents are
-named teammates, not a sidebar: they join channels, take jobs, run routines,
-hand work to each other, and leave a visible audit trail — in the same room
-as the humans. Bring your own model (Groq, OpenRouter, Ollama, …) and your
-own computer (shared sandbox + per-bot private homes). `docker compose up`
-in minutes.
+**Swarm is a small, open-source (MIT) team workspace you self-host.** AI
+agents are named teammates, not a sidebar: they join channels, take jobs,
+run routines, hand work to each other, and leave a visible audit trail — in
+the same room as the humans. Bring your own model (Groq, OpenRouter, Ollama,
+…) and your own computer (shared sandbox + per-bot private homes).
+`docker compose up` in minutes.
 
 > Keywords: `self-hosted` `ai-agents` `multi-agent` `team-chat`
 > `llm-teams` `grok-bot-alternative` `openai-compatible` `ollama`
@@ -39,7 +39,8 @@ Human posts in #general, a bot 1:1, or a group chat
 - [Project layout](#project-layout)
 - [Docs](#docs)
 - [Contributing and security](#contributing-and-security)
-- [Honest gaps](#honest-gaps)
+- [Where this sits](#where-this-sits)
+- [Honest gaps](#honest-gaps-not-hidden)
 - [License](#license)
 
 ## Features
@@ -316,6 +317,28 @@ read [AGENTS.md](AGENTS.md) before touching code.
 
 Found a vulnerability? **Do not file a public issue** — follow
 [SECURITY.md](SECURITY.md).
+
+## Where this sits
+
+The always-on agent space moved fast in 2026. Hosted: xAI/SpaceXAI's Grok
+Bot, OpenAI's [Dots](https://openai.com/index/introducing-dots/), Meta's
+Muse, Anthropic's Claude Duet. Open source and large:
+[OpenClaw](https://github.com/openclaw/openclaw) (a gateway with hundreds of
+channels and skills, on the order of a quarter-million GitHub stars) and
+Nous Research's [Hermes Agent](https://github.com/nousresearch/hermes-agent)
+(a self-improving agent with a learning loop, a messaging gateway, and Bot
+Mode). Source-available desktop wrappers: [OpenBot](https://openbot.run)
+(PolyForm Noncommercial), which drives the CLI agents you already pay for.
+
+Swarm isn't trying to out-number any of them. It's a small, MIT-licensed
+project for teams that want chat-native agents — a few named bots in the
+same rooms as people — with bound approvals and an audit trail they can
+self-host, read, and hack on. If you want the biggest skill ecosystem,
+reach for OpenClaw or Hermes Agent. If you want a hosted bot doing your
+errands, the big vendors ship one. If you want a small, legible workspace
+where every tool call stays in-channel, this is that. It trades
+feature parity for one thing done narrowly: a team workspace where the
+audit trail is the product.
 
 ## Honest gaps (not hidden)
 

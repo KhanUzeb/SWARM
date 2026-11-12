@@ -20,6 +20,11 @@ as humans, with the same message primitives and a visible audit trail,
 produce something more useful than a chatbot sidebar — without rebuilding
 Buzz's infrastructure (Nostr, git hosting, canvases, huddles)?
 
+The bet is looking cheaper every quarter: OpenAI (Dots), SpaceXAI (Grok
+Bot), Meta (Muse) and Anthropic (Claude Duet) now ship the hosted version of
+it, and OpenClaw and Nous Research's Hermes Agent ship the open-source
+personal-agent versions. Swarm remains the small web-workspace one.
+
 The answer so far is yes for a small-team workspace: named bots with jobs,
 1:1 DMs, skills, routines, approvals, bot-to-bot handoffs, and a shared
 computer all run today.
@@ -38,17 +43,33 @@ git-native workflows (use Buzz).
 
 ## Competition
 
-| Project | Surface | Swarm difference |
-| ------- | ------- | ---------------- |
-| [Buzz](https://github.com/block/buzz) (Block) | Own workspace + desktop | Same thesis; Swarm is the small slice that tests "chat-native agents" without Nostr/git/workflows |
-| [SlackHive](https://github.com/pelago-labs/slackhive) | Slack | Job specialists + Boss delegation; Swarm owns the workspace, no Slack app |
-| [Operator](https://github.com/geekforbrains/operator) | Slack | Routines + delegation; Swarm has routines + handoffs, no Slack dependency |
-| [OpenTag](https://github.com/linxidnju/OpenTag) | Slack gateway | Approvals + channel-native; Swarm is runtime + UI, not a gateway |
-| [Rakazo](https://github.com/elie222/rakazo) | Web + desktop + mobile | Persistent bots, BYO model/computer, provider-neutral interfaces — Swarm's model for `custom` endpoints and `SWARM_COMPUTER_PROVIDER` |
-| xAI Grok Bot | Cloud job bots | Same job/1:1/routine shape, self-hosted |
+The market moved fast in 2026. As of November 2026:
+
+| Project | License | Shape | Swarm vs. it |
+| ------- | ------- | ----- | ------------ |
+| [OpenClaw](https://github.com/openclaw/openclaw) | MIT | Gateway architecture with an agent inside; 24+ messaging channels, thousands of skills; ~247k stars in June 2026 (≈393k by November); 501(c)(3) foundation; v2026.8.1 added shared cloud sessions | Breadth vs focus. Swarm doesn't ship a channel ecosystem or native apps; it ships a web workspace where rooms, approvals and the audit trail are the product |
+| [Hermes Agent](https://github.com/nousresearch/hermes-agent) (Nous Research) | MIT | Single self-improving agent: learning loop, agent-written skills, cron, FTS5 recall, messaging gateway (Telegram/Discord/Slack/WhatsApp/Signal/CLI) plus Bot Mode; ~188k stars (June 2026) | Different shape. One deep personal agent vs rooms of specialists; Swarm keeps the bots, the history and the audit in one shared transcript |
+| [OpenBot](https://openbot.run) (Synthetify Labs) | PolyForm Noncommercial 1.0.0 | Desktop apps (macOS/Windows/Linux) + phone clients; wraps the CLI agents people already pay for (Codex, Claude Code, Gemini, Grok, …); channels, workflows with approvals, plugins; hosted "Teams" tier | Source-available, not open source; personal-agent-shaped. Swarm is MIT, web-first and team-first |
+| xAI/SpaceXAI's **Grok Bot** | Proprietary | Hosted; Linux VM per member; teammates-style named bots; bundled in SuperGrok / Cursor plans (reported ~$120–300 per seat monthly; no published standalone price); shared-VM security caveat on the record | The self-hosted, model-agnostic counterpart — same job/1:1/routine shape, no vendor VM, no plan gating |
+| OpenAI's **Dots** | Proprietary | Hosted; named agents with a cloud computer; first dot included on eligible plans (launched Sep 29, 2026) | Same bet, vendor's cloud, vendor's terms; Swarm keeps the computer and data yours |
+| Meta's **Muse** | Proprietary | Hosted; free tier up to a token cap, then paid (launched Sep 2026) | Same |
+| Anthropic's **Claude Duet** | Proprietary | Hosted proactive agent (research preview, Oct 2026) | Same |
+| [Buzz](https://github.com/block/buzz) (Block) | — | Own workspace + desktop | Same thesis; Swarm is the small slice that tests "chat-native agents" without Nostr/git/workflows |
+| [SlackHive](https://github.com/pelago-labs/slackhive) | — | Slack app | Job specialists + Boss delegation; Swarm owns the workspace, no Slack dependency |
+| [Operator](https://github.com/geekforbrains/operator) | — | Slack app | Routines + delegation; Swarm has routines + handoffs, no Slack dependency |
+| [OpenTag](https://github.com/linxidnju/OpenTag) | — | Slack gateway | Approvals + channel-native; Swarm is runtime + UI, not a gateway |
+| [Rakazo](https://github.com/elie222/rakazo) | — | Web + desktop + mobile | Persistent bots, BYO model/computer, provider-neutral interfaces — Swarm's model for `custom` endpoints and `SWARM_COMPUTER_PROVIDER` |
 
 Orchestration runtimes (Orloj, Clawix, GAIA) are a different layer;
 IDE-native tools (Cursor skills) are a different surface.
+
+Swarm doesn't chase feature parity with any of these. OpenClaw and Hermes
+Agent will always out-skill it through their ecosystems, and the hosted
+vendors will always ship more compute. What Swarm does that none of them
+ship as the whole product: people and named bots in the same rooms, every
+tool call in-channel, risky calls paused for a human bound to the exact
+agent, channel, tool and arguments — in a single workspace you self-host
+and can read end to end.
 
 ## Scope
 

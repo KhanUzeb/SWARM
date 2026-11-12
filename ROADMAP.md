@@ -153,4 +153,6 @@ plugin- and MCP-sourced tool calls as for builtins.
 Deliberately out of scope per `docs/PRODUCT.md`: Nostr signing, git
 hosting, multi-tenant SaaS, cloud VM / remote desktop, voice huddles,
 canvases. `OpenAI Swarm`-style library ergonomics are also not coming —
-Swarm is a workspace, not a framework you embed.
+Swarm is a workspace, not a framework you embed. Likewise, closing the
+feature gap with OpenClaw or Hermes Agent is not the goal — different
+shape, smaller bet (see `docs/PRODUCT.md`).
