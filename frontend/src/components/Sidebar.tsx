@@ -3,7 +3,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Dropdown } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Flap, Lamp } from "@/components/Flap";
-import { PANEL_GROUPS } from "./ComputerPanel.jsx";
+import { PANEL_GROUPS } from "./panelGroups.js";
 import {
   Activity,
   Bot,

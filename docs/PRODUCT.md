@@ -66,7 +66,7 @@ in daily use — speculative work stays gated).
 ## Demo
 
 The 5-minute demo script lives in [README.md](../README.md)
-(“Demo script”). The contract for everything the demo shows lives in
+("Demo script"). The contract for everything the demo shows lives in
 the code and [`AGENTS.md`](../AGENTS.md).
 
 ## Design principles

@@ -139,6 +139,10 @@ docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
 | `SWARM_SYSTEM_PLACES` | no | extra paths offered as Places in Places → System; any folder on the machine, read-only entries |
 | `SWARM_SYSTEM_UNRESTRICTED` | no | set `1` to allow filesystem root as System or Sandbox root (entire PC) |
 | `SWARM_DB_PATH` | no | set by the Dockerfile to `/app/data/swarm.db` |
+| `SWARM_HOST` / `SWARM_BIND` | no | informational bind address; only a declared non-loopback bind trips the startup exposure warning and `swarm doctor` |
+| `SWARM_OAUTH_REDIRECT_URI` | no | OAuth callback for Connect → AI; defaults to `http://localhost:8000/api/v2/oauth/callback` |
+| `SWARM_GOOGLE_OAUTH_CLIENT_ID` / `SWARM_GOOGLE_OAUTH_CLIENT_SECRET` | no | OAuth client for Google Gemini (PKCE); without them the OAuth button stays hidden |
+| `SWARM_SQLITE_BUSY_TIMEOUT_MS` | no | SQLite busy timeout; defaults to 5000, never negative |
 | `OPENAI_API_KEY` | no | OpenAI direct |
 | `ANTHROPIC_API_KEY` | no | Anthropic direct |
 | `GOOGLE_API_KEY` | no | Google Gemini |

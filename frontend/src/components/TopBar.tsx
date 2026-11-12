@@ -2,7 +2,7 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Flap, Lamp } from "@/components/Flap";
-import { PANEL_GROUPS } from "./ComputerPanel.jsx";
+import { PANEL_GROUPS } from "./panelGroups.js";
 import {
   Activity,
   Bot,

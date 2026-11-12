@@ -243,9 +243,6 @@ def test_token_budget_stops_the_run_with_a_visible_reason(monkeypatch):
 
 def test_wall_clock_expiry_produces_the_reason(monkeypatch):
     """Drive the deadline directly: a run past its budget names the budget."""
-    import time as _time
-
-    real_monotonic = agent.time.monotonic
     clock = {"t": 0.0}
 
     def fake_monotonic():
@@ -312,7 +309,6 @@ def test_delegation_cycle_is_refused_with_a_visible_reason(client):
 
 def test_delegation_chain_permits_a_legitimate_second_bot(client):
     """Cycle detection must not break normal A→B delegation."""
-    monkey = None
     async def _go():
         out = await agent.generate_delegate_reply(
             "ledger", "log this", "general",

@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from . import db, policy
-from .models import DEFAULT_TOOLS, resolve_groq_model
-from .tools.registry import BUILTIN_SCHEMAS, get_registry, reload_registry, risk_tier
+from .models import DEFAULT_TOOLS
+from .tools.registry import BUILTIN_SCHEMAS, get_registry, risk_tier
 
 HISTORY_WINDOW = 12
 MAX_TOOL_CALLS = 6
@@ -1094,7 +1094,6 @@ async def _run_with_client(
     # tool AND args AND result as the call before; `stalled` counts rounds in
     # which every result was one the run had already seen (the model
     # re-reading and getting the same answer).
-    last_args = ""
     identical = 0
     last_call = ""
     stalled = 0
@@ -1222,7 +1221,6 @@ async def _run_with_client(
             # identical answer to the identical question, so all three must
             # repeat before the run is cut off.
             arg_key = _call_signature(tc["name"], args)
-            last_args = arg_key
             review_block: dict[str, Any] | None = None
 
             try:

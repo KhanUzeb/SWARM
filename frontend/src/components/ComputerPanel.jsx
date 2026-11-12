@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { Monitor, RefreshCw, X, FileText } from "lucide-react";
 import { apiJson, Button, EmptyState, ScrollArea, Tooltip } from "../ui.jsx";
 import { api, fmtBytes } from "../lib.js";
+import { PANEL_GROUPS } from "./panelGroups.js";
 // AI panels load on tab so the sandbox surface does not carry them.
 const SystemPanel = lazy(() => import("../ai-support/SystemPanel.jsx"));
 const BrowserPanel = lazy(() => import("../ai-support/BrowserPanel.jsx"));
@@ -10,24 +11,10 @@ const AppsPanel = lazy(() => import("../ai-support/AppsPanel.jsx"));
 const ProviderPanel = lazy(() => import("../ai-support/ProviderPanel.jsx"));
 const PluginsPanel = lazy(() => import("../ai-support/PluginsPanel.jsx"));
 
-// PANEL_GROUPS owns the Places/Connect destination list, and nothing keeps a
-// second copy. A group *is* a destination: the user arrives at "Places" or
-// "Connect" from the sidebar, the view strip or the palette, and the tabs of
-// that group are the surfaces inside it. There is deliberately no group tab
-// strip here — it would compete with the navigation that chose the group.
-export const PANEL_GROUPS = [
-  { id: "places", label: "Places", tabs: [
-    { id: "files", label: "Sandbox" },
-    { id: "system", label: "System" },
-    { id: "browser", label: "Browser" },
-  ]},
-  { id: "connect", label: "Connect", tabs: [
-    { id: "ai", label: "AI" },
-    { id: "apps", label: "Apps" },
-    { id: "tools", label: "Tools" },
-    { id: "plugins", label: "Plugins" },
-  ]},
-];
+// The Places/Connect destination list is owned by ./panelGroups.js (imported
+// above) so the shells can read it without statically importing this panel,
+// which App.jsx lazy-loads. There is deliberately no group tab strip here -
+// it would compete with the navigation that chose the group.
 
 export function ComputerPanel({ computer, token, meRole, onRefresh, flash, group = "places", initialTab }) {
   const destination = PANEL_GROUPS.find(g => g.id === group) || PANEL_GROUPS[0];

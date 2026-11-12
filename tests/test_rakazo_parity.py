@@ -1,8 +1,6 @@
 """Rakazo-parity coverage: health, computer provider, BYO model, secret hygiene."""
 from __future__ import annotations
 
-import os
-
 
 def test_health_endpoint_has_revision(client):
     res = client.get("/health")

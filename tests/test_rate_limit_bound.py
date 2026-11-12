@@ -1,4 +1,5 @@
-"""The write-rate limiter is bounded (docs/SECURITY-REVIEW.md finding 9).
+"""The write-rate limiter is bounded (the unbounded-limiter finding merged
+into docs/CHANGELOG.md).
 
 `_last_write` is keyed by the caller's handle, and registering is open, so an
 unauthenticated caller can mint unlimited distinct handles and drive unbounded

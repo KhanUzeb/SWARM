@@ -343,8 +343,6 @@ def test_migrations_record_versions_and_are_idempotent(old_db):
 
 def test_a_failed_migration_does_not_record_its_version(old_db, monkeypatch):
     """Each migration commits its own version, so a crash retries cleanly."""
-    import aiosqlite
-
     from backend import migrations
 
     async def attempt():
@@ -456,7 +454,6 @@ def test_old_database_serves_health_through_the_app(old_db, monkeypatch):
     are not enough if startup itself throws on a database it has never
     seen. /health is unauthenticated by design (AGENTS.md §3).
     """
-    import backend.db as db_mod
     import backend.main as main_mod
     from fastapi.testclient import TestClient
 

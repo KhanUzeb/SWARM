@@ -31,7 +31,6 @@ import aiosqlite
 from . import migrations
 from .settings import get_settings
 from .models import (
-    ALLOWED_TOOLS,
     DEFAULT_GROQ_MODEL,
     DEFAULT_JOB,
     DEFAULT_TOOLS,

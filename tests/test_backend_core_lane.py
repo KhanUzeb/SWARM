@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 import backend.db as db_mod
 from backend import v2 as v2_mod
 from backend.settings import reset_settings_cache
@@ -133,8 +131,6 @@ def test_people_dm_cannot_be_deleted_via_api(client, auth):
 # "no column named auth_method". Uses an isolated file so the app
 # lifespan (which runs v2.init_db) cannot mask the missing migration.
 def test_oauth_columns_exist_after_db_init_only(tmp_path, monkeypatch):
-    import pathlib as _pl
-
     path = tmp_path / "oauth-only.db"
     monkeypatch.setattr(db_mod, "DB_PATH", path)
 
@@ -299,7 +295,7 @@ def test_doctor_report_always_contains_providers(monkeypatch, tmp_path):
 # variable list and cache signature.
 def test_custom_provider_key_is_owned_by_the_settings_object(monkeypatch):
     from backend.settings import (
-        MANAGED_ENV_VARS, get_settings, reset_settings_cache, settings_snapshot,
+        MANAGED_ENV_VARS, get_settings, reset_settings_cache,
     )
 
     monkeypatch.setenv("SWARM_OPENAI_COMPAT_API_KEY", "sk-compat-not-a-real-key")

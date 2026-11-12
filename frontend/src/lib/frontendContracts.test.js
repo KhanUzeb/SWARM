@@ -380,14 +380,19 @@ describe("places and connect are first-class destinations", () => {
   });
 
   test("PANEL_GROUPS stays the single owner of the destination and tab list", async () => {
-    // App, Sidebar and TopBar navigate to a group id and keep no copy of it.
+    // panelGroups.js owns the list; App lazy-loads the panel, and the shells
+    // import the list from there — a static import in a shell would drag the
+    // whole panel into the main chunk.
+    const groups = await src("components/panelGroups.js");
+    expect(groups).toContain("export const PANEL_GROUPS");
     const panel = await src("components/ComputerPanel.jsx");
-    expect(panel).toContain("export const PANEL_GROUPS");
+    expect(panel).not.toContain("export const PANEL_GROUPS");
+    expect(panel).toContain('from "./panelGroups.js"');
     const app = await src("App.jsx");
     expect(app).not.toContain("PLACES_TABS");
     // The sandbox tab is labelled the way the product and /api/computer
     // label it: "the sandbox (Sandbox tab)".
-    expect(panel).toContain('{ id: "files", label: "Sandbox" }');
+    expect(groups).toContain('{ id: "files", label: "Sandbox" }');
     // No surface spells a tab name: they all navigate to a group id.
     for (const f of ["App.jsx", "components/Sidebar.tsx", "components/TopBar.tsx", "components/CommandCenter.jsx"]) {
       const text = await src(f);

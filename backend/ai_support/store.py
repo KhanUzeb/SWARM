@@ -14,7 +14,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .. import db
 from ..settings import get_settings, oauth_client_id, oauth_client_secret
-from .providers import get_provider
 
 _logger = logging.getLogger("swarm.providers")
 

@@ -270,8 +270,6 @@ def test_the_person_who_approved_can_spend_the_grant(client):
 
 
 def test_a_delegated_agents_block_stops_the_parent(client, monkeypatch):
-    import types
-
     class FakeRegistry:
         async def execute(self, name, args, *, audit_sink=None, **_kw):
             if audit_sink is not None:

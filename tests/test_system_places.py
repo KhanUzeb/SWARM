@@ -9,7 +9,6 @@ import asyncio
 import json
 
 import backend.db as db
-import backend.main as main
 from backend.tools import system as system_mod
 
 

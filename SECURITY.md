@@ -43,7 +43,7 @@ fix and disclosure timeline with you.
   remote bootstrap requires `SWARM_SETUP_TOKEN` to be configured and
   presented (a proxy fails closed). A remote member needs
   `SWARM_INVITE_CODE`; re-registering an existing member is loopback-only. See
-  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#registration-and-first-admin).
+  [AGENTS.md](AGENTS.md) (section 3, Auth model).
 - Every tool call passes `policy.evaluate_tool` before the registry can run
   it. `DENY` never executes, `ALLOW` is a short list of reversible local work
   and read-only fetches, and everything else needs a human approval bound to
@@ -145,9 +145,9 @@ keep the instance off the public internet, or sandbox it at the
 container/VM layer instead — which is the deployment's job, not the
 application's.
 
-See [SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md) for the full audit. Its
-findings describe the tree before this hardening layer, so read them as
-history and re-check the code for current behaviour.
+See [docs/CHANGELOG.md](docs/CHANGELOG.md) for the hardening history. The
+audit it merged describes the tree before this layer, so read it as history
+and re-check the code for current behaviour.
 
 ## Hardening a public deployment
 

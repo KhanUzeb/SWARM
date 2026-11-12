@@ -84,7 +84,7 @@ def test_list_returns_the_modelled_row_shape(approver):
     assert match["resolved_at"] is None
 
 
-def test_an_empty_list_is_an_empty_json_array(approver):
+def test_resolve_records_resolved_at_on_or_after_created_at(approver):
     client, headers, make = approver
     row = client.portal.call(make)
     _wait(client, main_mod.RATE_LIMIT_SECONDS + 0.05)

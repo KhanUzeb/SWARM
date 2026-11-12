@@ -34,8 +34,8 @@ import { X, MessageSquare, Folder, FileText } from "lucide-react";
 import { useWorkSessions, cancelWork, WORK_ACTIVE } from "./work/sessionStore.js";
 import { useFocusTrap } from "./lib/focusTrap";
 
-// PANEL_GROUPS is owned by ComputerPanel.jsx. The copy that lived here was
-// dead and had drifted from it.
+// PANEL_GROUPS is owned by components/panelGroups.js. The copies that lived
+// here and inside ComputerPanel.jsx were dead and had drifted from it.
 
 export default function App() {
   const [user, setUser] = useState(null);

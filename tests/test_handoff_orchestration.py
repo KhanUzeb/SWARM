@@ -16,13 +16,11 @@ that is unique to this file: objective preservation and approval blocking.
 """
 from __future__ import annotations
 
-import asyncio
 import time
 
-import backend.db as db
 import backend.main as main
 
-from tests.test_flagship_flows import _clear_rate, _wait_for, _messages, _recording_agents, _agent_replies
+from tests.test_flagship_flows import _clear_rate, _wait_for, _agent_replies
 
 
 def test_handoff_preserves_original_objective(client, auth, monkeypatch):

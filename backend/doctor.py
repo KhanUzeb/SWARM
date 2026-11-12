@@ -322,8 +322,6 @@ def check_exposure() -> list[dict[str, Any]]:
     so they are warnings, not failures. A doctor that blocks `SWARM_DEMO=1`
     would just teach people to ignore it.
     """
-    from .tools import system as system_mod
-
     settings = get_settings()
     rows: list[dict[str, Any]] = []
     bind = ", ".join(settings.bind_candidates()) or "loopback (uvicorn default)"
@@ -444,7 +442,6 @@ def check_connectivity() -> dict[str, Any]:
 
 def run_doctor(*, connectivity: bool = False) -> dict[str, Any]:
     """The full report. JSON-serialisable, ordered, and safe to paste."""
-    settings = get_settings()
     checks: list[dict[str, Any]] = [check_python(), check_dependencies()]
     checks.extend(check_settings())
     checks.extend(check_providers())

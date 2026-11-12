@@ -1,3 +1,6 @@
 pytest>=9.1.1
 httpx>=0.28.1
 pytest-asyncio>=1.4.0
+# F401/F811/F841 lint pass: `ruff check backend cli tests` (unused imports,
+# redefinitions, unused locals). CI still gates on pytest + bun, not lint.
+ruff>=0.17.4

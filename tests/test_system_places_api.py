@@ -74,7 +74,9 @@ def test_added_place_shows_up_in_listing_payload(system_client, tmp_path):
 
 
 def test_member_cannot_add_a_place(system_client, tmp_path):
-    admin = _register(system_client, "uzeb")
+    # The first registered user is the admin; maya must register second so the
+    # 403 is exercised as a member, not as the admin.
+    _register(system_client, "uzeb")  # admin, registration order matters
     member = _register(system_client, "maya")
     folder = tmp_path / "nope"
     folder.mkdir()

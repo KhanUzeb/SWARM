@@ -120,8 +120,6 @@ def test_stream_assembles_fragmented_tool_call_across_chunks():
 
 
 def test_stream_propagates_usage_and_ignores_empty_chunks():
-    usage = object()
-
     class _Usage:
         prompt_tokens = 7
         completion_tokens = 5

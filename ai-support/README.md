@@ -17,3 +17,18 @@ Connect a provider in the UI to store an encrypted API key in SQLite. Environmen
 **Providers:** Groq, OpenRouter, OpenAI, Hugging Face, Together AI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Fireworks AI, Perplexity, NVIDIA NIM, OpenCode, Zen, Cohere, Moonshot AI (Kimi), Zhipu GLM, SiliconFlow, DeepInfra, Alibaba Cloud (DashScope), SambaNova, Cerebras, Nebius, Novita AI, FriendliAI, AI21 Labs (Jamba), GitHub Models, Azure OpenAI, Meta Llama API, Cloudflare Workers AI, Vercel AI Gateway, Ollama Cloud, MiniMax, Baidu Qianfan, Tencent Hunyuan, ByteDance Doubao (Ark), 01.AI (Yi), StepFun, Upstage Solar, IBM watsonx.ai, Ollama (local), LM Studio (local), llama.cpp server (local), vLLM (local), plus **Custom (OpenAI-compatible)** for any self-hosted endpoint via `SWARM_OPENAI_COMPAT_BASE_URL`. Every cloud entry takes a key in the UI or its `*_API_KEY` env var; local servers accept any value as the key. Filter by category (Featured, Frontier, Open weights, Fast inference, China, Gateways, Enterprise, Local, Cloud, Connected) in Connect → AI — backend values are singular lowercase (`featured`/`frontier`/`open`/`fast`/`china`/`gateway`/`enterprise`/`local`/`cloud`).
 
 **Apps (not an LLM provider):** Composio lives in Connect → Apps (`/api/composio/*`, `COMPOSIO_API_KEY`). A Composio key does not make an LLM provider ready.
+
+## OAuth
+
+One provider currently speaks OAuth: **Google Gemini**. Its card in Connect → AI shows an OAuth button instead of a key field when the install is configured:
+
+```env
+# OAuth client from Google Cloud Console → APIs & Services → Credentials,
+# type "Web application". Authorized redirect URI must match SWARM_OAUTH_REDIRECT_URI.
+SWARM_GOOGLE_OAUTH_CLIENT_ID=
+SWARM_GOOGLE_OAUTH_CLIENT_SECRET=
+# Defaults to http://localhost:8000/api/v2/oauth/callback when unset.
+SWARM_OAUTH_REDIRECT_URI=
+```
+
+Set these in the backend's environment (`.env`) and restart. The flow uses PKCE with server-side state; the access token is sealed like a key and refreshes automatically on the next call once it is within a minute of expiry. API-key connect works on the same card and remains the better default for local development. Other providers are API-key only.

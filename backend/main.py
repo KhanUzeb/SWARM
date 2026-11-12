@@ -110,7 +110,8 @@ RATE_LIMIT_SECONDS = 0.5
 HISTORY_LIMIT_MAX = 100
 # The write limiter is keyed by the caller's handle, and registering is open,
 # so an attacker can mint unlimited distinct handles. Without a cap this dict
-# grows for the life of the process (docs/SECURITY-REVIEW.md finding 9), so
+# grows for the life of the process (the unbounded-limiter finding merged into
+# docs/CHANGELOG.md), so
 # both a time bound and a size cap apply. Evicting an entry older than
 # RATE_LIMIT_SECONDS is invisible: the next write for that handle is allowed
 # anyway, because the window has already passed.
@@ -421,7 +422,7 @@ def _channel_lock(channel_id: str) -> asyncio.Lock:
     if entry is not None:
         return entry
     for stale_id in [lid for lid, lk in _loop_objects.items() if lk.is_closed()]:
-        stale_loop = _loop_objects.pop(stale_id, None)
+        _loop_objects.pop(stale_id, None)
         for ck in [k for k in _channel_locks if k[0] == stale_id]:
             _channel_locks.pop(ck, None)
     _loop_objects[id(loop)] = loop
