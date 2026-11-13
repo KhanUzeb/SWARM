@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
+import aiosqlite
+
 import pytest
 
 # The pre-upgrade schema, written out by hand rather than derived from the
