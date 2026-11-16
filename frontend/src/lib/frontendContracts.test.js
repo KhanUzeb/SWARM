@@ -37,6 +37,24 @@ describe("blocked browser storage does not break the workspace", () => {
   });
 });
 
+describe("v2 gate decisions echo what the human reviewed", () => {
+  test("the approval POST carries the grant id and binding hash, and stale replies do not silently re-authorise", async () => {
+    const workHome = await src("components/WorkHome.jsx");
+    expect(workHome).toContain("grant_id: grantId, binding_hash: bindingHash");
+    expect(workHome).toContain("/api/v2/runs/${run.id}/approval");
+    expect(workHome).toContain("This decision is stale");
+    // The card must state what a checkpoint actually authorises.
+    expect(workHome).toContain("no specific tool or command is bound");
+    // Re-requesting an expired/stale gate is an explicit action, not a retry.
+    expect(workHome).toContain("Re-request");
+    // Gate selection follows the authoritative grant id, not the step id, so
+    // re-issued/re-armed gates surface their fresh event.
+    expect(workHome).toContain("gateForGrant(events, approvalState?.grant_id)");
+    expect(workHome).not.toContain("newestUnresolvedGate");
+    expect(workHome).toContain('state === "stale"');
+  });
+});
+
 describe("websocket frame contract (backend/main.py hub broadcasts)", () => {
   test("full message frames merge into the log", () => {
     expect(WS_MESSAGE_FRAME_TYPES.has("message")).toBe(true);

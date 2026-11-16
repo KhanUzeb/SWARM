@@ -28,6 +28,12 @@ def _wait_for(predicate, timeout=10.0):
     raise AssertionError("timed out waiting for background work")
 
 
+def _gate_binding(client, auth, run_id):
+    """The reviewed binding the UI echoes back on a v2 gate decision."""
+    state = client.get(f"/api/v2/runs/{run_id}/approval", headers=auth).json()
+    return {"grant_id": state["grant_id"], "binding_hash": state["binding_hash"]}
+
+
 def test_workflow_run_maps_to_same_session_interface(client, auth, monkeypatch):
     _mock_agent(monkeypatch, reply="run output")
     run = client.post("/api/v2/runs", headers=auth, json={"objective": "Check the brief"}).json()
@@ -154,7 +160,7 @@ def test_approval_gate_approve_and_deny(client, auth, monkeypatch):
     assert "approval_requested" in types
 
     resolved = client.post(f"/api/v2/runs/{run['id']}/approvals/gate",
-                           headers=auth, json={"status": "approved"})
+                           headers=auth, json={"status": "approved", **_gate_binding(client, auth, run['id'])})
     assert resolved.status_code == 200
     events = _wait_for(
         lambda: client.get(f"/api/work/{session['id']}/events", headers=auth).json() or None)
@@ -167,7 +173,7 @@ def test_approval_gate_approve_and_deny(client, auth, monkeypatch):
     # Deny path: run and session both cancel.
     denied_run = launch("Please deny")
     denied = client.post(f"/api/v2/runs/{denied_run['id']}/approvals/gate",
-                         headers=auth, json={"status": "denied"})
+                         headers=auth, json={"status": "denied", **_gate_binding(client, auth, denied_run['id'])})
     assert denied.status_code == 200
     assert denied.json()["status"] == "cancelled"
     denied_session = next(s for s in client.get("/api/work", headers=auth).json()
@@ -210,7 +216,7 @@ def test_approval_resume_preserves_completed_step_outputs(client, auth, monkeypa
     resolved = client.post(
         f"/api/v2/runs/{run['id']}/approvals/gate",
         headers=auth,
-        json={"status": "approved"},
+        json={"status": "approved", **_gate_binding(client, auth, run['id'])},
     )
     assert resolved.status_code == 200
     terminal = _wait_for(lambda: (
@@ -316,7 +322,7 @@ def test_restart_recovery_settles_interrupted_sessions(client, auth, monkeypatch
     assert asyncio.run(work.recover_interrupted()) == 0  # idempotent while parked
     # Approving lets the run finish; the list view syncs its session to terminal.
     client.post(f"/api/v2/runs/{run['id']}/approvals/gate",
-                headers=auth, json={"status": "approved"})
+                headers=auth, json={"status": "approved", **_gate_binding(client, auth, run['id'])})
     _wait_for(
         lambda: client.get(f"/api/v2/runs/{run['id']}", headers=auth).json()["status"]
         == "completed" or None)

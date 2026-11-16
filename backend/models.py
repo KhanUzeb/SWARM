@@ -294,6 +294,19 @@ class ApprovalResolve(BaseModel):
     status: str = Field(pattern=r"^(approved|denied)$")
 
 
+class RunApprovalResolve(ApprovalResolve):
+    """Decision on one exact-bound workflow gate grant.
+
+    The chat approvals route resolves by a numeric id and needs only a status.
+    A v2 gate is different: the human was shown a specific binding, so the
+    decision must echo it. Without these fields a stale client could approve
+    a grant it never reviewed.
+    """
+
+    grant_id: str = Field(min_length=1)
+    binding_hash: str = Field(min_length=1)
+
+
 # ---------------------------------------------------- approval responses --
 # The first modelled slice of the API. Approvals were picked because the
 # approvals inbox is the one surface a human reads all day, and it is built

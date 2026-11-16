@@ -156,6 +156,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
   const [verifyMsg, setVerifyMsg] = useState("");
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [approvalMsg, setApprovalMsg] = useState("");
+  const [approvalState, setApprovalState] = useState(null);
 
   useEffect(() => { setCurrent(run); }, [run?.id]);
 
@@ -167,11 +168,12 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
     let alive = true;
     async function refresh() {
       try {
-        const [r, p, e, a] = await Promise.all([
+        const [r, p, e, a, g] = await Promise.all([
           apiJson(`/api/v2/runs/${run.id}`, { token }),
           apiJson(`/api/v2/runs/${run.id}/progress`, { token }),
           apiJson(`/api/v2/runs/${run.id}/events`, { token }),
           apiJson(`/api/v2/runs/${run.id}/artifacts`, { token }),
+          apiJson(`/api/v2/runs/${run.id}/approval`, { token }),
         ]);
         if (!alive) return;
         if (r.ok) {
@@ -181,6 +183,9 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
         if (p.ok) setProgress(p.data);
         if (e.ok) setEvents(e.data);
         if (a.ok) setArtifacts(a.data);
+        // The gate's authoritative state comes from the backend grant, not
+        // from which events happen to be in the local transcript.
+        if (g.ok) setApprovalState(g.data);
       } catch { /* polling continues */ }
     }
     refresh();
@@ -203,37 +208,72 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
   }, [events]);
 
   const failure = progress?.failures?.[0];
-  // Defect: this took the newest `approval_requested` whether or not it had
-  // already been answered, so a run that had cleared an earlier gate had its
-  // Approve/Deny POST aimed at that settled step_id. v2 keys the resume on
-  // `approval_resolved` per step_id (backend/v2.py), so a settled gate can
-  // never advance and the run stalls on the gate it is actually held at.
-  const pendingGate = newestUnresolvedGate(events);
+  // Select by the authoritative grant id, not by step_id. Re-issue and rearm
+  // reuse the same step but mint a fresh grant and a fresh approval_requested
+  // event; keying on step_id would hide that new grant behind the old
+  // approval_resolved and leave the run with no reachable decision.
+  const pendingGate = useMemo(
+    () => gateForGrant(events, approvalState?.grant_id),
+    [events, approvalState?.grant_id],
+  );
 
   async function resolve(decision) {
     if (onApprove && decision === "approved") return onApprove(run);
     if (onDeny && decision === "denied") return onDeny(run);
     const stepId = pendingGate?.step_id;
-    if (!stepId) {
-      setApprovalMsg("No pending approval step found.");
+    const grantId = pendingGate?.payload?.grant_id;
+    const bindingHash = pendingGate?.payload?.binding_hash;
+    if (!stepId || !grantId || !bindingHash) {
+      setApprovalMsg("This gate has no reviewed binding — refresh the run before deciding.");
       return;
     }
     setApprovalBusy(true);
     setApprovalMsg("");
     try {
       const res = await apiJson(`/api/v2/runs/${run.id}/approvals/${stepId}`, {
-        method: "POST", token, body: { status: decision },
+        method: "POST", token,
+        // Echo exactly what the human reviewed. The backend rejects a stale
+        // binding instead of silently approving a different grant.
+        body: { status: decision, grant_id: grantId, binding_hash: bindingHash },
       });
       if (res.ok) {
         setCurrent(res.data);
         onStatusChange?.(res.data);
-        const ev = await apiJson(`/api/v2/runs/${run.id}/events`, { token });
-        if (ev.ok) setEvents(ev.data);
       } else {
-        setApprovalMsg(res.data?.detail || "Could not resolve approval");
+        const detail = res.data?.detail || "Could not resolve approval";
+        setApprovalMsg(
+          res.status === 409 || res.status === 410
+            ? `This decision is stale: ${detail} Review the current request before deciding again.`
+            : detail,
+        );
       }
+      // Refresh both the transcript and the authoritative gate state. Never
+      // retry with a newly fetched binding — that would authorize without a
+      // new human decision.
+      const [ev, g] = await Promise.all([
+        apiJson(`/api/v2/runs/${run.id}/events`, { token }),
+        apiJson(`/api/v2/runs/${run.id}/approval`, { token }),
+      ]);
+      if (ev.ok) setEvents(ev.data);
+      if (g.ok) setApprovalState(g.data);
     } catch (e) {
       setApprovalMsg(e.message || "Could not resolve approval");
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
+
+  async function reissueApproval() {
+    setApprovalBusy(true);
+    setApprovalMsg("");
+    try {
+      const res = await apiJson(`/api/v2/runs/${run.id}/approval/reissue`, {
+        method: "POST", token,
+      });
+      if (res.ok) setApprovalState(res.data);
+      else setApprovalMsg(res.data?.detail || "Could not re-request approval");
+    } catch (e) {
+      setApprovalMsg(e.message || "Could not re-request approval");
     } finally {
       setApprovalBusy(false);
     }
@@ -310,11 +350,41 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
           {current?.status === "waiting_for_approval" && (
             <div className="approval-card rich">
               <h4>Needs your approval{pendingGate?.step_id ? ` — gate ${pendingGate.step_id}` : ""}</h4>
-              <p className="muted">Review scope, impact and reversibility before deciding.</p>
-              <div className="row">
-                <button className="btn btn-primary btn-sm" disabled={approvalBusy} onClick={() => resolve("approved")}>Approve</button>
-                <button className="btn btn-ghost btn-sm" disabled={approvalBusy} onClick={() => resolve("denied")}>Deny</button>
-              </div>
+              {(() => {
+                const desc = approvalState?.canonical_args || pendingGate?.payload?.canonical_args || {};
+                const state = approvalState?.state;
+                const blocked = state === "expired" || state === "stale" || state === "ambiguous";
+                const canReissue = approvalState?.can_reissue === true
+                  || state === "expired" || state === "stale";
+                return (
+                  <>
+                    <p className="muted small">Agent: {desc.agent || "workflow checkpoint"}</p>
+                    <p className="muted small">Scope: {desc.scope || "run"}</p>
+                    <p className="muted small">Checkpoint: {desc.label || pendingGate?.step_id || "gate"}</p>
+                    <p className="muted small">Objective: {desc.objective || current?.objective || ""}</p>
+                    <p className="muted small">Grant: {approvalState?.grant_id || pendingGate?.payload?.grant_id || "unknown"}</p>
+                    <p className="muted small">
+                      {approvalState?.authority || desc.authority || "Approving resumes this workflow past the gate; no specific tool or command is bound."}
+                    </p>
+                    {state === "expired" && (
+                      <p className="muted" role="status">This request expired. Re-request it before reviewing a fresh decision.</p>
+                    )}
+                    {state === "stale" && (
+                      <p className="muted" role="status">This request changed after it was shown. Re-request it to review a fresh decision.</p>
+                    )}
+                    {state === "ambiguous" && (
+                      <p className="muted" role="status">This gate needs administrator reconciliation before it can be decided again.</p>
+                    )}
+                    <div className="row">
+                      <button className="btn btn-primary btn-sm" disabled={approvalBusy || blocked} onClick={() => resolve("approved")}>Approve</button>
+                      <button className="btn btn-ghost btn-sm" disabled={approvalBusy || blocked} onClick={() => resolve("denied")}>Deny</button>
+                      {canReissue && (
+                        <button className="btn btn-ghost btn-sm" disabled={approvalBusy} onClick={reissueApproval}>Re-request</button>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
               {approvalMsg && <p className="muted small" role="status">{approvalMsg}</p>}
             </div>
           )}
@@ -376,20 +446,17 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
 }
 
 /**
- * The gate the run is actually held at: the newest `approval_requested` whose
- * step_id has no matching `approval_resolved` yet.
+ * The event describing the exact grant the backend says is current. A new
+ * grant id always comes with a new approval_requested event, so re-issued and
+ * re-armed gates surface correctly.
  */
-function newestUnresolvedGate(events) {
-  const settled = new Set();
-  for (const e of events || []) {
-    if (e.event_type === "approval_resolved" && e.step_id) settled.add(e.step_id);
-  }
-  for (let i = (events || []).length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (e.event_type !== "approval_requested") continue;
-    if (!e.step_id || !settled.has(e.step_id)) return e;
-  }
-  return undefined;
+function gateForGrant(events, grantId) {
+  if (!grantId) return undefined;
+  const wanted = String(grantId);
+  return (events || []).find(
+    (e) => e.event_type === "approval_requested"
+      && String(e.payload?.grant_id) === wanted,
+  );
 }
 
 function PlanList({ plan, current, status }) {

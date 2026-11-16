@@ -38,7 +38,7 @@ from .jobs import JOB_TEMPLATES
 from .profiles import list_profiles, load_job_profile
 from .models import (
     AgentCreate, AgentPatch, AiModelsPreview, AiProviderConnect, AiProviderModel,
-    ApprovalOut, ApprovalResolve, ApprovalResolvedOut, ChannelCreate,
+    ApprovalOut, ApprovalResolve, ApprovalResolvedOut, RunApprovalResolve, ChannelCreate,
     ComposioToolkitConnect, CustomToolCreate,
     CustomToolPatch, DirectMessageCreate, MessageCreate, ReactionCreate,
     RegisterRequest, RoutineCreate, RoutinePatch, SkillCreate, SkillPatch,
@@ -691,26 +691,113 @@ async def api_v2_cancel_run(run_id: str, handle: str = Depends(require_auth)):
 
 
 @app.post("/api/v2/runs/{run_id}/approvals/{step_id}")
-async def api_v2_resolve_run_approval(run_id: str, step_id: str, payload: ApprovalResolve, handle: str = Depends(require_auth)):
+async def api_v2_resolve_run_approval(run_id: str, step_id: str, payload: RunApprovalResolve, handle: str = Depends(require_auth)):
+    """Resolve one exact-bound, single-use approval grant.
+
+    A workflow gate is a bare checkpoint: approving it resumes the workflow,
+    not a specific tool or command. The decision must still echo the grant id
+    and binding hash the human was shown, or it is rejected as stale. A
+    client that sends only {"status": ...} is rejected by the request model
+    rather than being silently treated as an approval.
+    """
     run = await v2.get_run(run_id, handle)
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
     if run["status"] != "waiting_for_approval":
         raise HTTPException(status_code=409, detail="run is not waiting for approval")
-    await v2.append_event(run_id, "approval_resolved", {"decision": payload.status}, step_id)
+    grant = await v2.get_approval_grant(run_id, handle, step_id)
+    if grant is None:
+        raise HTTPException(status_code=409, detail="no approval grant for this gate")
+    if payload.grant_id != grant["id"] or payload.binding_hash != grant["binding_hash"]:
+        # Unknown or stale binding: fail closed and tell the caller to refresh.
+        raise HTTPException(status_code=409, detail="approval binding is stale; refresh the gate before deciding")
+    try:
+        outcome = await v2.resolve_approval_grant(
+            run_id, handle, step_id, payload.status,
+            resolved_by=handle, grant_id=payload.grant_id,
+            binding_hash=payload.binding_hash)
+    except v2.ApprovalBindingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except v2.ApprovalAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if outcome is None:
+        raise HTTPException(status_code=409, detail="no approval grant for this gate")
+    if outcome["state"] == "already":
+        raise HTTPException(status_code=409, detail="approval already resolved")
+    if outcome["state"] == "expired":
+        raise HTTPException(status_code=410, detail="approval expired")
+    decision = payload.status
+    binding = {
+        "grant_id": outcome["grant"]["id"],
+        "binding_hash": outcome["grant"]["binding_hash"],
+        "decision": decision,
+        "resolved_by": handle,
+    }
+    await v2.append_event(run_id, "approval_resolved", binding, step_id)
     session = await work.find_by_run(run_id, handle)
     if session:
         await work.append_event(
             session["id"], "approval_resolved",
-            {"decision": payload.status, "step_id": step_id}, step_id)
-    if payload.status == "approved":
+            {**binding, "step_id": step_id}, step_id)
+    if decision == "approved":
+        # claim_run consumes the grant atomically with the lease claim; a
+        # duplicate POST is rejected above before it can start a second run.
         v2.start_run(run_id, handle)
     else:
         await v2.update_run(run_id, handle, "cancelled")
-        await v2.append_event(run_id, "run_denied", {"step_id": step_id})
+        await v2.append_event(run_id, "run_denied", {"step_id": step_id, "grant_id": outcome["grant"]["id"]})
         if session:
             await work.append_event(session["id"], "work_cancelled", {"step_id": step_id}, step_id)
     return await v2.get_run(run_id, handle)
+
+
+@app.get("/api/v2/runs/{run_id}/approval")
+async def api_v2_run_approval_state(run_id: str, handle: str = Depends(require_auth)):
+    """Authoritative gate state for the UI; never inferred from events alone."""
+    state = await v2.approval_state(run_id, handle)
+    if state is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return state
+
+
+@app.post("/api/v2/runs/{run_id}/approval/reissue")
+async def api_v2_reissue_run_approval(run_id: str, handle: str = Depends(require_auth)):
+    """Re-request an expired or invalidated gate with a fresh binding.
+
+    Never resumes the run and never reuses the old decision: a new grant with
+    a new binding hash requires a new human decision.
+    """
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    try:
+        state = await v2.reissue_approval(run_id, handle)
+    except (v2.ApprovalAmbiguous, v2.ApprovalBindingError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if state is None:
+        raise HTTPException(status_code=409, detail="no re-requestable gate")
+    return state
+
+
+@app.post("/api/v2/runs/{run_id}/approval/reconcile")
+async def api_v2_reconcile_run_approval(
+    run_id: str, payload: dict[str, Any], handle: str = Depends(require_admin),
+):
+    """Admin-only resolution of a consumed-but-still-parked grant."""
+    if _rate_limited(handle):
+        raise HTTPException(429, "slow down")
+    action = str((payload or {}).get("action") or "")
+    if action not in {"cancel", "rearm"}:
+        raise HTTPException(400, "action must be cancel or rearm")
+    # Admin authority is checked by the dependency; ownership is not the same
+    # thing. Resolve the run's real owner before the owner-scoped reconcile.
+    target = await v2.get_run_any_owner(run_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    state = await v2.reconcile_ambiguous(
+        run_id, target["owner"], action, resolved_by=handle)
+    if state is None:
+        raise HTTPException(status_code=409, detail="no ambiguous gate to reconcile")
+    return state
 
 
 @app.get("/api/v2/work-states")
