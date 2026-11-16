@@ -56,13 +56,6 @@ DB_PATH = _default_db_path()
 
 _logger = logging.getLogger("swarm.db")
 
-# How long a blocked writer waits for the lock before SQLite raises
-# "database is locked". The old default was an immediate error, which on
-# a busy local machine meant a 500 from whichever unlucky request lost
-# the race — with WAL the reader/writer collision is mostly gone, so this
-# is just the backstop for the remaining writer-writer case.
-_DEFAULT_BUSY_TIMEOUT_MS = 5000
-
 
 def busy_timeout_ms() -> int:
     """SWARM_SQLITE_BUSY_TIMEOUT_MS, or 5000. Never negative.

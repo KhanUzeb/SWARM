@@ -22,8 +22,6 @@ from typing import Any
 
 from .settings import get_settings
 
-_DEFAULT_MAX_AGE_HOURS = 72.0
-_DEFAULT_MAX_MB = 512.0
 _SWEEP_BATCH = 512  # files per pass; keeps a sweep short
 
 
