@@ -40,13 +40,41 @@ def test_provider_models_marks_unconnected_provider(client):
 
 
 @pytest.mark.parametrize("provider_id", ["groq", "openrouter", "openai"])
-def test_list_provider_models_reports_a_boolean_connected(provider_id, client):
+def test_list_provider_models_reports_a_boolean_connected(provider_id, client, monkeypatch):
     import asyncio
 
+    async def no_auth(_provider_id):
+        return None
+
+    # `connected` is derived from resolve_runtime_auth. The old test called the
+    # real resolver and assumed the developer's shell had no provider keys, so
+    # an ambient OPENAI_API_KEY made it assert True is False. Supply the auth
+    # result explicitly: the no-key case stays the same on every machine.
+    monkeypatch.setattr(catalog, "resolve_runtime_auth", no_auth)
     row = asyncio.run(catalog.list_provider_models(provider_id))
     assert isinstance(row.get("connected"), bool)
-    # No key in the test environment, so it must be explicitly False rather
-    # than missing - callers read this key directly.
+    # No key, so it must be explicitly False rather than missing - callers
+    # read this key directly.
+    assert row["connected"] is False
+
+
+def test_connected_flag_is_independent_of_ambient_keys(monkeypatch):
+    """Regression for the baseline failure: a shell key must not flip this test.
+
+    The old version read the real resolver, so exporting OPENAI_API_KEY in the
+    developer's shell made `connected` True and turned a green suite red. The
+    test now controls the resolver itself, so the result cannot depend on the
+    environment it runs in.
+    """
+    import asyncio
+
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-leak")
+
+    async def no_auth(_provider_id):
+        return None
+
+    monkeypatch.setattr(catalog, "resolve_runtime_auth", no_auth)
+    row = asyncio.run(catalog.list_provider_models("openai"))
     assert row["connected"] is False
 
 

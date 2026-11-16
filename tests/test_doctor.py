@@ -338,6 +338,87 @@ def test_the_report_is_printable_on_a_non_utf8_console(monkeypatch, capsys):
     assert stream.written
 
 
+def test_main_guards_a_cp1252_stdout_before_printing(monkeypatch):
+    """The direct `python -m backend.doctor` path must not die on the arrow.
+
+    The test above proves the CLI helper works when someone calls it. This one
+    proves doctor.main() actually calls it - the missing wiring that made the
+    default Windows invocation raise UnicodeEncodeError. The fake stream
+    encodes on write, so it reproduces the real crash when the guard is absent.
+    """
+    class Cp1252:
+        def __init__(self) -> None:
+            self.encoding = "cp1252"
+            self.written: list[str] = []
+
+        def reconfigure(self, **kwargs: object) -> None:
+            self.encoding = str(kwargs.get("encoding", self.encoding))
+
+        def write(self, value: str) -> int:
+            value.encode(self.encoding)  # raises under cp1252 for "→"
+            self.written.append(value)
+            return len(value)
+
+        def isatty(self) -> bool:
+            return False
+
+    stream = Cp1252()
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    monkeypatch.setenv("SWARM_SYSTEM", "1")  # produces the arrow fix line
+    reset_settings_cache()
+    assert doctor_mod.main([]) == 0
+    assert stream.encoding == "utf-8", "doctor.main must call the UTF-8 guard"
+    assert any("swarm doctor" in w for w in stream.written)
+
+
+def test_backend_doctor_entry_point_runs_without_cli_installed(tmp_path):
+    """The image ships backend/ but no cli/; the entry point must not care.
+
+    Runs `python -m backend.doctor` in a fresh interpreter whose import hook
+    rejects every `cli` import - exactly the shipped-image condition. A stale
+    backend -> cli import would fail here even if the in-process tests pass
+    because pytest imported cli at collection time.
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    script = (
+        "import sys\n"
+        "class _BlockCli:\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'cli' or fullname.startswith('cli.'):\n"
+        "            raise ImportError('cli is not installed in this image')\n"
+        "sys.meta_path.insert(0, _BlockCli())\n"
+        "try:\n"
+        "    import cli  # noqa: F401\n"
+        "except ImportError:\n"
+        "    print('CLI_BLOCKED')\n"
+        "else:\n"
+        "    raise SystemExit('cli import was not blocked')\n"
+        "import runpy\n"
+        "runpy.run_module('backend.doctor', run_name='__main__')\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo)
+    env["PYTHON_DOTENV_DISABLED"] = "1"
+    env["SWARM_DB_PATH"] = str(tmp_path / "doctor.db")
+    env.pop("PYTHONIOENCODING", None)
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(repo),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CLI_BLOCKED" in proc.stdout, "test did not actually simulate a missing cli"
+    assert "swarm doctor:" in proc.stdout
+
+
 def test_main_exits_zero_on_a_usable_install(monkeypatch, capsys):
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
     reset_settings_cache()

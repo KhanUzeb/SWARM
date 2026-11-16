@@ -507,10 +507,32 @@ def format_report(report: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+def _force_utf8_output() -> None:
+    """Reconfigure the standard streams so the report prints on any code page.
+
+    A WARN/FAIL fix line contains "→" (U+2192), which the default Windows
+    console code page (cp1252) cannot encode. This guard belongs in the
+    backend, not in the CLI: `python -m backend.doctor` is the documented
+    entry point and runs in images that ship backend/ without cli/ (see
+    Dockerfile). Both hooks are optional - captured streams and some embedded
+    interpreters have no `reconfigure` - so a missing one is simply skipped.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for `python -m backend.doctor`."""
     import argparse
 
+    # Do this before any print: even a settings-validation error must not die
+    # on a host console that cannot represent the report's typography.
+    _force_utf8_output()
     parser = argparse.ArgumentParser(prog="swarm doctor", description=__doc__)
     parser.add_argument(
         "--connectivity", action="store_true",
