@@ -119,11 +119,94 @@ down` / `up`. To actually delete all data:
 docker compose down -v
 ```
 
-To back it up:
+Backups are manual today: there is no `swarm backup` or `swarm restore` command.
+Make one before any upgrade.
+
+Swarm uses SQLite in WAL mode (`backend/db.py` sets `PRAGMA journal_mode = WAL`).
+A committed change can live in `swarm.db-wal` until SQLite checkpoints it, and a
+running process can change the files while you read them. Copying only
+`swarm.db` from a live container is not a backup. In a WAL database even the
+table definitions may still be in the `-wal` file, so a main-file-only copy can
+open as an empty or malformed database.
+
+### Back up
+
+Set the folder name once and use the same value in every command below. Running
+`date +%F` again in a later step can cross midnight and point the verify step at
+a different folder.
 
 ```bash
-docker compose cp swarm:/app/data/swarm.db ./swarm-backup-$(date +%F).db
+STAMP=$(date +%F)
 ```
+
+1. Stop the service so no process holds the database open:
+
+   ```bash
+   docker compose stop swarm
+   ```
+
+   Do not use `docker compose down -v` here; `-v` deletes the volume.
+
+2. Copy the whole data directory, not just `swarm.db`:
+
+   ```bash
+   docker compose cp swarm:/app/data "./swarm-backup-$STAMP"
+   ```
+
+   The copy should contain `swarm.db` and, if they exist at that moment,
+   `swarm.db-wal` and `swarm.db-shm`. Keep all files together. A clean stop
+   usually checkpoints the WAL and removes those two files, which is fine. What
+   matters is that you stopped first and copied every database file present.
+
+3. Verify the copy. The image has no `sqlite3` CLI, so use Python on the host.
+   The read-only URI matters: a plain `connect()` creates an empty database at a
+   mistyped path, and `integrity_check` still prints `ok`.
+
+   ```bash
+   python -c "import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro', uri=True); print(c.execute('PRAGMA integrity_check').fetchone()[0])" "./swarm-backup-$STAMP/swarm.db"
+   ```
+
+   Expect `ok` with a zero exit code. A missing path fails with "unable to open
+   database file" and creates nothing; treat that as a failed backup. Run this
+   on a throwaway copy if the backup must stay bit-for-bit unchanged, because
+   opening a WAL database can checkpoint it on close. Then check a known row or
+   a recent run: `integrity_check` proves the file is intact, not that it holds
+   the work you expect.
+
+If you run these commands in separate shells, write the value of `$STAMP` down
+and paste the same literal date into each command instead of relying on the
+shell variable.
+
+### Restore
+
+Restore is not implemented or verified. There is no `swarm restore` command, and
+no restore sequence has been run against a disposable container and volume. Do
+not attempt an in-place restore on a volume that holds work you need. The
+stopped-instance backup above is the supported path; treat the notes below as
+requirements for a restore that an operator must first test on a disposable
+copy.
+
+Copying a saved `swarm.db` over the files in a volume is unsafe even when the
+service is stopped. A newer `swarm.db-wal` or `swarm.db-shm` left from the old
+database can survive the copy, and SQLite replays those sidecars on open, so the
+result can look healthy while returning data from before the restore. Ownership
+matters too: the container runs as `swarm`, and a database from another Swarm
+version runs additive migrations at startup (`ensure_schema()`).
+
+A restore procedure needs an executable test before it can be documented as a
+set of commands. Use a separately created container and volume for that test and
+leave the original volume untouched. The test must verify the saved set, with
+`PRAGMA integrity_check` and a known-row check, before anything is deleted or
+overwritten. It must confirm that the restored instance holds a known row or a
+recent run, and that the original volume is still recoverable if the test fails.
+Until that test exists, recovery on a real workspace is unverified and an
+operator must try it first on a disposable copy.
+
+For a local checkout without Docker, the default database is
+`backend/swarm.db` when `SWARM_DB_PATH` is unset. Stop uvicorn and copy the
+whole `swarm.db` file set, including any `-wal` and `-shm`, to a folder outside
+the checkout, then run the same integrity check. Do not restore over a live
+database until the restore procedure has been tested on a disposable copy.
 
 ## Env vars
 
