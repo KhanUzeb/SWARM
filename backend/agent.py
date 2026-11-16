@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -52,7 +53,10 @@ CUTOFF_MARKER = "[reply cut off — stopped]"
 # cut-off below produces an explicit stop line rather than a silent return.
 MAX_STEPS = 12            # model rounds per run; each round may call tools
 MAX_WALL_SECONDS = 300.0  # whole-run wall clock, tool execution included
-MAX_TOTAL_TOKENS = 120_000  # only enforced when the provider reports usage
+# Only enforced when the provider reports usage. A provider that omits usage
+# is an UNKNOWN-token turn, not a zero-token one: zero is never a measurement
+# and no price table exists here, so no cost is computed or claimed.
+MAX_TOTAL_TOKENS = 120_000
 # The same tool with the same arguments N times in a row is a loop, not
 # progress. 3 is clearly beyond normal use — watching a file legitimately
 # polls with *changing* arguments or a wait in between, and any real loop
@@ -817,11 +821,86 @@ def is_retryable(exc: BaseException) -> bool:
     return False
 
 
-def _usage_from(usage: Any, bucket: dict[str, int]) -> None:
-    if not usage:
-        return
-    bucket["prompt_tokens"] += getattr(usage, "prompt_tokens", 0) or 0
-    bucket["completion_tokens"] += getattr(usage, "completion_tokens", 0) or 0
+def empty_usage() -> dict[str, Any]:
+    """Honest zero bucket: no provider call means no measurement, not zero spend."""
+    return {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "usage_complete": False,
+        "rounds_seen": 0,
+        "rounds_reported": 0,
+    }
+
+
+def _token_field(value: Any) -> int | None:
+    """A nonnegative integral token count, or None when missing/malformed.
+
+    Only ints and integral finite floats are real counts. Fractions, NaN,
+    infinities, booleans, strings and negative values are unknown — never a
+    truncated or fabricated measurement that could trip the ceiling.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        count = int(value)
+        return count if count >= 0 else None
+    return None
+
+
+def _usage_from(usage: Any, bucket: dict[str, Any]) -> bool:
+    """Fold one provider call's usage into the bucket; was it fully reported?
+
+    Every provider call in a run must pass through here — including the
+    closing round after a non-token cap. Each token field is validated on its
+    own: a known field still counts toward the ceiling, while a missing or
+    malformed one leaves the round incomplete instead of fabricating a zero.
+    Reads only the two generic counters, so no provider-specific behavior
+    leaks in.
+    """
+    bucket["rounds_seen"] += 1
+    fully_reported = False
+    if usage:
+        prompt = _token_field(getattr(usage, "prompt_tokens", None))
+        completion = _token_field(getattr(usage, "completion_tokens", None))
+        if prompt is not None:
+            bucket["prompt_tokens"] += prompt
+        if completion is not None:
+            bucket["completion_tokens"] += completion
+        fully_reported = prompt is not None and completion is not None
+        if fully_reported:
+            bucket["rounds_reported"] += 1
+    bucket["usage_complete"] = _usage_is_complete(bucket)
+    return fully_reported
+
+
+def _usage_is_complete(bucket: dict[str, Any]) -> bool:
+    """True only when every provider call so far reported usage."""
+    return bool(bucket.get("rounds_seen")) and (
+        bucket["rounds_seen"] == bucket.get("rounds_reported", 0)
+    )
+
+
+def _usage_caveat(bucket: dict[str, Any], *, token_cap_hit: bool = False) -> str | None:
+    """Human-readable limit when a reply ends with partial usage totals."""
+    if _usage_is_complete(bucket):
+        return None
+    reported = bucket.get("rounds_reported", 0)
+    seen = bucket.get("rounds_seen", 0)
+    if token_cap_hit:
+        # The cap already tripped on complete data; do not claim it was not
+        # enforced. Only say the total in the reply is partial.
+        return (
+            f"token totals are partial ({reported}/{seen} provider calls "
+            "reported usage)"
+        )
+    return (
+        f"token usage was incomplete ({reported}/{seen} provider calls reported "
+        "usage), so the token budget was not enforced"
+    )
 
 
 async def _complete_stream(
@@ -1111,7 +1190,7 @@ async def _run_with_client(
     cap = max_tool_calls_of(agent_row)
     schemas = tools_schema_for(allowed) if use_tools and allowed else []
     tool_events: list[dict[str, Any]] = []
-    usage_total = {"prompt_tokens": 0, "completion_tokens": 0}
+    usage_total = empty_usage()
     tools_announced = False
 
     # --- per-run budget state -------------------------------------------
@@ -1129,6 +1208,9 @@ async def _run_with_client(
     seen_results: set[str] = set()
 
     def tokens_used() -> int:
+        # Lower bound on spend: only validated nonnegative fields are added.
+        # A partial sum is not a measured total, but it can still reach the
+        # ceiling and justify stopping. Completeness is tracked separately.
         return usage_total["prompt_tokens"] + usage_total["completion_tokens"]
 
     async def announce_tools() -> None:
@@ -1154,11 +1236,17 @@ async def _run_with_client(
     rounds = min(cap + 1, max_steps + 1)
     for step in range(rounds):
         over_wall = time.monotonic() > deadline
+        # Every counted token is a real nonnegative report, so a partial sum
+        # is a lower bound on spend. Once known tokens reach the ceiling the
+        # cap has genuinely been hit, even if other fields/rounds are missing
+        # — wait for completeness here would permit avoidable paid calls.
         over_tokens = tokens_used() >= max_tokens
         over_steps = step >= max_steps
         if over_wall or over_tokens or over_steps:
-            # Checked before spending the round, so a run can never overshoot
-            # its budget by one full round of tool calls.
+            # Checked between provider calls: once reported usage reaches the
+            # limit no further call is made. A single in-flight call can still
+            # exceed the ceiling before its usage is known — this is not a
+            # guarantee that the run never overspends.
             if over_wall:
                 reason = (
                     f"stopped after {step} round(s): the {max_seconds:.0f}s "
@@ -1166,18 +1254,23 @@ async def _run_with_client(
                 )
             elif over_tokens:
                 reason = (
-                    f"stopped after {tokens_used()} tokens: this reply hit its "
-                    f"{max_tokens}-token budget"
+                    f"stopped after {tokens_used()} reported tokens: this reply "
+                    f"hit its {max_tokens}-token budget"
                 )
             else:
                 reason = (
                     f"stopped after {max_steps} round(s): this reply hit its "
                     f"step budget"
                 )
+            # Once reported usage reaches the limit, no further provider call
+            # is made — not even the summarizing one. Other stops keep the
+            # closing round. Completeness is finalized at the exit, after any
+            # closing usage.
             return await _finish_at_cap(
                 announce_tools, client, model, messages,
                 stream_start_after_tools, on_token, cap,
                 tool_events, usage_total, reason=reason,
+                token_cap_hit=over_tokens, close_after=not over_tokens,
             )
 
         start = time.time()
@@ -1366,13 +1459,14 @@ async def _run_with_client(
             )
 
     await announce_tools()
-    return {
-        "reply": (
-            f"(gave up after {rounds} rounds without finishing — this reply "
-            f"hit its {max_steps}-round step budget)"
-        ),
-        "tool_events": tool_events, "usage": usage_total,
-    }
+    reply = (
+        f"(gave up after {rounds} rounds without finishing — this reply "
+        f"hit its {max_steps}-round step budget)"
+    )
+    caveat = _usage_caveat(usage_total)
+    if caveat:
+        reply += f"\n({caveat})"
+    return {"reply": reply, "tool_events": tool_events, "usage": usage_total}
 
 
 async def _finish_at_cap(
@@ -1387,18 +1481,25 @@ async def _finish_at_cap(
     usage_total: dict[str, Any],
     *,
     reason: str | None = None,
+    token_cap_hit: bool = False,
+    close_after: bool = True,
 ) -> dict[str, Any]:
-    """Shared cap-hit exit: announce tools, run the final no-tools round.
+    """Shared cap-hit exit: announce tools, then close unless tokens ran out.
 
-    `reason` names which bound was hit (loop, stall, wall clock, tokens).
-    It is appended to the closing reply so the run ends with a line a human
-    can read rather than a bare summary — the product rule is that a run
-    always says why it stopped (AGENTS.md §6)."""
+    `reason` names which bound was hit (loop, stall, wall clock, tokens);
+    `token_cap_hit` keeps a partial total from being described as a budget
+    that went unenforced when the cap actually tripped. `close_after=False`
+    means reported usage reached the limit: no additional provider call is
+    made, so completeness and totals reflect only the calls already made."""
     await announce_tools()
-    reply = await _closing_after_cap(
-        client, model, messages, on_stream_start, on_token, cap)
-    if reason:
-        reply = f"{reply}\n\n({reason})".strip()
+    if close_after:
+        reply = await _closing_after_cap(
+            client, model, messages, on_stream_start, on_token, cap, usage_total)
+    else:
+        reply = "stopped at the token budget; no further provider call was made"
+    notes = [note for note in (reason, _usage_caveat(usage_total, token_cap_hit=token_cap_hit)) if note]
+    if notes:
+        reply = f"{reply}\n\n({'; '.join(notes)})".strip()
     return {
         "reply": reply,
         "tool_events": tool_events, "usage": usage_total,
@@ -1412,14 +1513,19 @@ async def _closing_after_cap(
     on_stream_start: OnStreamStart | None,
     on_token: OnToken | None,
     cap: int,
+    usage_total: dict[str, Any],
 ) -> str:
     """One final no-tools round so a capped reply summarizes instead of
-    dead-ending on a cap notice. Falls back to the notice when empty."""
-    closing, _, _ = await _complete_stream(
+    dead-ending on a cap notice. Falls back to the notice when empty.
+
+    This round is a provider call like any other: its usage is folded into
+    the run bucket, so completeness reflects every call in the reply."""
+    closing, _, usage = await _complete_stream(
         client, model,
         [*messages, {"role": "user", "content": "Summarize what you did and what is still left, briefly."}],
         on_stream_start, on_token, tool_schemas=None,
     )
+    _usage_from(usage, usage_total)
     reply = (closing or "").strip()
     return reply or f"hit the {cap}-tool-call cap for this reply, stopping here."
 
@@ -1483,11 +1589,12 @@ async def _demo_generate_reply(
         if on_token is not None:
             await on_token(chunk)
         await asyncio.sleep(DEMO_STREAM_DELAY)
-    return {
-        "reply": reply,
-        "tool_events": [],
-        "usage": {"prompt_tokens": 0, "completion_tokens": len(words)},
-    }
+    # Mock path: the word count is a deterministic demo value, not a provider
+    # measurement. empty_usage() marks it incomplete so no caller can present
+    # it as a real token total.
+    usage = empty_usage()
+    usage["completion_tokens"] = len(words)
+    return {"reply": reply, "tool_events": [], "usage": usage}
 
 
 async def generate_reply(
@@ -1624,7 +1731,7 @@ async def generate_reply(
         return {
             "reply": "[agent error: no API key — set GROQ_API_KEY or SWARM_OPENAI_COMPAT_API_KEY in .env, or connect a provider in Command Center → AI providers]",
             "tool_events": [],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "usage": empty_usage(),
             "model": model,
         }
 
@@ -1633,7 +1740,7 @@ async def generate_reply(
         return {
             "reply": "[agent error: no API key — set GROQ_API_KEY or SWARM_OPENAI_COMPAT_API_KEY in .env, or connect a provider in Command Center → AI providers]",
             "tool_events": [],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "usage": empty_usage(),
             "model": model,
         }
 
@@ -1685,7 +1792,7 @@ async def generate_reply(
     return {
         "reply": classify_error(last_exc or RuntimeError("couldn't reach the model")),
         "tool_events": [],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        "usage": empty_usage(),
         "model": model,
     }
 

@@ -177,5 +177,8 @@ def test_tool_call_caps(monkeypatch):
         on_token=None, trace=None,
     ))
     assert len(closed["tool_events"]) == 1
-    assert closed["reply"] == "did the thing, one step left"
+    # A capped run whose provider never reported usage must say so rather
+    # than implying the token budget was enforceable.
+    assert closed["reply"].startswith("did the thing, one step left")
+    assert "token usage was incomplete" in closed["reply"]
     assert len(calls) == 3  # work round, capped round, no-tools closing round
