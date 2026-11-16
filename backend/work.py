@@ -44,7 +44,26 @@ CREATE TABLE IF NOT EXISTS work_message_links (
     work_id TEXT NOT NULL, message_id INTEGER NOT NULL,
     UNIQUE(work_id, message_id), FOREIGN KEY(work_id) REFERENCES work_sessions(id)
 );
+-- Run-derived events are materialized into work_events exactly once. Their
+-- seq is then part of the same immutable global order as native work events,
+-- so appending new work events cannot renumber or replay them.
+CREATE TABLE IF NOT EXISTS work_run_event_mirror (
+    work_id TEXT NOT NULL, run_seq INTEGER NOT NULL, work_seq INTEGER NOT NULL,
+    via_run TEXT NOT NULL, PRIMARY KEY(work_id, run_seq),
+    FOREIGN KEY(work_id) REFERENCES work_sessions(id)
+);
 """
+
+# Run event types mapped onto the normalized work vocabulary. Applied once,
+# when an event is mirrored, instead of on every cursor poll.
+_RUN_EVENT_TYPES = {
+    "run_queued": "work_queued", "run_started": "work_started",
+    "step_started": "agent_started", "step_completed": "tool_finished",
+    "step_skipped": "tool_finished", "approval_requested": "approval_requested",
+    "approval_resolved": "approval_resolved", "run_completed": "work_completed",
+    "run_failed": "work_failed", "run_cancelled": "work_cancelled",
+    "run_denied": "work_cancelled",
+}
 
 ALLOWED_TYPES = {
     "work_queued", "work_started", "agent_started", "tool_started",
@@ -224,6 +243,48 @@ async def append_event(
             "step_id": step_id, "payload": safe, "created_at": now}
 
 
+async def _mirror_run_events(work_id: str, owner: str, run_id: str) -> None:
+    """Materialize unseen run events into the immutable work-event order.
+
+    A reservation row claims each run event once, so a new native work event
+    appended between polls can never shift a previously delivered seq.
+    """
+    from . import v2 as v2_mod
+
+    for run_event in await v2_mod.list_events(run_id, owner, 0):
+        run_seq = int(run_event.get("seq") or 0)
+        if run_seq <= 0:
+            continue
+        async with db.open_db() as conn:
+            cur = await conn.execute(
+                "INSERT OR IGNORE INTO work_run_event_mirror(work_id, run_seq, work_seq, via_run)"
+                " VALUES(?,?,0,?)", (work_id, run_seq, run_id))
+            await conn.commit()
+            if not cur.rowcount:
+                continue  # already mirrored by this or an earlier poll
+        payload = dict(run_event.get("payload") or {})
+        wtype = _RUN_EVENT_TYPES.get(run_event.get("event_type", ""), "tool_finished")
+        try:
+            mirrored = await append_event(
+                work_id, wtype,
+                {**payload, "_via_run": run_id, "_via_run_seq": run_seq},
+                run_event.get("step_id"),
+            )
+        except Exception:
+            # Let a later poll retry instead of losing the run event forever.
+            async with db.open_db() as conn:
+                await conn.execute(
+                    "DELETE FROM work_run_event_mirror WHERE work_id=? AND run_seq=?",
+                    (work_id, run_seq))
+                await conn.commit()
+            raise
+        async with db.open_db() as conn:
+            await conn.execute(
+                "UPDATE work_run_event_mirror SET work_seq=? WHERE work_id=? AND run_seq=?",
+                (mirrored["seq"], work_id, run_seq))
+            await conn.commit()
+
+
 async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str, Any]]:
     async with db.open_db() as conn:
         cur = await conn.execute(
@@ -234,6 +295,9 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
         if row is None:
             return []
         run_id = row[0]
+    if run_id:
+        await _mirror_run_events(work_id, owner, run_id)
+    # One immutable global order for both native and run-derived events.
     events: list[dict[str, Any]] = []
     async with db.open_db() as conn:
         conn.row_factory = aiosqlite.Row
@@ -245,44 +309,17 @@ async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str
         )
         for r in await cur.fetchall():
             row = dict(r)
-            events.append({
+            payload = _decode(row.get("payload"), {})
+            via_run = payload.pop("_via_run", None)
+            payload.pop("_via_run_seq", None)
+            event = {
                 "work_id": work_id, "seq": row["seq"], "type": row["type"],
-                "step_id": row["step_id"], "payload": _decode(row.get("payload"), {}),
+                "step_id": row["step_id"], "payload": payload,
                 "created_at": row["created_at"],
-            })
-        cur = await conn.execute("SELECT COALESCE(MAX(seq), 0) FROM work_events WHERE work_id=?", (work_id,))
-        (base,) = await cur.fetchone()
-    # Reuse linked run events so run-backed sessions show the same trace
-    # through the normalized interface without duplicating orchestration.
-    if run_id:
-        from . import v2 as v2_mod
-        run_events = await v2_mod.list_events(run_id, owner, 0)
-        if run_events:
-            mapping = {
-                "run_queued": "work_queued", "run_started": "work_started",
-                "step_started": "agent_started", "step_completed": "tool_finished",
-                "step_skipped": "tool_finished", "approval_requested": "approval_requested",
-                "approval_resolved": "approval_resolved", "run_completed": "work_completed",
-                "run_failed": "work_failed", "run_cancelled": "work_cancelled",
-                "run_denied": "work_cancelled",
             }
-            # Stable numbering: run-derived seqs always continue from the global
-            # work-event high-water mark, so a cursor poll never renumbers or
-            # re-delivers run events the client already has.
-            base = int(base or 0)
-            skip = max(0, after - base)
-            for idx, re in enumerate(run_events, start=1):
-                if idx <= skip:
-                    continue
-                wtype = mapping.get(re.get("event_type", ""), "tool_finished")
-                events.append({
-                    "work_id": work_id, "seq": base + idx, "type": wtype,
-                    "step_id": re.get("step_id"),
-                    "payload": _strip_sensitive(re.get("payload")),
-                    "created_at": re.get("created_at"), "via_run": run_id,
-                })
-            events = [e for e in events if e["seq"] > after]
-            events.sort(key=lambda e: e["seq"])
+            if via_run:
+                event["via_run"] = via_run
+            events.append(event)
     return events
 
 

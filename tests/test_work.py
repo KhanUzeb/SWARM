@@ -126,6 +126,64 @@ def test_event_cursor_replay_is_stable(client, auth):
     assert client.get(f"/api/work/{work_id}/events?after={seqs[-1]}", headers=auth).json() == []
 
 
+def _run_backed_cursor_setup(client, auth, objective="cursor stability"):
+    async def setup():
+        await work.init_db()
+        run = await v2.create_run("uzeb", objective, None)
+        session = await work.create_session(
+            "uzeb", objective, source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.append_event(run["id"], "run_started", {})
+        await v2.append_event(run["id"], "step_started", {}, step_id="s1")
+        await v2.append_event(run["id"], "step_completed", {"ok": True}, step_id="s1")
+        return session["id"], run["id"]
+
+    work_id, run_id = asyncio.run(setup())
+    first = client.get(f"/api/work/{work_id}/events", headers=auth).json()
+    return work_id, run_id, first
+
+
+def _run_fingerprints(events):
+    return [
+        (e["seq"], e["type"], e["step_id"], e["payload"], e["created_at"])
+        for e in events if e.get("via_run")
+    ]
+
+
+def test_cursor_stable_when_work_events_are_appended_later(client, auth):
+    work_id, _run_id, first = _run_backed_cursor_setup(client, auth)
+    assert [e["seq"] for e in first] == sorted(e["seq"] for e in first)
+    cursor = max(e["seq"] for e in first)
+
+    asyncio.run(work.append_event(work_id, "tool_started", {"tool": "later"}))
+    second = client.get(f"/api/work/{work_id}/events", headers=auth).json()
+
+    # Previously delivered run events keep their exact seq and content.
+    assert _run_fingerprints(second) == _run_fingerprints(first)
+    tail = client.get(
+        f"/api/work/{work_id}/events?after={cursor}", headers=auth).json()
+    assert all(e["seq"] > cursor for e in tail)
+    assert not [e for e in tail if e.get("via_run")]
+
+
+def test_new_run_event_continues_the_global_order(client, auth):
+    work_id, run_id, first = _run_backed_cursor_setup(client, auth, "later run event")
+    cursor = max(e["seq"] for e in first)
+    asyncio.run(work.append_event(work_id, "tool_started", {"tool": "native"}))
+    native = client.get(f"/api/work/{work_id}/events", headers=auth).json()
+    native_seq = max(e["seq"] for e in native)
+
+    asyncio.run(v2.append_event(
+        run_id, "step_completed", {"done": True}, step_id="s2"))
+    third = client.get(f"/api/work/{work_id}/events", headers=auth).json()
+
+    assert _run_fingerprints(third)[:len(_run_fingerprints(first))] == _run_fingerprints(first)
+    added = [e for e in third if e.get("via_run") and e["seq"] > cursor]
+    assert len(added) == 1
+    assert added[0]["seq"] > native_seq
+    assert added[0]["step_id"] == "s2"
+
+
 def _approval_workflow(client, auth):
     created = client.post(
         "/api/v2/workflows",
