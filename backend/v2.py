@@ -74,6 +74,14 @@ class ApprovalAmbiguous(RuntimeError):
     """Grant and run state disagree after a crash; never replay automatically."""
 
 
+class WorkflowNodeError(RuntimeError):
+    """A workflow step could not actually run; never report it as completed."""
+
+    def __init__(self, message: str, *, step_id: str | None = None) -> None:
+        super().__init__(message)
+        self.step_id = step_id
+
+
 def _sweep_oauth_states(now: float | None = None) -> None:
     """Drop expired OAuth states so the in-memory map can't grow or replay."""
     now = time.time() if now is None else now
@@ -178,6 +186,15 @@ def validate_graph(graph: dict[str, Any]) -> list[str]:
     for node_id in ids:
         visit(node_id)
     return list(dict.fromkeys(errors))
+
+
+def _edge_parents(edges: list[Any]) -> dict[str, set[str]]:
+    """Parent node ids for each child in a workflow graph."""
+    parents: dict[str, set[str]] = {}
+    for edge in edges or []:
+        if isinstance(edge, (list, tuple)) and len(edge) == 2:
+            parents.setdefault(str(edge[1]), set()).add(str(edge[0]))
+    return parents
 
 
 def order_nodes(nodes: list[dict[str, Any]], edges: list[Any]) -> list[dict[str, Any]]:
@@ -1204,32 +1221,80 @@ async def execute_run(run_id: str, owner: str) -> None:
             await append_event(run_id, "run_started", {"objective": run["objective"]}, claim=claim)
         if not nodes:
             nodes = [{"id": "lead", "type": "agent", "label": "Lead agent", "agent": "swarm"}]
+        parents = _edge_parents(graph.get("edges") or [])
+        # Branch decisions are durable: a resumed run must keep the steps a
+        # previous execution already skipped instead of reviving them.
+        skipped: set[str] = {
+            str(event.get("step_id"))
+            for event in prior_events
+            if event.get("event_type") == "step_skipped" and event.get("step_id")
+        }
 
         async def run_agent_node(node: dict[str, Any]) -> str:
+            step_id = str(node.get("id") or "") or None
             if node.get("type") == "agent":
                 from . import agent as legacy_agent
-                row = await db.fetch_agent(str(node.get("agent") or "swarm"))
-                if row:
-                    model_override = node.get("model") or run.get("model")
-                    result = await legacy_agent.generate_reply(
-                        row,
-                        f"run-{run_id}",
-                        [{"author": owner, "author_kind": "human", "body": run["objective"]}],
-                        model_override=str(model_override) if model_override else None,
-                    )
-                    return result.get("reply") or ""
-                return f"Agent {node.get('agent') or 'swarm'} is not configured."
-            return f"Completed {node.get('label') or node.get('type') or 'step'}."
+                name = str(node.get("agent") or "swarm")
+                row = await db.fetch_agent(name)
+                if row is None or row.get("archived"):
+                    raise WorkflowNodeError(
+                        f"Agent {name} is not configured.", step_id=step_id)
+                model_override = node.get("model") or run.get("model")
+                result = await legacy_agent.generate_reply(
+                    row,
+                    f"run-{run_id}",
+                    [{"author": owner, "author_kind": "human", "body": run["objective"]}],
+                    model_override=str(model_override) if model_override else None,
+                )
+                reply = str(result.get("reply") or "").strip()
+                # Use the agent's own error contract: a model failure is
+                # reported as "[agent error: ...]", not raised. Never turn one
+                # into a successful workflow step.
+                if legacy_agent.is_agent_error(reply):
+                    raise WorkflowNodeError(
+                        f"Agent {name} reported an error: {reply}", step_id=step_id)
+                if not reply:
+                    raise WorkflowNodeError(
+                        f"Agent {name} returned no output.", step_id=step_id)
+                return reply
+            # A node with no executable implementation is a validation error,
+            # not a successful "Completed ..." placeholder. Never manufacture
+            # output for work that did not happen.
+            raise WorkflowNodeError(
+                f"Unsupported workflow node type {node.get('type')!r} "
+                f"for step {step_id or 'unknown'}.", step_id=step_id)
 
         for node in nodes:
+            node_id = str(node.get("id") or "")
+            # Propagation runs BEFORE the input/output passthrough. Otherwise a
+            # skipped branch crossing an io node is dropped from `skipped` and
+            # its descendants are incorrectly revived.
+            node_parents = parents.get(node_id, set())
+            if node_parents and node_parents <= skipped:
+                newly_skipped = node_id not in skipped
+                skipped.add(node_id)
+                if newly_skipped:
+                    await append_event(
+                        run_id, "step_skipped",
+                        {"label": node.get("label") or node_id,
+                         "reason": "upstream condition did not match"},
+                        node_id, claim=claim)
+                continue
             if node.get("type") in {"input", "output"}:
                 continue
             if node.get("type") == "conditional":
                 condition = str(node.get("when") or "always")
                 should_run = condition == "always" or (condition == "has_output" and bool(report["steps"]))
                 if not should_run:
-                    await append_event(run_id, "step_skipped", {"label": node.get("label") or "conditional", "condition": condition}, str(node.get("id") or "condition"), claim=claim)
+                    gate_id = node_id or "condition"
+                    newly_skipped = gate_id not in skipped
+                    skipped.add(gate_id)
+                    if newly_skipped:
+                        await append_event(run_id, "step_skipped", {"label": node.get("label") or "conditional", "condition": condition}, gate_id, claim=claim)
                     continue
+                # A matching condition is control flow, not work. Skipping it
+                # avoids fabricating a completed step with placeholder output.
+                continue
             if node.get("type") == "parallel":
                 children = [child for child in (node.get("children") or []) if isinstance(child, dict)]
                 completed_children = {
@@ -1317,6 +1382,22 @@ async def execute_run(run_id: str, owner: str) -> None:
             with suppress(StaleRunClaim):
                 await append_event(run_id, "run_cancelled", {}, claim=claim)
         raise
+    except WorkflowNodeError as exc:
+        # A step could not actually execute. Record it as failed and let the
+        # run fail; never leave a "Completed ..." placeholder that looks like
+        # evidence of work that never happened.
+        detail = str(exc)[:500]
+        if claim is not None:
+            with suppress(StaleRunClaim):
+                await append_event(
+                    run_id, "step_failed",
+                    {"step_id": exc.step_id, "error": detail}, exc.step_id,
+                    claim=claim)
+            await update_run(
+                run_id, owner, "failed",
+                report={**report, "error": detail}, claim=claim)
+            with suppress(StaleRunClaim):
+                await append_event(run_id, "run_failed", {"error": detail}, claim=claim)
     except Exception as exc:  # noqa: BLE001 — degraded path is preferable to 500
         if claim is not None:
             await update_run(run_id, owner, "failed", report={**report, "error": str(exc)[:500]}, claim=claim)

@@ -150,6 +150,271 @@ def test_v2_run_websocket_replays_events(client, token, monkeypatch):
         assert first["event_type"] == "run_queued"
 
 
+def test_unknown_node_type_fails_instead_of_fake_success(client):
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Unknown node", "", {
+            "nodes": [{"id": "mystery", "type": "mystery", "label": "Mystery"}],
+            "edges": [],
+        })
+        created = await v2.create_run("uzeb", "unknown node", workflow["id"])
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "failed"
+        assert "Unsupported workflow node type" in result["report"]["error"]
+        events = await v2.list_events(created["id"], "uzeb")
+        assert any(e["event_type"] == "step_failed" for e in events)
+        assert not [e for e in events if e["event_type"] == "step_completed"]
+
+    asyncio.run(run())
+
+
+def test_missing_agent_fails_instead_of_fake_success(client):
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Missing agent", "", {
+            "nodes": [{"id": "a", "type": "agent", "agent": "no-such-bot",
+                       "label": "Missing"}],
+            "edges": [],
+        })
+        created = await v2.create_run("uzeb", "missing agent", workflow["id"])
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "failed"
+        assert "not configured" in result["report"]["error"]
+        events = await v2.list_events(created["id"], "uzeb")
+        assert any(e["event_type"] == "step_failed" for e in events)
+        assert not [e for e in events if e["event_type"] == "step_completed"]
+
+    asyncio.run(run())
+
+
+def test_matching_conditional_does_not_fabricate_a_step(client, monkeypatch):
+    from backend import agent as agent_mod
+
+    async def fake_reply(*_args, **_kwargs):
+        return {"reply": "real output"}
+
+    monkeypatch.setattr(agent_mod, "generate_reply", fake_reply)
+
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Conditional", "", {
+            "nodes": [
+                {"id": "cond", "type": "conditional", "when": "always",
+                 "label": "Branch"},
+                {"id": "lead", "type": "agent", "agent": "swarm", "label": "Lead"},
+            ],
+            "edges": [["cond", "lead"]],
+        })
+        created = await v2.create_run("uzeb", "conditional branch", workflow["id"])
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "completed"
+        assert [step["id"] for step in result["report"]["steps"]] == ["lead"]
+        events = await v2.list_events(created["id"], "uzeb")
+        assert not [e for e in events
+                    if e["event_type"] == "step_completed" and e["step_id"] == "cond"]
+
+    asyncio.run(run())
+
+
+def test_agent_error_result_fails_the_run(client, monkeypatch):
+    from backend import agent as agent_mod
+
+    async def error_reply(*_args, **_kwargs):
+        return {"reply": "[agent error: the model provider is down]"}
+
+    monkeypatch.setattr(agent_mod, "generate_reply", error_reply)
+
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Agent error", "", {
+            "nodes": [{"id": "lead", "type": "agent", "agent": "swarm"}],
+            "edges": [],
+        })
+        created = await v2.create_run("uzeb", "agent error", workflow["id"])
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "failed"
+        assert "reported an error" in result["report"]["error"]
+        events = await v2.list_events(created["id"], "uzeb")
+        assert any(e["event_type"] == "step_failed" for e in events)
+        assert not [e for e in events if e["event_type"] == "step_completed"]
+
+    asyncio.run(run())
+
+
+def test_empty_agent_output_fails_the_run(client, monkeypatch):
+    from backend import agent as agent_mod
+
+    async def empty_reply(*_args, **_kwargs):
+        return {"reply": ""}
+
+    monkeypatch.setattr(agent_mod, "generate_reply", empty_reply)
+
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Empty reply", "", {
+            "nodes": [{"id": "lead", "type": "agent", "agent": "swarm"}],
+            "edges": [],
+        })
+        created = await v2.create_run("uzeb", "empty output", workflow["id"])
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "failed"
+        assert "no output" in result["report"]["error"]
+
+    asyncio.run(run())
+
+
+def test_nonmatching_conditional_skips_downstream_branch(client, monkeypatch):
+    from backend import agent as agent_mod
+
+    called = []
+
+    async def fake_reply(*_args, **_kwargs):
+        called.append(1)
+        return {"reply": "should not run"}
+
+    monkeypatch.setattr(agent_mod, "generate_reply", fake_reply)
+
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Branch off", "", {
+            "nodes": [
+                {"id": "cond", "type": "conditional", "when": "never",
+                 "label": "Skip"},
+                {"id": "a", "type": "agent", "agent": "swarm", "label": "A"},
+                {"id": "b", "type": "agent", "agent": "swarm", "label": "B"},
+            ],
+            "edges": [["cond", "a"], ["a", "b"]],
+        })
+        created = await v2.create_run("uzeb", "branch off", workflow["id"])
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "completed"
+        assert result["report"]["steps"] == []
+        events = await v2.list_events(created["id"], "uzeb")
+        skipped = {e["step_id"] for e in events if e["event_type"] == "step_skipped"}
+        assert {"cond", "a", "b"} <= skipped
+        assert not [e for e in events if e["event_type"] == "step_completed"]
+
+    asyncio.run(run())
+    assert called == []
+
+
+def test_skipped_branch_through_io_node_stays_skipped(client, monkeypatch):
+    from backend import agent as agent_mod
+
+    called = []
+
+    async def fake_reply(*_args, **_kwargs):
+        called.append(1)
+        return {"reply": "revived"}
+
+    monkeypatch.setattr(agent_mod, "generate_reply", fake_reply)
+
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "IO branch", "", {
+            "nodes": [
+                {"id": "cond", "type": "conditional", "when": "never",
+                 "label": "Skip"},
+                {"id": "io", "type": "input", "label": "Pass"},
+                {"id": "a", "type": "agent", "agent": "swarm", "label": "A"},
+            ],
+            "edges": [["cond", "io"], ["io", "a"]],
+        })
+        created = await v2.create_run("uzeb", "io branch", workflow["id"])
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "completed"
+        assert result["report"]["steps"] == []
+        events = await v2.list_events(created["id"], "uzeb")
+        skipped = {e["step_id"] for e in events if e["event_type"] == "step_skipped"}
+        assert {"cond", "io", "a"} <= skipped
+        assert not [e for e in events if e["event_type"] == "step_completed"]
+
+    asyncio.run(run())
+    assert called == []
+
+
+def test_merge_node_runs_when_another_parent_is_reachable(client, monkeypatch):
+    from backend import agent as agent_mod
+
+    async def fake_reply(*_args, **_kwargs):
+        return {"reply": "done"}
+
+    monkeypatch.setattr(agent_mod, "generate_reply", fake_reply)
+
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Merge branch", "", {
+            "nodes": [
+                {"id": "cond", "type": "conditional", "when": "never",
+                 "label": "Skip"},
+                {"id": "a", "type": "agent", "agent": "swarm", "label": "Skipped"},
+                {"id": "b", "type": "agent", "agent": "swarm", "label": "Reachable"},
+                {"id": "merge", "type": "agent", "agent": "swarm", "label": "Merge"},
+            ],
+            "edges": [["cond", "a"], ["a", "merge"], ["b", "merge"]],
+        })
+        created = await v2.create_run("uzeb", "merge branch", workflow["id"])
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "completed"
+        assert [step["id"] for step in result["report"]["steps"]] == ["b", "merge"]
+        events = await v2.list_events(created["id"], "uzeb")
+        skipped = {e["step_id"] for e in events if e["event_type"] == "step_skipped"}
+        assert {"cond", "a"} <= skipped
+        assert "merge" not in skipped
+
+    asyncio.run(run())
+
+
+def test_resume_keeps_prior_branch_decisions(client, monkeypatch):
+    from collections import Counter
+    from backend import agent as agent_mod
+
+    called = []
+
+    async def fake_reply(*_args, **_kwargs):
+        called.append(1)
+        return {"reply": "revived"}
+
+    monkeypatch.setattr(agent_mod, "generate_reply", fake_reply)
+
+    async def run():
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Resume branch", "", {
+            "nodes": [
+                {"id": "cond", "type": "conditional", "when": "never",
+                 "label": "Skip"},
+                {"id": "a", "type": "agent", "agent": "swarm", "label": "A"},
+                {"id": "b", "type": "agent", "agent": "swarm", "label": "B"},
+            ],
+            "edges": [["cond", "a"], ["a", "b"]],
+        })
+        created = await v2.create_run("uzeb", "resume branch", workflow["id"])
+        await v2.append_event(created["id"], "step_skipped", {"condition": "never"}, "cond")
+        await v2.append_event(created["id"], "step_skipped", {"reason": "upstream"}, "a")
+        await v2.execute_run(created["id"], "uzeb")
+        result = await v2.get_run(created["id"], "uzeb")
+        assert result["status"] == "completed"
+        assert result["report"]["steps"] == []
+        events = await v2.list_events(created["id"], "uzeb")
+        skipped = [e["step_id"] for e in events if e["event_type"] == "step_skipped"]
+        assert {"cond", "a", "b"} <= set(skipped)
+        counts = Counter(skipped)
+        assert counts["cond"] == 1
+        assert counts["a"] == 1
+        assert not [e for e in events if e["event_type"] == "step_completed"]
+
+    asyncio.run(run())
+    assert called == []
+
+
 def test_v2_graph_order_follows_edges():
     nodes = [{"id": "finish"}, {"id": "start"}, {"id": "middle"}]
     ordered = order_nodes(nodes, [["start", "middle"], ["middle", "finish"]])
@@ -171,11 +436,17 @@ def test_v2_resume_skips_completed_parallel_children(client, auth, monkeypatch):
         }, "already_done")
         requested_agents = []
 
+        from backend import agent as agent_mod
+
         async def fetch_agent(name):
             requested_agents.append(name)
-            return None
+            return {"name": name, "archived": False}
+
+        async def fake_reply(*_args, **_kwargs):
+            return {"reply": "ledger output"}
 
         monkeypatch.setattr(v2.db, "fetch_agent", fetch_agent)
+        monkeypatch.setattr(agent_mod, "generate_reply", fake_reply)
         await v2.execute_run(run["id"], "uzeb")
         finished = await v2.get_run(run["id"], "uzeb")
         return run["id"], requested_agents, finished["report"]
