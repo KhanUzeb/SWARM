@@ -97,3 +97,56 @@ claim/resume/state/cursor correctness and real failure semantics** (Gate 1),
 owned by a different worker. A small `S00.5` hotfix for F2 is a reasonable
 parallel candidate because it affects the Windows first-run path; that
 decision belongs to the coordinator.
+
+---
+
+## Product-branch progress after Gate 0 (commits `451206f`..`e46807f`)
+
+**State:** Gate 1 work substantially implemented but **not closed**; Gates 2-5
+not started. This is a factual append-only record, not a release claim. See
+`RELEASE_READINESS.md` for the full assessment.
+
+**Range:** `product/local-first-v1`, ten commits on top of the Gate 0 baseline
+(`55690c8`). Latest HEAD at assessment: `e46807f`.
+
+### What changed, by commit (source of truth: `git show <sha>`)
+
+| Commit | Area | Concrete change |
+| --- | --- | --- |
+| `451206f` | docs / DEPLOY | Backup verification now fails on a missing database (owned by the docs worker; not touched by this documentation pass) |
+| `7559ccc` | diagnostics / tests | `swarm doctor` made self-contained (default Windows console encoding); model-catalog test made environment-hermetic. Resolves baseline findings F1 and F2 |
+| `c25747b` | execution boundary / SECURITY | Host shell execution requires explicit `SWARM_SYSTEM` opt-in, refuses the `fake` provider, keeps an honest "not isolated" label; `SECURITY.md` updated |
+| `01bf1a9` | agent context | Budget-trimmed memory is applied to the real agent prompt |
+| `e6ff201` | housekeeping | Removed default constants duplicated from `backend/settings.py` |
+| `957aa1b` | budgets | Token-budget enforcement is honest when provider usage is missing; no extra closing call on exhaustion |
+| `68f82ce` | v2 approvals | Exact-bound, fail-closed approvals with renewable lease/fencing, single-use nonce-bound grants, reissue/admin reconcile, fenced artifact writes |
+| `9c3e718` | v2 workflows | Fail on unreported work; keep branch decisions stable |
+| `e46807f` | work events | One immutable global order for work events; stable resume cursors |
+
+`docs/CHANGELOG.md` already carries revert-effect rows for the major layers
+(`68f82ce`, `957aa1b`, `c25747b`); this pass does not duplicate or rewrite them.
+
+### Verification evidence available for this range
+
+- Focused re-run of the ten touched backend test modules: **194 passed**.
+  Frontend `bun test`: **99 pass, 0 fail** (up from 98 in Gate 0). `bun run
+  build`: success, within the CI bundle budget. `swarm doctor`: usable under
+  both UTF-8 and the default `cp1252` console, confirming the F2 fix.
+- **Limitation:** the operator directed that no pytest be run for the release
+  task. The 194-test backend result came from a focused run before that
+  directive; no fresh **full** backend suite (487 tests) and no GitHub CI run
+  exist for this branch. Do not describe the branch as CI-green.
+
+### Gate status
+
+- Gate 0: complete (see the section above).
+- Gate 1: implemented in code but **not closed** — no gate-level full CI record,
+  no concurrency or kill-and-recover integration evidence.
+- Gates 2-5: not implemented (no onboarding/backup-restore verification, no UX
+  consolidation, no eval harness, no MCP client).
+
+### Scope of this documentation pass
+
+Docs only: this file and `RELEASE_READINESS.md`. No source, test, config, or
+database files were changed; no push, tag, release, or workflow trigger was
+performed. The untracked `prompt (1).md` was preserved and never staged.
