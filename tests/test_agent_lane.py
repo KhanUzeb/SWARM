@@ -171,6 +171,146 @@ def test_read_only_shell_is_guard_railed(monkeypatch, tmp_path):
     assert "blocked" in out.lower()
 
 
+# ------------------------------------------- agent shell host-execution gate
+# The legacy `read_only_shell` tool runs with shell=True on the host. The
+# backend opt-in, not the command deny-list, is the authorization; these tests
+# spy on subprocess so no command is ever actually executed.
+
+def _shell_spy(monkeypatch):
+    completed = agent_mod.subprocess.CompletedProcess
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return completed(cmd, 0, stdout="swarm-ok\n", stderr="")
+
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+    return calls
+
+
+def test_agent_shell_disabled_by_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("SWARM_SYSTEM", raising=False)
+    monkeypatch.setattr(agent_mod, "SANDBOX_DIR", str(tmp_path))
+    calls = _shell_spy(monkeypatch)
+    out = agent_mod._run_shell_tool("echo should-not-run")
+    assert "disabled" in out.lower()
+    assert "should-not-run" not in out
+    assert calls == []
+
+
+def test_agent_shell_requires_computer_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "none")
+    monkeypatch.setattr(agent_mod, "SANDBOX_DIR", str(tmp_path))
+    calls = _shell_spy(monkeypatch)
+    out = agent_mod._run_shell_tool("echo should-not-run")
+    assert "none" in out.lower()
+    assert calls == []
+
+
+def test_agent_shell_fake_provider_never_runs_a_real_subprocess(monkeypatch, tmp_path):
+    """`fake` is an emulator; provider_configured() alone still says True."""
+    from backend import computer_providers
+
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "fake")
+    monkeypatch.setattr(agent_mod, "SANDBOX_DIR", str(tmp_path))
+    assert computer_providers.is_fake()
+    assert computer_providers.provider_configured()  # why the explicit guard matters
+    calls = _shell_spy(monkeypatch)
+    out = agent_mod._run_shell_tool("echo should-not-run")
+    assert "fake" in out.lower()
+    assert "cannot run host commands" in out.lower()
+    assert calls == []
+
+
+def test_agent_shell_enabled_runs_command(monkeypatch, tmp_path):
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.delenv("SWARM_COMPUTER_PROVIDER", raising=False)
+    monkeypatch.setattr(agent_mod, "SANDBOX_DIR", str(tmp_path))
+    calls = _shell_spy(monkeypatch)
+    out = agent_mod._run_shell_tool("echo swarm-ok")
+    assert "swarm-ok" in out
+    assert len(calls) == 1
+    cmd, kwargs = calls[0]
+    assert cmd == "echo swarm-ok"
+    assert kwargs["shell"] is True
+    assert kwargs["cwd"] == str(tmp_path)
+    assert "PATH" in kwargs["env"] and "SWARM_SECRET" not in kwargs["env"]
+
+
+def test_agent_shell_still_blocks_destructive_when_enabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setattr(agent_mod, "SANDBOX_DIR", str(tmp_path))
+    calls = _shell_spy(monkeypatch)
+    out = agent_mod._run_shell_tool("rm -rf /")
+    assert "blocked" in out.lower()
+    assert calls == []
+
+
+def test_agent_shell_backstop_catches_device_access(monkeypatch, tmp_path):
+    """The extra _DANGEROUS backstop covers what the denylist misses."""
+    from backend.tools import guard
+
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setattr(agent_mod, "SANDBOX_DIR", str(tmp_path))
+    assert guard.is_dangerous("hexdump /dev/sda") is None
+    calls = _shell_spy(monkeypatch)
+    out = agent_mod._run_shell_tool("hexdump /dev/sda")
+    assert "blocked" in out.lower()
+    assert calls == []
+
+
+def test_plugin_shell_handler_respects_backend_host_authorization(monkeypatch):
+    from backend.tools import registry as registry_mod
+
+    reg = registry_mod.get_registry()
+    base = {
+        "plugin_id": "p", "plugin_dir": "", "tool_name": "t",
+        "handler": {"type": "shell", "command": "echo {cmd}"},
+    }
+    calls = []
+    completed = registry_mod.subprocess.CompletedProcess
+
+    def fake_run(*a, **k):
+        calls.append((a, k))
+        return completed(a[0], 0, stdout="should-not-run\n", stderr="")
+
+    monkeypatch.setattr(registry_mod.subprocess, "run", fake_run)
+
+    monkeypatch.delenv("SWARM_SYSTEM", raising=False)
+    out = _run(reg._exec_plugin(base, {"cmd": "hi"}, agent_name="swarm", channel_id="general"))
+    assert "disabled" in out.lower()
+    assert calls == []
+
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "fake")
+    out = _run(reg._exec_plugin(base, {"cmd": "hi"}, agent_name="swarm", channel_id="general"))
+    assert "fake" in out.lower()
+    assert calls == []
+
+    monkeypatch.delenv("SWARM_COMPUTER_PROVIDER", raising=False)
+    out = _run(reg._exec_plugin(base, {"cmd": "hi"}, agent_name="swarm", channel_id="general"))
+    assert "should-not-run" in out
+    assert len(calls) == 1
+
+    destructive = {**base, "handler": {"type": "shell", "command": "rm -rf /"}}
+    out = _run(reg._exec_plugin(destructive, {}, agent_name="swarm", channel_id="general"))
+    assert "blocked" in out.lower()
+    assert len(calls) == 1
+
+
+def test_read_only_shell_copy_does_not_claim_read_only():
+    from backend.tools.registry import BUILTIN_SCHEMAS, risk_tier
+
+    desc = BUILTIN_SCHEMAS["read_only_shell"]["function"]["description"].lower()
+    assert "read-only" not in desc
+    assert "not isolation" in desc
+    label = agent_mod._approval_label("read_only_shell", {"command": "ls"}).lower()
+    assert "not isolated" in label
+    assert risk_tier("read_only_shell") == "exec"
+
+
 # ------------------------------------------------------------- loop auditing
 # AGENTS.md s6: every tool call persists as a system audit message. The call
 # that proves a loop is still a call — dropping it hides the evidence.

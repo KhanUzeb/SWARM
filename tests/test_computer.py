@@ -60,6 +60,45 @@ def test_runners_echo_and_block(client, auth, tmp_path, monkeypatch):
     assert "blocked" in system_mod.system_run("rm -rf /")
 
 
+def test_computer_run_fake_provider_never_spawns_a_process(client, auth, tmp_path, monkeypatch):
+    """`fake` is an emulator: provider_configured() alone still says True."""
+    from backend import computer_providers
+
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "fake")
+    monkeypatch.setattr("backend.agent.SANDBOX_DIR", str(tmp_path))
+    assert computer_providers.is_fake()
+    assert computer_providers.provider_configured()  # why the explicit guard matters
+    assert computer._host_execution_enabled() is False
+
+    calls = []
+
+    class FakeProc:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return ("should-not-run", None)
+
+    def fake_popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeProc()
+
+    monkeypatch.setattr(computer.subprocess, "Popen", fake_popen)
+    out = computer.computer_run("echo should-not-run")
+    assert "fake" in out.lower()
+    assert "cannot run host commands" in out.lower()
+    assert calls == []
+
+    # The REST path shares the same authorization, so it cannot execute either.
+    _clear_rate()
+    response = client.post(
+        "/api/computer/run", headers=auth, json={"command": "echo should-not-run"}
+    )
+    assert response.status_code == 200
+    assert "fake" in response.json()["output"].lower()
+    assert calls == []
+
+
 def test_system_files_and_guards(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_SYSTEM", "1")
     monkeypatch.setenv("SWARM_SYSTEM_ROOT", str(tmp_path))

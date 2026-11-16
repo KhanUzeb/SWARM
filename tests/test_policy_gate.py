@@ -110,6 +110,132 @@ def test_approved_grant_runs_once_and_only_for_the_exact_call(client):
     asyncio.run(run())
 
 
+def test_read_only_shell_dispatch_requires_bound_approval(client, monkeypatch, tmp_path):
+    """The real _execute_tool path gates the shell tool, not just the helper."""
+    completed = agent_mod.subprocess.CompletedProcess
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return completed(cmd, 0, stdout="shell-ok\n", stderr="")
+
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent_mod, "SANDBOX_DIR", str(tmp_path))
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    args = {"command": "echo shell-ok"}
+
+    async def run():
+        with pytest.raises(policy.PolicyReviewRequired) as info:
+            await agent_mod._execute_tool(
+                "read_only_shell", args,
+                agent_name="swarm", channel_id="general",
+                allowed=["read_only_shell"],
+            )
+        approval = info.value.approval
+        assert approval["tool"] == "read_only_shell"
+        assert approval["args_hash"] == policy.canonical_args_hash(args)
+        assert "not isolated" in approval["action"].lower()
+        assert calls == []  # the gate, not the command guard, stopped it
+
+        await db.resolve_approval(approval["id"], "approved", resolved_by="uzeb")
+        result = await agent_mod._execute_tool(
+            "read_only_shell", args,
+            agent_name="swarm", channel_id="general",
+            allowed=["read_only_shell"],
+        )
+        assert "shell-ok" in result
+        assert len(calls) == 1
+        assert calls[0][0] == args["command"]
+        assert calls[0][1]["shell"] is True
+
+        # The grant is single use: the same call is gated again.
+        with pytest.raises(policy.PolicyReviewRequired):
+            await agent_mod._execute_tool(
+                "read_only_shell", args,
+                agent_name="swarm", channel_id="general",
+                allowed=["read_only_shell"],
+            )
+        assert len(calls) == 1
+
+    asyncio.run(run())
+
+
+def test_fake_provider_cannot_execute_even_after_approval(client, monkeypatch, tmp_path):
+    """A human grant must not turn the test emulator into a real host shell."""
+    completed = agent_mod.subprocess.CompletedProcess
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return completed(cmd, 0, stdout="should-not-run\n", stderr="")
+
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent_mod, "SANDBOX_DIR", str(tmp_path))
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    monkeypatch.setenv("SWARM_COMPUTER_PROVIDER", "fake")
+
+    async def run():
+        args = {"command": "echo should-not-run"}
+        with pytest.raises(policy.PolicyReviewRequired) as info:
+            await agent_mod._execute_tool(
+                "read_only_shell", args,
+                agent_name="swarm", channel_id="general",
+                allowed=["read_only_shell"],
+            )
+        await db.resolve_approval(info.value.approval["id"], "approved", resolved_by="uzeb")
+        out = await agent_mod._execute_tool(
+            "read_only_shell", args,
+            agent_name="swarm", channel_id="general",
+            allowed=["read_only_shell"],
+        )
+        assert "fake" in out.lower()
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_computer_run_dispatch_requires_bound_approval(client, monkeypatch, tmp_path):
+    """The computer_run tool is gated on the real dispatch path, like the shell."""
+    from backend.tools import computer as computer_mod
+
+    class FakeProc:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return ("computer-ok", None)
+
+    calls = []
+
+    def fake_popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeProc()
+
+    monkeypatch.setattr(computer_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr("backend.agent.SANDBOX_DIR", str(tmp_path))
+    monkeypatch.setenv("SWARM_SYSTEM", "1")
+    args = {"command": "echo computer-ok"}
+
+    async def run():
+        with pytest.raises(policy.PolicyReviewRequired) as info:
+            await agent_mod._execute_tool(
+                "computer_run", args,
+                agent_name="swarm", channel_id="general",
+                allowed=["computer_run"],
+            )
+        assert calls == []
+        await db.resolve_approval(info.value.approval["id"], "approved", resolved_by="uzeb")
+        result = await agent_mod._execute_tool(
+            "computer_run", args,
+            agent_name="swarm", channel_id="general",
+            allowed=["computer_run"],
+        )
+        assert "computer-ok" in result
+        assert len(calls) == 1
+        assert calls[0][0][0] == args["command"]
+
+    asyncio.run(run())
+
+
 def test_grant_is_bound_to_agent_and_channel(client):
     async def run():
         args = {"command": "echo bound"}

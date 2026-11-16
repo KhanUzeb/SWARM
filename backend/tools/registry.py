@@ -95,7 +95,16 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "read_only_shell",
-            "description": "Run a read-only shell command in the sandbox working directory.",
+            # Legacy name kept so saved agent tool lists and audit logs stay
+            # valid, but the description must not repeat the old claim: with
+            # the host opt-in on this runs an arbitrary command on this
+            # machine, and cwd + timeout are not isolation (AGENTS.md s5).
+            "description": (
+                "Run a shell command in the sandbox working directory. "
+                "With SWARM_SYSTEM=1 this executes an arbitrary command on "
+                "this machine; the working directory and timeout are not "
+                "isolation."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"command": {"type": "string"}},
@@ -1104,6 +1113,26 @@ class ToolRegistry:
                     **{k: str(v) for k, v in args.items()})
             except (KeyError, IndexError, ValueError) as exc:
                 return f"(plugin template error: {exc})"
+            # A plugin shell handler is host execution with shell=True. The
+            # manifest is unvetted input, so the same backend authorization as
+            # computer_run decides whether it may run at all — a deny-list is
+            # only a backstop, never the boundary (AGENTS.md s3/s5).
+            from . import computer as computer_mod
+            from . import guard as guard_mod
+            from .. import computer_providers
+
+            if computer_providers.is_fake():
+                return "(fake computer provider cannot run host commands)"
+            if not computer_mod.host_execution_enabled():
+                return (
+                    "(host command execution is disabled. Set SWARM_SYSTEM=1 "
+                    "to opt in; the sandbox is a working directory, not a container.)"
+                )
+            match = guard_mod.is_dangerous(cmd)
+            if match:
+                return guard_mod.refusal_reason(cmd, match)
+            if computer_mod._DANGEROUS.search(cmd):
+                return "(blocked — that command is too destructive for the shared computer)"
             try:
                 result = subprocess.run(
                     cmd, shell=True, capture_output=True, text=True, timeout=10,

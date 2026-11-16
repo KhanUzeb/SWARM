@@ -62,9 +62,15 @@ fix and disclosure timeline with you.
 - The sandbox is a working-directory + timeout boundary, **not** a container
   or network-isolation boundary. Do not treat it as one.
 - `system_*` tools run on the machine hosting the backend, bound to
-  `SWARM_SYSTEM_ROOT`; `computer_run` runs in the sandbox directory. Both are
-  off unless `SWARM_SYSTEM=1`, `POST /api/computer/run` is admin-only, and each
-  execution call still needs its own approval while host tools are on.
+  `SWARM_SYSTEM_ROOT`; `computer_run` and the agent's legacy-named
+  `read_only_shell` run in the sandbox directory. All are off unless
+  `SWARM_SYSTEM=1`; `computer_run`, `read_only_shell` and plugin `shell`
+  handlers additionally refuse when the computer provider is `none` or `fake`
+  (the emulator never shells out), and each execution call still needs its own
+  bound approval while host tools are on. Despite its name, `read_only_shell`
+  executes an arbitrary command when enabled — cwd plus a reduced PATH are not
+  a jail. `system_run` is a separate host-system tool: it follows `SWARM_SYSTEM`
+  only and is not bound to the computer provider setting.
 
 ## Threat model
 

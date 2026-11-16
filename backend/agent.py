@@ -388,10 +388,35 @@ def _shell_env() -> dict[str, str]:
 
 def _run_shell_tool(command: str) -> str:
     from .tools import guard as guard_mod
+    from .tools import system as system_mod
 
     cmd = (command or "").strip()
     if not cmd:
         return "(need a command)"
+    # This is the executor behind the legacy-named `read_only_shell` tool.
+    # Despite that name it runs an arbitrary command with shell=True on the
+    # host: cwd + a reduced PATH are a work-area convention, not isolation
+    # (AGENTS.md s5). Authorize the capability in the backend, with the same
+    # host-execution opt-in as computer_run, instead of treating the command
+    # deny-list below as a boundary (AGENTS.md s3).
+    if not system_mod.enabled():
+        return (
+            "(host command execution is disabled. Set SWARM_SYSTEM=1 to opt in; "
+            "the sandbox is a working directory, not a container.)"
+        )
+    from . import computer_providers
+
+    if computer_providers.is_fake():
+        # `fake` is a deterministic test emulator, never a host subprocess
+        # backend. provider_configured() only excludes `none`, so without
+        # this check SWARM_SYSTEM=1 + fake would still shell out for real.
+        return "(fake computer provider cannot run host commands)"
+    if not computer_providers.provider_configured():
+        return "(computer provider is none; shell execution is unavailable)"
+    from .tools.computer import _DANGEROUS
+
+    if _DANGEROUS.search(cmd):
+        return "(blocked — that command is too destructive for the shared computer)"
     match = guard_mod.is_dangerous(cmd)
     if match:
         return guard_mod.refusal_reason(cmd, match)
@@ -915,6 +940,11 @@ def _approval_label(name: str, args: dict[str, Any]) -> str:
         payload = _json.dumps(args, sort_keys=True, default=str)
     except (TypeError, ValueError):
         payload = str(sorted((str(k), str(v)) for k, v in args.items()))
+    if name == "read_only_shell":
+        # The tool's legacy name undersells it: with the host opt-in on, this
+        # runs an arbitrary command and the cwd is not a jail. Say so on the
+        # approval card so a human is not approving a "read-only" action.
+        return f"shell command on this machine (not isolated) {payload}"[:200]
     return f"{name} {payload}"[:200]
 
 

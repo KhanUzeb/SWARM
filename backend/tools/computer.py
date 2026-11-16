@@ -30,11 +30,13 @@ def _shell_env() -> dict[str, str]:
 
 
 def _host_execution_enabled() -> bool:
-    """`computer_run` is host execution, so it follows the host-tool opt-in.
+    """Backend authorization for host shell execution.
 
     The sandbox working directory is not OS isolation. Until a real container
-    provider exists, refusing here is the only honest default; `SWARM_SYSTEM=1`
-    is the documented opt-in and the REST route enforces the same flag.
+    provider exists, refusing here is the only honest default: `SWARM_SYSTEM=1`
+    is the documented opt-in, and a `none` or `fake` computer provider must
+    never shell out on the host. `fake` is particularly important because
+    provider_configured() alone treats it as a live provider.
     """
     from . import system
 
@@ -42,13 +44,24 @@ def _host_execution_enabled() -> bool:
         return False
     from .. import computer_providers
 
+    if computer_providers.is_fake():
+        return False
     return computer_providers.provider_configured()
+
+
+# Public name so other host-executing paths can reuse the same authorization
+# instead of growing a second, drifting copy of it.
+host_execution_enabled = _host_execution_enabled
 
 
 def computer_run(command: str) -> str:
     cmd = (command or "").strip()
     if not cmd:
         return "(need a command)"
+    from .. import computer_providers
+
+    if computer_providers.is_fake():
+        return "(fake computer provider cannot run host commands)"
     if not _host_execution_enabled():
         return (
             "(host command execution is disabled. Set SWARM_SYSTEM=1 to opt in; "
