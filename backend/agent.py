@@ -43,7 +43,6 @@ DELEGATE_DEPTH_CAP = 2
 DELEGATE_TURN_CAP = 6
 SHELL_TIMEOUT_SECONDS = 10
 SHELL_OUTPUT_CAP = 4000
-MEMORY_INJECT_LIMIT = 12
 RETRY_DELAY_SECONDS = 0.8
 CUTOFF_NOTE = "\n\n[reply cut off]"
 CUTOFF_MARKER = "[reply cut off — stopped]"
@@ -1536,13 +1535,17 @@ async def generate_reply(
         # Delegation chains stop here — the sub-agent finishes the work
         # itself instead of orchestrating a further sub-agent.
         allowed = [t for t in allowed if t != "delegate_task"]
-    notes, summary = await db.get_context_memories(name, channel_id, MEMORY_INJECT_LIMIT)
     from . import context as context_mod
     routine = routine_instruction_of(history)
     package = await context_mod.build_context(
         name, channel_id, history, window=window, kb_limit=3,
         kb_query=(routine[:300] if routine else None))
     context_history = package["history"]
+    # One fetch per turn: build_context already loads the 12-note injection
+    # window and trims it to budget. Inject its kept notes/summary, not a
+    # second untrimmed read, or the budget trim never reaches the prompt.
+    notes = package["notes"]
+    summary = package["summary"]
     kb_hits = package["kb_hits"]
     channel = await db.get_channel(channel_id)
     channel_kind = (channel or {}).get("kind") or "room"
