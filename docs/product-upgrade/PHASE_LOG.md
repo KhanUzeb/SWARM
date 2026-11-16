@@ -75,8 +75,10 @@ backups live in gitignored `.scratch/baseline-backups/20261116-221103/`.
 
 ### Commit
 
-_To be filled with the local baseline commit hash once staged and committed
-(only the two files above are staged; no push)._
+Baseline commit: `55690c87c0522da958c8c7ca36199cb1d794018d`
+(`docs: record Gate 0 baseline and phase log`). Local only — no push. Only the
+two files listed above were staged; other workers' in-progress changes were
+left untouched.
 
 ### Remaining risks / carry-forward
 
