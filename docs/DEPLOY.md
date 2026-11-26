@@ -92,7 +92,7 @@ writable, and which risky settings are on.
 
 ```bash
 # inside the container
-docker compose exec api python -m backend.doctor
+docker compose exec swarm python -m backend.doctor
 
 # from a checkout, no server needed
 python -m backend.doctor
@@ -119,8 +119,11 @@ down` / `up`. To actually delete all data:
 docker compose down -v
 ```
 
-Backups are manual today: there is no `swarm backup` or `swarm restore` command.
-Make one before any upgrade.
+`python cli/swarm_cli.py backup` and `python cli/swarm_cli.py restore` are local
+CLI commands (there is no installed `swarm` launcher); they need neither a
+server nor a token. Make a backup before any upgrade. `backup` is an **online**
+SQLite snapshot and is safe while Swarm is running. `restore` requires a
+stopped instance and an explicit operator confirmation.
 
 Swarm uses SQLite in WAL mode (`backend/db.py` sets `PRAGMA journal_mode = WAL`).
 A committed change can live in `swarm.db-wal` until SQLite checkpoints it, and a
@@ -129,7 +132,59 @@ running process can change the files while you read them. Copying only
 table definitions may still be in the `-wal` file, so a main-file-only copy can
 open as an empty or malformed database.
 
-### Back up
+### Back up (online, preferred)
+
+From a checkout, with a timestamp so two backups on the same day do not
+collide:
+
+```bash
+python cli/swarm_cli.py backup "./swarm-backup-$(date +%F-%H%M%S).db"
+# PowerShell: python cli\swarm_cli.py backup ".\swarm-backup-$(Get-Date -Format yyyyMMdd-HHmmss).db"
+# To replace the same artifact deliberately: add --overwrite
+```
+
+The container image does not include `cli/`, so call the module directly. Keep
+the artifact in `/tmp` (not `/app/data`, which is the named volume that
+`down -v` deletes) and copy it to the host:
+
+```bash
+docker compose exec swarm python -c "from backend.backup import backup, resolve_db_path; print(backup(resolve_db_path(), '/tmp/swarm-backup.db'))"
+docker compose cp swarm:/tmp/swarm-backup.db ./swarm-backup.db
+```
+
+JSON in, JSON out. `--db PATH` selects a database other than this install's
+`SWARM_DB_PATH`; `--overwrite` replaces an existing destination file. The
+command uses SQLite's online backup API, so it reads through the WAL and
+captures committed rows even while the server is writing. It does not
+checkpoint or delete the source's `-wal`/`-shm` files. `backup` refuses a
+destination that is the database itself or one of its `-wal`/`-shm`/`-journal`
+sidecars, even with `--overwrite`; `restore` refuses a target that is the backup
+file itself or its sidecar. Writing an artifact over a live WAL set can break
+the running instance, and a refused operation changes no files. The source is
+only ever opened read-only: if SQLite cannot read it through the WAL, the
+backup fails rather than opening it read-write and checkpointing the source.
+Artifacts are staged under unique names and published without clobbering an
+existing file unless `--overwrite` is given.
+
+The artifact is a **single self-contained file** converted out of WAL mode. The
+report includes `integrity`, `row_counts` for the four core Swarm tables
+(`channels`, `messages`, `users`, `workspace_meta`), a SHA-256 hash and the
+byte size. A non-`ok` integrity value or a missing table is a failed backup.
+`integrity_check` proves the file is intact, not that it holds the work you
+expect — check a known row or a recent run as well:
+
+```bash
+BACKUP=./swarm-backup-2026-11-26-171500.db
+python -c "import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro&immutable=1',uri=True); print(c.execute('PRAGMA integrity_check').fetchone()[0]); print('messages:', c.execute('SELECT COUNT(*) FROM messages').fetchone()[0]); print('latest:', c.execute('SELECT body FROM messages ORDER BY id DESC LIMIT 1').fetchone())" "$BACKUP"
+```
+
+Compare the printed count and latest row with what you expect in the live
+workspace; `ok` on its own only proves the bytes are structurally intact.
+
+A backup contains the full message history and provider secrets: keep it where
+you would keep the original database, and never commit it to a repository.
+
+### Back up a stopped instance (manual fallback)
 
 Set the folder name once and use the same value in every command below. Running
 `date +%F` again in a later step can cross midnight and point the verify step at
@@ -177,36 +232,74 @@ If you run these commands in separate shells, write the value of `$STAMP` down
 and paste the same literal date into each command instead of relying on the
 shell variable.
 
-### Restore
+### Restore (stopped instance only)
 
-Restore is not implemented or verified. There is no `swarm restore` command, and
-no restore sequence has been run against a disposable container and volume. Do
-not attempt an in-place restore on a volume that holds work you need. The
-stopped-instance backup above is the supported path; treat the notes below as
-requirements for a restore that an operator must first test on a disposable
-copy.
+From a checkout, stop uvicorn first:
 
-Copying a saved `swarm.db` over the files in a volume is unsafe even when the
-service is stopped. A newer `swarm.db-wal` or `swarm.db-shm` left from the old
+```bash
+python cli/swarm_cli.py restore ./swarm-backup-2026-11-26-171500.db --confirm-stopped
+# PowerShell: python cli\swarm_cli.py restore .\swarm-backup-2026-11-26-171500.db --confirm-stopped
+```
+
+For Docker, `exec` cannot run against a stopped service, so stop it, copy the
+backup into the named volume, and use a one-off container with that same
+volume:
+
+```bash
+docker compose stop swarm
+docker compose cp ./swarm-backup.db swarm:/app/data/restore.db
+docker compose run --rm swarm python -c "from backend.backup import restore, resolve_db_path; print(restore('/app/data/restore.db', resolve_db_path(), confirm_stopped=True))"
+```
+
+`--confirm-stopped` is mandatory and is an **attestation, not a detection**. No
+SQLite lock can prove that no process will reopen the file a moment later, so
+the command does not pretend to detect a stop: check the process yourself.
+Restoring over a live database can corrupt it. `--db PATH` targets a database
+other than this install's `SWARM_DB_PATH`.
+
+Before changing the target, the command verifies the backup read-only
+(`integrity_check` plus the required Swarm tables), then applies these rules:
+
+1. A backup with its own `-wal`/`-shm`/`-journal` sidecars is refused — the
+   bytes are ambiguous. Swarm's own backups never have sidecars.
+2. A target with any such sidecar is refused. A clean stop normally checkpoints
+   and removes them, so leftovers mean "investigate"; Swarm **never deletes**
+   them for you.
+3. The backup is copied to a uniquely named temp file and verified there. An
+   existing target is preserved under `<name>.pre-restore-<timestamp>-<pid>`
+   — never deleted — by a hard link (or a verified copy where hard links are
+   unavailable) **before** the verified temp file replaces it, so a crash at
+   that moment cannot leave the target path with no database.
+4. The placed file is verified again. If that check fails, the previous target
+   is moved back and the newly written file is removed. A rollback failure is
+   reported with the preserved path instead of being swallowed.
+
+Copying a saved `swarm.db` over a volume by hand remains unsafe even when the
+service is stopped: a newer `swarm.db-wal`/`swarm.db-shm` left from the old
 database can survive the copy, and SQLite replays those sidecars on open, so the
 result can look healthy while returning data from before the restore. Ownership
-matters too: the container runs as `swarm`, and a database from another Swarm
+matters too — the container runs as `swarm` — and a database from another Swarm
 version runs additive migrations at startup (`ensure_schema()`).
 
-A restore procedure needs an executable test before it can be documented as a
-set of commands. Use a separately created container and volume for that test and
-leave the original volume untouched. The test must verify the saved set, with
-`PRAGMA integrity_check` and a known-row check, before anything is deleted or
-overwritten. It must confirm that the restored instance holds a known row or a
-recent run, and that the original volume is still recoverable if the test fails.
-Until that test exists, recovery on a real workspace is unverified and an
-operator must try it first on a disposable copy.
+**Verification and limits.** Restore is exercised on disposable databases for
+WAL-resident rows, sidecar refusal on both sides, roundtrip with the previous
+file preserved, rollback when the final check fails, and a simulated failure at
+the publish step that must leave the original target readable. It has **not**
+been run against a disposable Docker volume, followed by a boot and migration
+smoke test. There is no multi-process kill test: nothing here proves the server
+stayed stopped. A `<target>.swarm-lock` file serialises backup/restore per
+target; a second operation refuses with the lock path rather than racing.
+A lock left by a crashed process is **not** auto-broken — confirm nothing is
+running, then remove it yourself. A backup covers the SQLite database only —
+sandbox files and anything else outside it are not included. Test on a
+disposable volume before touching a workspace whose work you need, and keep
+the `pre-restore` file until the restored server has been running and you have
+checked a known row or recent run.
 
 For a local checkout without Docker, the default database is
-`backend/swarm.db` when `SWARM_DB_PATH` is unset. Stop uvicorn and copy the
-whole `swarm.db` file set, including any `-wal` and `-shm`, to a folder outside
-the checkout, then run the same integrity check. Do not restore over a live
-database until the restore procedure has been tested on a disposable copy.
+`backend/swarm.db` when `SWARM_DB_PATH` is unset; stop uvicorn first. The
+stopped-instance copy in the previous section is a manual alternative, but it
+copies a set of files and is not the verified restore path.
 
 ## Env vars
 
