@@ -618,9 +618,10 @@ async def api_v2_create_run(payload: RunCreate, handle: str = Depends(require_au
     if payload.workflow_id and not await v2.get_workflow(payload.workflow_id, handle):
         raise HTTPException(status_code=404, detail="workflow not found")
     run = await v2.create_run(handle, payload.objective, payload.workflow_id, payload.policy, payload.model)
-    session = await work.create_session(
+    await work.create_session(
         handle, payload.objective, source="run", run_id=run["id"])
-    await work.append_event(session["id"], "work_started", {"objective": payload.objective})
+    # The session is queued until an executor actually claims the run;
+    # _sync_work_with_run flips it to running from the durable run state.
     v2.start_run(run["id"], handle)
     return run
 
@@ -733,21 +734,33 @@ async def api_v2_resolve_run_approval(run_id: str, step_id: str, payload: RunApp
         "decision": decision,
         "resolved_by": handle,
     }
-    await v2.append_event(run_id, "approval_resolved", binding, step_id)
+    resolved_event = await v2.append_event(
+        run_id, "approval_resolved", binding, step_id)
     session = await work.find_by_run(run_id, handle)
     if session:
+        # Tag the native event with the run event it mirrors so the work
+        # mirror adopts it instead of recording a second decision.
         await work.append_event(
             session["id"], "approval_resolved",
-            {**binding, "step_id": step_id}, step_id)
+            {**binding, "step_id": step_id,
+             "_via_run": run_id, "_via_run_seq": resolved_event["seq"]}, step_id)
     if decision == "approved":
         # claim_run consumes the grant atomically with the lease claim; a
         # duplicate POST is rejected above before it can start a second run.
         v2.start_run(run_id, handle)
     else:
         await v2.update_run(run_id, handle, "cancelled")
-        await v2.append_event(run_id, "run_denied", {"step_id": step_id, "grant_id": outcome["grant"]["id"]})
+        denied_event = await v2.append_event(
+            run_id, "run_denied", {"step_id": step_id, "grant_id": outcome["grant"]["id"]})
         if session:
-            await work.append_event(session["id"], "work_cancelled", {"step_id": step_id}, step_id)
+            # Tag the native settlement with the run event it mirrors. The
+            # work-event mirror then adopts this event instead of appending a
+            # second work_cancelled for run_denied on the next poll.
+            await work.append_event(session["id"], "work_cancelled", {
+                "step_id": step_id,
+                "_via_run": run_id,
+                "_via_run_seq": denied_event["seq"],
+            }, step_id)
     return await v2.get_run(run_id, handle)
 
 
@@ -919,20 +932,29 @@ async def _sync_work_with_run(session: dict[str, Any], owner: str) -> dict[str, 
     if not run:
         return session
     status = run.get("status")
-    if status == "waiting_for_approval" and session.get("status") != "waiting_for_approval":
-        await work.append_event(session["id"], "approval_requested",
-                                {"label": "Workflow checkpoint requires review"}, "approval")
+    if status == "running" and session.get("status") == "queued":
+        # A queued run is not running. Only the durable run state may flip the
+        # work session, when an executor actually claimed and started it. The
+        # run event is the audit record; the mirror materialises it once.
+        await work.mark_started_from_run(session["id"], owner)
+    elif status == "waiting_for_approval" and session.get("status") != "waiting_for_approval":
+        approval = await v2.approval_state(run_id, owner) or {}
+        step_id = str(approval.get("step_id") or "") or None
+        # State-only transition: the run event is the audit record and the
+        # mirror materialises it once, even under concurrent work-list polls.
+        await work.mark_waiting_from_run(session["id"], owner, step_id)
     elif status == "completed" and session.get("status") != "completed":
         report = run.get("report") or {}
-        await work.append_event(session["id"], "work_completed",
-                                {"summary": str(report.get("summary") or "")[:1000]})
+        await work.mark_terminal_from_run(
+            session["id"], owner, "completed",
+            summary=str(report.get("summary") or ""))
     elif status in {"failed", "cancelled"} and session.get("status") not in work.TERMINAL:
-        if status == "failed":
-            report = run.get("report") or {}
-            await work.append_event(session["id"], "work_failed",
-                                    {"error": str(report.get("error") or "run failed")[:500]})
-        else:
-            await work.append_event(session["id"], "work_cancelled", {})
+        report = run.get("report") or {}
+        summary = (str(report.get("error") or "run failed")[:500]
+                   if status == "failed" else "")
+        await work.mark_terminal_from_run(
+            session["id"], owner, status, summary=summary,
+            requires_action=status == "failed")
     return await work.get_session(session["id"], owner) or session
 
 
@@ -985,7 +1007,12 @@ async def api_work_events(
 
 @app.post("/api/work/{work_id}/cancel")
 async def api_cancel_work(work_id: str, handle: str = Depends(require_auth)):
-    session = await work.cancel_session(work_id, handle)
+    try:
+        session = await work.cancel_session(work_id, handle)
+    except work.CancellationFailed as exc:
+        # The run is still live: say so instead of showing a cancelled session
+        # that a parked approval can silently resume.
+        raise HTTPException(status_code=409, detail=str(exc))
     if not session:
         raise HTTPException(status_code=404, detail="work not found")
     return session

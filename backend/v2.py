@@ -7,6 +7,7 @@ surface remains available during migration.
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 import asyncio
@@ -45,6 +46,7 @@ OAUTH_STATE_TTL_SECONDS = 600
 # claimable (see claim_run) until an exact-bound approval grant exists.
 RUN_LEASE_SECONDS = 300.0
 LEASE_RENEW_DIVISOR = 3.0
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 
 _run_tasks: dict[str, asyncio.Task] = {}
 _oauth_states: dict[str, dict[str, Any]] = {}
@@ -418,11 +420,18 @@ async def get_run(run_id: str, owner: str) -> dict[str, Any] | None:
 
 
 async def get_run_status_any_owner(run_id: str) -> dict[str, Any] | None:
-    """Owner-blind status lookup for startup recovery only (never exposed via API)."""
+    """Owner-blind status/report lookup for startup recovery only.
+
+    Never exposed via an API: recovery needs the real terminal outcome so a
+    completed run is not recorded as "interrupted by restart" in the work log.
+    """
     async with _open_db() as conn:
         conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT id, status FROM runs WHERE id=?", (run_id,))
-        return _row(await cur.fetchone())
+        cur = await conn.execute("SELECT id, status, report FROM runs WHERE id=?", (run_id,))
+        row = _row(await cur.fetchone())
+    if row is not None:
+        row["report"] = _decode(row.get("report"), None)
+    return row
 
 
 async def get_run_any_owner(run_id: str) -> dict[str, Any] | None:
@@ -992,7 +1001,8 @@ async def reconcile_ambiguous(
                 return None
             if action == "cancel":
                 cur = await conn.execute(
-                    "UPDATE runs SET status='cancelled', finished_at=? "
+                    "UPDATE runs SET status='cancelled', finished_at=?,"
+                    " lease_owner=NULL, lease_expires_at=NULL "
                     "WHERE id=? AND owner=? AND status='waiting_for_approval'",
                     (now, run_id, owner))
                 if not cur.rowcount:
@@ -1019,6 +1029,15 @@ async def reconcile_ambiguous(
                 "INSERT INTO run_events(run_id, seq, event_type, step_id, payload, created_at)"
                 " VALUES(?,?, 'approval_reconciled', ?, ?, ?)",
                 (run_id, seq, step_id, json.dumps(payload), now))
+            if action == "cancel":
+                # The run's own event stream must show its terminal state too;
+                # otherwise WS viewers and the work mirror never see a finish.
+                await conn.execute(
+                    "INSERT INTO run_events(run_id, seq, event_type, step_id, payload, created_at)"
+                    " VALUES(?,?, 'run_cancelled', ?, ?, ?)",
+                    (run_id, int(seq) + 1, step_id,
+                     json.dumps({"reason": "ambiguous approval reconciled by cancelling the run",
+                                 "grant_id": grant_id, "resolved_by": resolved_by}), now))
             await conn.commit()
     return await approval_state(run_id, owner)
 
@@ -1189,12 +1208,28 @@ async def execute_run(run_id: str, owner: str) -> None:
         if claim is None:
             return
 
+        lease_lost = asyncio.Event()
+
         async def _renew_lease() -> None:
             interval = claim.lease_seconds / LEASE_RENEW_DIVISOR
             while True:
                 await asyncio.sleep(interval)
-                with suppress(Exception):
-                    await renew_run_lease(claim, lease_seconds=claim.lease_seconds)
+                try:
+                    owned = await renew_run_lease(
+                        claim, lease_seconds=claim.lease_seconds)
+                except Exception:
+                    owned = False
+                if not owned:
+                    # A failed renewal means this generation no longer owns the
+                    # run. Stop before the next side effect instead of waiting
+                    # for the next fenced event to discover it.
+                    lease_lost.set()
+                    return
+
+        def _ensure_owned() -> None:
+            if lease_lost.is_set():
+                raise StaleRunClaim(
+                    "lease renewal failed; stopping before further side effects")
 
         heartbeat = asyncio.create_task(_renew_lease(), name=f"v2-lease-{run_id}")
 
@@ -1231,6 +1266,7 @@ async def execute_run(run_id: str, owner: str) -> None:
         }
 
         async def run_agent_node(node: dict[str, Any]) -> str:
+            _ensure_owned()
             step_id = str(node.get("id") or "") or None
             if node.get("type") == "agent":
                 from . import agent as legacy_agent
@@ -1265,6 +1301,7 @@ async def execute_run(run_id: str, owner: str) -> None:
                 f"for step {step_id or 'unknown'}.", step_id=step_id)
 
         for node in nodes:
+            _ensure_owned()
             node_id = str(node.get("id") or "")
             # Propagation runs BEFORE the input/output passthrough. Otherwise a
             # skipped branch crossing an io node is dropped from `skipped` and
@@ -1305,6 +1342,7 @@ async def execute_run(run_id: str, owner: str) -> None:
                     and (event.get("payload") or {}).get("parallel") is True
                 }
                 async def run_parallel_child(child: dict[str, Any]) -> dict[str, Any]:
+                    _ensure_owned()
                     child_id = str(child.get("id") or uuid.uuid4().hex[:8])
                     child_label = str(child.get("label") or child.get("agent") or "parallel step")
                     completed = completed_children.get(child_id)
@@ -1340,6 +1378,7 @@ async def execute_run(run_id: str, owner: str) -> None:
             if output:
                 report["summary"] = output[:1000]
             await append_event(run_id, "step_completed", {"label": label, "output": output[:4000]}, step_id, claim=claim)
+        _ensure_owned()
         report_artifact = await create_artifact(
             run_id, owner, "run-report.json", json.dumps(report, indent=2),
             "application/json", claim=claim)
@@ -1430,9 +1469,56 @@ def start_run(run_id: str, owner: str) -> None:
 
 
 async def cancel_run(run_id: str, owner: str) -> bool:
-    run = await get_run(run_id, owner)
+    """Durably cancel a run, then stop the executor in this process.
+
+    The old implementation only cancelled an in-process task: a queued run, a
+    gate parked for approval, or a run owned by another process could not be
+    cancelled at all, and a crash before the task's ``CancelledError`` handler
+    left the run ``running`` with an expiring lease. Startup recovery then
+    re-claimed it and repeated side effects the owner had already stopped.
+
+    Status, lease invalidation, grant settlement and the audit event are now
+    committed in one transaction before the task is cancelled. Clearing the
+    lease makes every later write by that executor (events, artifacts, gate
+    parking) fail its fence, so cancellation also survives a restart or a
+    takeover. Nothing here can undo an external effect already performed:
+    work after the last durable checkpoint remains ambiguous by design.
+    """
+    now = time.time()
+    async with event_lock():
+        async with _open_db() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            cur = await conn.execute(
+                "SELECT status FROM runs WHERE id=? AND owner=?", (run_id, owner))
+            row = await cur.fetchone()
+            if row is None or str(row[0]) in TERMINAL_RUN_STATUSES:
+                await conn.rollback()
+                return False
+            cur = await conn.execute(
+                "UPDATE runs SET status='cancelled', finished_at=COALESCE(finished_at, ?),"
+                " lease_owner=NULL, lease_expires_at=NULL WHERE id=? AND owner=?",
+                (now, run_id, owner))
+            if not cur.rowcount:
+                await conn.rollback()
+                return False
+            # A grant that was granted but not yet consumed is authority for
+            # exactly this run. Settling it here stops a late claim from
+            # unparking a cancelled run with a decision made before the cancel.
+            # The status is 'cancelled', not 'denied': nobody denied the gate,
+            # the owner cancelled the run, and the audit must say so.
+            await conn.execute(
+                "UPDATE approval_grants SET status='cancelled', resolved_by=?, resolved_at=? "
+                "WHERE run_id=? AND owner=? AND status IN ('pending','granted')",
+                (owner, now, run_id, owner))
+            cur = await conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id=?", (run_id,))
+            (seq,) = await cur.fetchone()
+            await conn.execute(
+                "INSERT INTO run_events(run_id, seq, event_type, step_id, payload, created_at)"
+                " VALUES(?,?, 'run_cancelled', NULL, ?, ?)",
+                (run_id, seq, json.dumps({"reason": "owner cancelled"}), now))
+            await conn.commit()
     task = _run_tasks.get(run_id)
-    if not run or not task:
-        return False
-    task.cancel()
+    if task is not None and not task.done():
+        task.cancel()
     return True

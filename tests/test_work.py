@@ -2,6 +2,9 @@
 import asyncio
 import time
 
+import pytest
+
+import backend.db as db
 import backend.main as main
 import backend.v2 as v2
 import backend.work as work
@@ -349,6 +352,349 @@ def test_existing_databases_upgrade_without_data_loss(client, auth):
     history = client.get("/api/channels/general/messages", headers=auth).json()
     assert any(m["id"] == posted["id"] for m in history)
     assert client.get("/api/work", headers=auth).status_code == 200
+
+
+def _launch_parked_run(client, auth, objective):
+    workflow_id = _approval_workflow(client, auth)
+    run = client.post("/api/v2/runs", headers=auth,
+                      json={"objective": objective, "workflow_id": workflow_id}).json()
+    _wait_for(lambda: client.get(f"/api/v2/runs/{run['id']}", headers=auth).json()["status"]
+              == "waiting_for_approval" or None, "park at gate")
+    session = _wait_for(lambda: next(iter([s for s in client.get("/api/work", headers=auth).json()
+                                           if s.get("run_id") == run["id"]]), None), "work session")
+    client.get(f"/api/work/{session['id']}/events", headers=auth).json()
+    return run["id"], session["id"], _gate_binding(client, auth, run["id"])
+
+
+def test_work_cancel_at_parked_gate_denies_late_approval(client, auth):
+    rid, wid, binding = _launch_parked_run(client, auth, "cancel at gate")
+    assert client.get(f"/api/work/{wid}", headers=auth).json()["status"] == "waiting_for_approval"
+
+    resp = client.post(f"/api/work/{wid}/cancel", headers=auth)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+    assert asyncio.run(v2.get_run(rid, "uzeb"))["status"] == "cancelled"
+    grant = asyncio.run(v2.get_approval_grant(rid, "uzeb", "gate"))
+    assert grant["status"] == "cancelled"  # owner cancelled; nobody denied the gate
+    assert client.post(f"/api/v2/runs/{rid}/approvals/gate", headers=auth,
+                       json={**binding, "status": "approved"}).status_code == 409
+    assert asyncio.run(v2.get_run(rid, "uzeb"))["status"] == "cancelled"
+    assert rid not in [r["id"] for r in asyncio.run(v2.recoverable_runs())]
+    events = asyncio.run(work.list_events(wid, "uzeb"))
+    terminals = [e for e in events
+                 if e["type"] in {"work_completed", "work_failed", "work_cancelled"}]
+    assert len(terminals) == 1  # native settlement is adopted by the mirror
+    assert terminals[0].get("via_run")
+
+
+def test_work_cancel_fails_closed_when_the_run_cannot_be_cancelled(client, auth, monkeypatch):
+    rid, wid, binding = _launch_parked_run(client, auth, "cancel failure")
+
+    async def failing_cancel(*_args, **_kwargs):
+        raise RuntimeError("simulated database failure")
+
+    monkeypatch.setattr(v2, "cancel_run", failing_cancel)
+    resp = client.post(f"/api/work/{wid}/cancel", headers=auth)
+    assert resp.status_code == 409
+    session = client.get(f"/api/work/{wid}", headers=auth).json()
+    assert session["status"] == "waiting_for_approval"
+    assert "work_cancelled" not in [e["type"] for e in client.get(
+        f"/api/work/{wid}/events", headers=auth).json()]
+    # The grant was never revoked: the honest outcome is that the cancel did
+    # not happen, so a real human decision can still resume the run.
+    assert client.post(f"/api/v2/runs/{rid}/approvals/gate", headers=auth,
+                       json={**binding, "status": "approved"}).status_code == 200
+
+
+def test_work_event_mirror_retries_a_crash_reservation(client, auth):
+    async def setup():
+        run = await v2.create_run("uzeb", "crash reservation", None)
+        session = await work.create_session(
+            "uzeb", "crash reservation", source="run", run_id=run["id"])
+        async with db.open_db() as conn:
+            await conn.execute(
+                "INSERT INTO work_run_event_mirror(work_id, run_seq, work_seq, via_run)"
+                " VALUES(?,?,0,?)", (session["id"], 1, run["id"]))
+            await conn.commit()
+        return session["id"]
+
+    wid = asyncio.run(setup())
+    events = asyncio.run(work.list_events(wid, "uzeb"))
+    assert [e["type"] for e in events if e.get("via_run")] == ["work_queued"]
+    rows = asyncio.run(_mirror_rows(wid))
+    assert rows == [(1, 2)]
+
+
+def _mirror_rows(work_id):
+    async def read():
+        async with db.open_db() as conn:
+            cur = await conn.execute(
+                "SELECT run_seq, work_seq FROM work_run_event_mirror WHERE work_id=?",
+                (work_id,))
+            return [tuple(r) for r in await cur.fetchall()]
+    return read()
+
+
+def test_work_event_mirror_pages_past_one_batch(client, auth, monkeypatch):
+    async def setup():
+        run = await v2.create_run("uzeb", "mirror paging", None)
+        session = await work.create_session(
+            "uzeb", "mirror paging", source="run", run_id=run["id"])
+        async with db.open_db() as conn:
+            await conn.executemany(
+                "INSERT INTO run_events(run_id, seq, event_type, step_id, payload, created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                [(run["id"], seq, "step_completed", f"s{seq}", "{}", 1.0)
+                 for seq in range(2, 8)])
+            await conn.commit()
+        return session["id"]
+
+    monkeypatch.setattr(work, "MIRROR_PAGE_SIZE", 2)
+    wid = asyncio.run(setup())
+    events = asyncio.run(work.list_events(wid, "uzeb"))
+    assert len([e for e in events if e.get("via_run")]) == 7
+
+
+def test_recovery_does_not_duplicate_a_mirrored_terminal_event(client, auth):
+    async def setup():
+        run = await v2.create_run("uzeb", "cancel then crash", None)
+        session = await work.create_session(
+            "uzeb", "cancel then crash", source="run", run_id=run["id"])
+        await v2.cancel_run(run["id"], "uzeb")
+        async with db.open_db() as conn:
+            await conn.execute(
+                "UPDATE work_sessions SET status='running' WHERE id=?", (session["id"],))
+            await conn.commit()
+        return session["id"]
+
+    wid = asyncio.run(setup())
+    assert asyncio.run(work.recover_interrupted()) == 1
+    events = asyncio.run(work.list_events(wid, "uzeb"))
+    terminals = [e for e in events if e["type"] in {"work_completed", "work_failed", "work_cancelled"}]
+    assert len(terminals) == 1
+    assert terminals[0].get("via_run")
+    assert asyncio.run(work.get_session(wid, "uzeb"))["status"] == "cancelled"
+
+
+def test_denial_is_recorded_once_after_the_mirror_runs(client, auth):
+    rid, wid, binding = _launch_parked_run(client, auth, "deny once")
+    denied = client.post(f"/api/v2/runs/{rid}/approvals/gate", headers=auth,
+                         json={**binding, "status": "denied"})
+    assert denied.status_code == 200
+    events = asyncio.run(work.list_events(wid, "uzeb"))
+    terminals = [e for e in events if e["type"] in {"work_completed", "work_failed", "work_cancelled"}]
+    assert len(terminals) == 1
+    assert asyncio.run(work.get_session(wid, "uzeb"))["status"] == "cancelled"
+
+
+def test_legacy_cursor_replays_once_then_stays_stable(client, auth):
+    """An upgraded database has no mirror rows yet; old cursors catch up once."""
+    async def setup():
+        run = await v2.create_run("uzeb", "legacy cursor", None)
+        session = await work.create_session(
+            "uzeb", "legacy cursor", source="run", run_id=run["id"])
+        now = time.time()
+        # Pre-mirror shape: native projection only, no run_event_mirror rows.
+        async with db.open_db() as conn:
+            await conn.execute(
+                "DELETE FROM work_events WHERE work_id=? AND seq=1", (session["id"],))
+            await conn.executemany(
+                "INSERT INTO work_events(work_id, seq, type, step_id, payload, created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                [(session["id"], 2, "approval_requested", "gate", '{"label":"gate"}', now),
+                 (session["id"], 3, "work_completed", None, '{"summary":"old result"}', now)])
+            await conn.execute(
+                "UPDATE work_sessions SET status='completed', finished_at=? WHERE id=?",
+                (now, session["id"]))
+            await conn.commit()
+        for etype in ("run_queued", "step_completed", "run_completed"):
+            await v2.append_event(run["id"], etype, {})
+        return session["id"]
+
+    wid = asyncio.run(setup())
+    first = asyncio.run(work.list_events(wid, "uzeb", 3))
+    again = asyncio.run(work.list_events(wid, "uzeb", 3))
+    assert first and [(e["seq"], e["type"]) for e in first] == [
+        (e["seq"], e["type"]) for e in again]
+    assert asyncio.run(work.get_session(wid, "uzeb"))["status"] == "completed"
+    assert asyncio.run(work.get_session(wid, "uzeb"))["requires_action"] is False
+
+
+@pytest.mark.parametrize("kind", ["completed", "failed"])
+def test_terminal_work_event_is_recorded_once(client, auth, kind):
+    async def scenario():
+        if kind == "completed":
+            run = await v2.create_run("uzeb", "terminal dedupe", None)
+        else:
+            wf = await v2.create_workflow("uzeb", "Bad", "", {
+                "nodes": [{"id": "bad", "type": "unsupported"}], "edges": []})
+            run = await v2.create_run("uzeb", "terminal dedupe", wf["id"])
+        session = await work.create_session(
+            "uzeb", "terminal dedupe", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.execute_run(run["id"], "uzeb")
+        snapshot = await work.get_session(session["id"], "uzeb")
+        # All polls read the same stale snapshot before any one commits.
+        await asyncio.gather(*(
+            main._sync_work_with_run(dict(snapshot), "uzeb") for _ in range(4)))
+        events = await work.list_events(session["id"], "uzeb")
+        target = "work_completed" if kind == "completed" else "work_failed"
+        return [e for e in events if e["type"] == target], await work.get_session(
+            session["id"], "uzeb")
+
+    events, session = asyncio.run(scenario())
+    assert len(events) == 1
+    assert events[0].get("via_run")
+    assert session["status"] == kind
+
+
+def test_unknown_gate_does_not_keep_a_stale_active_step(client, auth):
+    async def scenario():
+        run = await v2.create_run("uzeb", "no grant", None)
+        session = await work.create_session(
+            "uzeb", "no grant", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        async with db.open_db() as conn:
+            await conn.execute(
+                "UPDATE work_sessions SET active_step='old_gate' WHERE id=?",
+                (session["id"],))
+            await conn.execute(
+                "UPDATE runs SET status='waiting_for_approval' WHERE id=?", (run["id"],))
+            await conn.commit()
+        await main._sync_work_with_run(
+            await work.get_session(session["id"], "uzeb"), "uzeb")
+        return await v2.approval_state(run["id"], "uzeb"), await work.get_session(
+            session["id"], "uzeb")
+
+    state, session = asyncio.run(scenario())
+    assert state["state"] == "none"
+    assert session["status"] == "waiting_for_approval"
+    assert session["active_step"] is None
+
+
+def test_second_approval_gate_replaces_the_active_step(client, auth):
+    async def scenario():
+        wf = await v2.create_workflow("uzeb", "Two gates", "", {
+            "nodes": [{"id": "g1", "type": "approval", "label": "First"},
+                      {"id": "g2", "type": "approval", "label": "Second"}],
+            "edges": [["g1", "g2"]]})
+        run = await v2.create_run("uzeb", "two gates", wf["id"])
+        session = await work.create_session(
+            "uzeb", "two gates", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.execute_run(run["id"], "uzeb")
+        await main._sync_work_with_run(
+            await work.get_session(session["id"], "uzeb"), "uzeb")
+        first = await work.get_session(session["id"], "uzeb")
+        grant = await v2.get_approval_grant(run["id"], "uzeb", "g1")
+        await v2.resolve_approval_grant(
+            run["id"], "uzeb", "g1", "approved", resolved_by="uzeb",
+            grant_id=grant["id"], binding_hash=grant["binding_hash"])
+        await work.append_event(session["id"], "approval_resolved", {"step_id": "g1"}, "g1")
+        await v2.execute_run(run["id"], "uzeb")
+        await main._sync_work_with_run(
+            await work.get_session(session["id"], "uzeb"), "uzeb")
+        second = await work.get_session(session["id"], "uzeb")
+        actual = (await v2.approval_state(run["id"], "uzeb"))["step_id"]
+        return first, second, actual
+
+    first, second, actual = asyncio.run(scenario())
+    assert first["active_step"] == "g1"
+    assert actual == "g2"
+    assert second["active_step"] == "g2"
+    assert second["status"] == "waiting_for_approval"
+
+
+def test_concurrent_work_polls_record_one_approval_request(client, auth):
+    async def setup_and_poll():
+        wf = await v2.create_workflow("uzeb", "Gate", "", {
+            "nodes": [{"id": "review_gate", "type": "approval", "label": "Review"}],
+            "edges": []})
+        run = await v2.create_run("uzeb", "approval dedupe", wf["id"])
+        session = await work.create_session(
+            "uzeb", "approval dedupe", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.execute_run(run["id"], "uzeb")
+        snapshot = await work.get_session(session["id"], "uzeb")
+        await asyncio.gather(*(
+            main._sync_work_with_run(dict(snapshot), "uzeb") for _ in range(3)))
+        events = await work.list_events(session["id"], "uzeb")
+        requested = [e for e in events if e["type"] == "approval_requested"]
+        settled = await work.get_session(session["id"], "uzeb")
+        return requested, settled
+
+    requested, settled = asyncio.run(setup_and_poll())
+    assert [(e["step_id"], bool(e.get("via_run"))) for e in requested] == [
+        ("review_gate", True)]
+    assert settled["status"] == "waiting_for_approval"
+    assert settled["active_step"] == "review_gate"
+
+
+def test_approval_decision_is_recorded_once(client, auth, monkeypatch):
+    _mock_agent(monkeypatch, reply="after gate")
+    rid, wid, binding = _launch_parked_run(client, auth, "decision once")
+    decision = client.post(f"/api/v2/runs/{rid}/approvals/gate", headers=auth,
+                           json={**binding, "status": "approved"})
+    assert decision.status_code == 200
+    _wait_for(lambda: client.get(f"/api/v2/runs/{rid}", headers=auth).json()["status"]
+              == "completed" or None, "run completion")
+    events = asyncio.run(work.list_events(wid, "uzeb"))
+    resolved = [e for e in events if e["type"] == "approval_resolved"]
+    assert len(resolved) == 1
+    assert resolved[0]["payload"]["grant_id"] == binding["grant_id"]
+    assert asyncio.run(work.get_session(wid, "uzeb"))["status"] == "completed"
+
+
+def test_work_rail_names_the_real_approval_gate(client, auth):
+    created = client.post("/api/v2/workflows", headers=auth, json={
+        "name": "Named gate", "description": "", "graph": {
+            "nodes": [{"id": "review_gate", "type": "approval", "label": "Review"}],
+            "edges": []}}).json()
+    run = client.post("/api/v2/runs", headers=auth, json={
+        "objective": "needs review", "workflow_id": created["id"]}).json()
+    _wait_for(lambda: client.get(f"/api/v2/runs/{run['id']}", headers=auth).json()["status"]
+              == "waiting_for_approval" or None, "park at gate")
+    session = next(s for s in client.get("/api/work", headers=auth).json()
+                   if s.get("run_id") == run["id"])
+    state = client.get(f"/api/v2/runs/{run['id']}/approval", headers=auth).json()
+    assert state["step_id"] == "review_gate"
+    assert session["active_step"] == "review_gate"
+
+
+def test_new_run_stays_queued_until_an_executor_starts(client, auth, monkeypatch):
+    """The work rail must not show a run as running before it is claimed."""
+    monkeypatch.setattr(main.v2, "start_run", lambda *_args, **_kwargs: None)
+    run = client.post("/api/v2/runs", headers=auth,
+                      json={"objective": "queued until started"}).json()
+    session = next(s for s in client.get("/api/work", headers=auth).json()
+                   if s.get("run_id") == run["id"])
+    types = [e["type"] for e in client.get(
+        f"/api/work/{session['id']}/events", headers=auth).json()]
+    assert run["status"] == "queued"
+    assert session["status"] == "queued"
+    assert "work_started" not in types
+    assert "work_queued" in types
+
+
+def test_restart_settlement_records_the_real_terminal_outcome(client, auth):
+    async def setup():
+        run = await v2.create_run("uzeb", "completed before restart", None)
+        session = await work.create_session(
+            "uzeb", "completed before restart", source="run", run_id=run["id"])
+        await v2.update_run(run["id"], "uzeb", "completed",
+                            report={"summary": "real result"})
+        async with db.open_db() as conn:
+            await conn.execute(
+                "UPDATE work_sessions SET status='running' WHERE id=?", (session["id"],))
+            await conn.commit()
+        return session["id"]
+
+    wid = asyncio.run(setup())
+    assert asyncio.run(work.recover_interrupted()) == 1
+    session = asyncio.run(work.get_session(wid, "uzeb"))
+    events = asyncio.run(work.list_events(wid, "uzeb"))
+    assert session["status"] == "completed"
+    assert events[-1]["type"] == "work_completed"
 
 
 def test_restart_recovery_settles_interrupted_sessions(client, auth, monkeypatch):
