@@ -1067,7 +1067,7 @@ export default function App() {
 
         <main id="main">
           {["dashboard", "home"].includes(mainView) && <CommandCenter token={token} agents={allAgents} flash={flash} onOpenRun={setSelectedRun} onOpenConnect={() => setMainView("connect")} />}
-          {["work", "workflows", "runs"].includes(mainView) && (<Suspense fallback={<div className="log-empty"><span className="spinner" aria-hidden="true" /></div>}><WorkHome token={token} onOpenRun={setSelectedRun} /></Suspense>)}
+          {["work", "workflows", "runs"].includes(mainView) && (<Suspense fallback={<div className="log-empty"><span className="spinner" aria-hidden="true" /></div>}><WorkHome token={token} flash={flash} onOpenRun={setSelectedRun} /></Suspense>)}
           {mainView === "talk" && (
             <MessageList
               messages={messages}
@@ -1228,6 +1228,7 @@ export default function App() {
           collapsed={!workRailOpen}
           connected={workConnected}
           error={workError}
+          flash={flash}
           onRetry={refreshWork}
           onToggle={() => setWorkRailOpen(o => {
             safeStorageSet("swarm_work_rail", o ? "0" : "1");

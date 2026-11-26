@@ -15,7 +15,7 @@ const EVENT_LABEL = {
 export function WorkRail({
   sessions, eventsByWork, agents, approvals, token, channelId,
   selectedWork, onSelectWork, onCancelWork, onResolveApproval, onOpenThread,
-  collapsed, onToggle, connected, error, onRetry,
+  collapsed, onToggle, connected, error, onRetry, flash,
 }) {
   const [filter, setFilter] = useState("active");
   const [source, setSource] = useState("all");
@@ -102,7 +102,9 @@ export function WorkRail({
             onCancel={async () => {
               setBusy(s.id);
               try { await cancelWork(token, s.id); onCancelWork?.(); }
-              catch { /* surfaced by next poll */ }
+              // A refused cancel used to be silent: the spinner stopped and
+              // the work stayed active with no clue why. Say what failed.
+              catch (e) { flash?.(e?.message || "Could not cancel work — check your connection", "error"); }
               finally { setBusy(null); }
             }}
             onResolveApproval={onResolveApproval} onOpenThread={onOpenThread} />

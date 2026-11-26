@@ -3,6 +3,7 @@ import { apiJson, EmptyState } from "../ui.jsx";
 import { WorkStatusBadge, ProgressBar, FailureState } from "./Status.jsx";
 import { ArtifactCard } from "./ArtifactCard.jsx";
 import { SmartComposer } from "./SmartComposer.jsx";
+import { activitySummary, failureSurvivors, launchFailureText } from "../work/workUtils.js";
 
 /**
  * Work hero surface (plan §3): Needs You queue + active projects, and a
@@ -15,6 +16,7 @@ const TABS = ["Overview", "Activity", "Agents", "Artifacts", "Context"];
 export function WorkHome({ token, onOpenRun, flash }) {
   const [runs, setRuns] = useState([]);
   const [error, setError] = useState("");
+  const [launchError, setLaunchError] = useState("");
   const [filter, setFilter] = useState("all");
 
   const load = useCallback(async (isLive = () => true) => {
@@ -33,21 +35,32 @@ export function WorkHome({ token, onOpenRun, flash }) {
 
   useEffect(() => {
     let alive = true;
-    // Defect: the load was never cancelled, so leaving the view mid-flight set
-    // state on an unmounted WorkHome.
-    void load(() => alive);
-    return () => { alive = false; };
+    let timer;
+    // One self-scheduling timer, started after each load settles: the work
+    // list used to load on mount only, so an open Work page showed frozen
+    // status and progress while the rail polled on. Scheduling after the
+    // response also prevents overlapping requests from landing out of order.
+    const tick = async () => {
+      await load(() => alive);
+      if (alive) timer = setTimeout(tick, 4000);
+    };
+    void tick();
+    return () => { alive = false; clearTimeout(timer); };
   }, [load]);
 
   async function startWork(text, { mode }) {
     const body = { objective: mode === "ask" ? text : `[${mode}] ${text}`, policy: "supervised" };
+    setLaunchError("");
     let res;
     try {
       res = await apiJson("/api/v2/runs", { token, method: "POST", body });
     } catch (e) {
       // Defect: a transport failure rejected out of the submit handler and
-      // left the brief on screen with nothing said about why.
-      flash?.(e.message || "Could not start work", "error");
+      // left the brief on screen with nothing said about why. The inline
+      // alert is the single live region for a failed launch — flashing it as
+      // well announced the same failure twice (assertive here, polite toast
+      // in App.jsx), so failures deliberately do not toast.
+      setLaunchError(launchFailureText(e.message));
       return false;
     }
     if (res.ok) {
@@ -56,7 +69,7 @@ export function WorkHome({ token, onOpenRun, flash }) {
       onOpenRun?.(res.data);
       return true;
     }
-    flash?.(res.data?.detail || "Could not start work", "error");
+    setLaunchError(launchFailureText(res.data?.detail ?? res.data));
     return false;
   }
 
@@ -82,6 +95,7 @@ export function WorkHome({ token, onOpenRun, flash }) {
       </header>
 
       {error && <p className="error-text" role="alert">{error}. <button className="btn btn-ghost btn-sm" onClick={load}>Retry</button></p>}
+      {launchError && <p id="work-launch-error" className="error-text" role="alert">{launchError}</p>}
 
       {needsYou.length > 0 && filter === "all" && (
         <div className="needs-you" aria-label="Needs you">
@@ -90,7 +104,7 @@ export function WorkHome({ token, onOpenRun, flash }) {
         </div>
       )}
 
-      <SmartComposer onSend={startWork} />
+      <SmartComposer onSend={startWork} error={launchError} errorId="work-launch-error" />
 
       <div className="work-grid">
         {visible.length === 0 && <EmptyState title="No work here" message="Describe an outcome above — agents plan, execute and verify." />}
@@ -208,6 +222,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
   }, [events]);
 
   const failure = progress?.failures?.[0];
+  const survivors = failureSurvivors(progress?.plan, progress?.evidence, progress?.current_step);
   // Select by the authoritative grant id, not by step_id. Re-issue and rearm
   // reuse the same step but mint a fresh grant and a fresh approval_requested
   // event; keying on step_id would hide that new grant behind the old
@@ -392,8 +407,8 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
             <FailureState
               title="This step failed — here is what survived"
               detail={failure.payload?.error || failure.payload?.message}
-              done={(progress?.plan || []).slice(0, 2)}
-              missing={[progress?.current_step || "current step"].filter(Boolean)}
+              done={survivors.done}
+              missing={survivors.missing}
               actions={[{ label: "Retry step", variant: "primary", onClick: retryRun }, { label: "View trace", onClick: () => setTab("Activity") }]}
             />
           )}
@@ -407,12 +422,17 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
 
       {tab === "Activity" && (
         <ol className="activity-list">
-          {events.map((e) => (
-            <li key={e.seq ?? e.id} className="activity-row">
-              <span className="activity-type">{e.event_type}</span>
-              <span className="muted small">{[e.step_id, e.payload?.agent].filter(Boolean).join(", ") || "run"}</span>
-            </li>
-          ))}
+          {events.map((e) => {
+            // Durable outcome, not the raw wire name: a failed step must read
+            // differently from a finished one, with its real reason in view.
+            const line = activitySummary(e);
+            return (
+              <li key={e.seq ?? e.id} className="activity-row">
+                <span className="activity-type">{line.label}</span>
+                <span className="muted small">{line.detail}</span>
+              </li>
+            );
+          })}
           {events.length === 0 && <EmptyState title="No activity yet" message="Events will stream here as agents work." />}
         </ol>
       )}
@@ -429,7 +449,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
       {tab === "Artifacts" && (
         <div className="artifact-grid">
           {artifacts.length === 0 && <EmptyState title="No artifacts" message="Reports, diffs and files land here." />}
-          {artifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)}
+          {artifacts.map((a) => <ArtifactCard key={a.id} artifact={a} token={token} />)}
         </div>
       )}
 

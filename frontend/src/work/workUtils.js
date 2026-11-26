@@ -60,3 +60,121 @@ export function applyWorkEventToSession(session, event) {
   if (event.step_id) next.active_step = event.step_id;
   return next;
 }
+
+/**
+ * One printed line from an API error body. Most /api failures carry a string
+ * detail, but handlers also return objects (e.g. a workflow graph error) and
+ * a bare FastAPI validation array can reach the client if the custom 422
+ * handler is bypassed. Interpolating either of those yields "[object Object]",
+ * so flatten them here. Bounded on purpose: a hostile payload cannot flood
+ * the alert. Pure so it can be tested under `bun test` without a DOM.
+ */
+export function apiErrorText(detail, fallback = "Could not start work") {
+  const text = (value) => {
+    if (typeof value === "string") return value.trim();
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    return "";
+  };
+  if (Array.isArray(detail)) {
+    const parts = detail.slice(0, 3).map((item) => {
+      if (!item || typeof item !== "object") return text(item);
+      const loc = Array.isArray(item.loc)
+        ? item.loc.map(text).filter(Boolean).join(".")
+        : text(item.loc);
+      const msg = text(item.msg || item.message || item.detail);
+      return [loc, msg].filter(Boolean).join(": ");
+    }).filter(Boolean);
+    if (!parts.length) return fallback;
+    const extra = detail.length > 3 ? ` (+${detail.length - 3} more)` : "";
+    return parts.join("; ") + extra;
+  }
+  if (detail && typeof detail === "object") {
+    return text(detail.message || detail.msg || detail.detail) || fallback;
+  }
+  return text(detail) || fallback;
+}
+
+/** The exact alert text WorkHome prints: what failed, what survived, what next. */
+export function launchFailureText(detail, fallback = "Could not start work") {
+  return `${apiErrorText(detail, fallback)}. Your brief is still here — try again.`;
+}
+
+const ACTIVITY_LABELS = {
+  run_queued: "Queued",
+  run_started: "Started",
+  step_started: "Step started",
+  step_completed: "Step finished",
+  step_failed: "Step failed",
+  step_skipped: "Step skipped",
+  tool_finished: "Tool finished",
+  approval_requested: "Needs you",
+  approval_resolved: "Decision recorded",
+  approval_reconciled: "Decision reconciled",
+  run_completed: "Done",
+  run_failed: "Failed",
+  run_cancelled: "Cancelled",
+  execution_ambiguous: "Needs review",
+  approval_ambiguous: "Needs review",
+  approval_binding_error: "Needs review",
+};
+
+function firstText(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+/**
+ * One printed line for a durable work event: a plain label plus its real
+ * outcome. The Activity tab used to show only the raw event_type and step id,
+ * so a failed step looked identical to a completed one and the reason was
+ * invisible. Payload text is untrusted and bounded; React renders it as text.
+ */
+export function activitySummary(event) {
+  const type = String(event?.event_type || event?.type || "");
+  const payload = event?.payload || {};
+  const label = ACTIVITY_LABELS[type] || type.replace(/_/g, " ") || "Event";
+  let detail = "";
+  if (type === "step_failed" || type === "run_failed" || type === "work_failed") {
+    detail = firstText(payload.error, payload.message, payload.detail);
+  } else if (type === "run_cancelled" || type === "work_cancelled") {
+    detail = firstText(payload.reason, payload.detail);
+  } else if (type === "step_completed") {
+    detail = firstText(payload.output, payload.label);
+  } else if (type === "run_completed" || type === "work_completed") {
+    detail = firstText(payload.summary);
+  } else if (type === "approval_requested") {
+    detail = firstText(payload.label, payload.reason, payload.canonical_args?.label);
+  } else if (type === "step_skipped") {
+    detail = firstText(payload.label, payload.reason);
+  } else if (type === "step_started") {
+    detail = firstText(payload.label);
+  } else if (type === "tool_finished") {
+    detail = firstText(payload.tool, payload.name, payload.label);
+  } else if (type === "execution_ambiguous" || type === "approval_ambiguous" || type === "approval_binding_error") {
+    detail = firstText(payload.detail);
+  }
+  if (!detail) detail = firstText(event?.step_id, payload.agent) || "run";
+  return { label, detail: detail.slice(0, 180) };
+}
+
+/**
+ * What a failed run actually completed, from its durable step_completed events.
+ * The failure card used to label the first two plan entries as Completed and
+ * the current step as the only missing one, which claimed work that never
+ * happened and hid steps that were still outstanding. Pure so this evidence
+ * mapping can be tested without a DOM.
+ */
+export function failureSurvivors(plan, evidence, currentStep) {
+  const completed = new Set(
+    (evidence || [])
+      .filter(e => e?.type === "step_completed" && e.step_id)
+      .map(e => e.step_id),
+  );
+  const ordered = [...new Set([...(plan || []), ...completed])].filter(Boolean);
+  const done = ordered.filter(step => completed.has(step));
+  let missing = ordered.filter(step => !completed.has(step));
+  if (!ordered.length && currentStep) missing = [currentStep];
+  return { done, missing };
+}
