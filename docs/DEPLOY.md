@@ -68,8 +68,12 @@ python -m uvicorn backend.main:app --reload
 Register the first handle in the UI — it becomes **admin**. You can
 optionally set a password at creation; it is stored as a PBKDF2 hash
 (100k rounds), never plain text. If you set one, reclaiming that admin
-handle later requires the password. Later users register as **members**
-without a password gate.
+handle later requires the password. A browser on the server can register
+the first admin and later members from loopback. Remote callers need
+`SWARM_SETUP_TOKEN` to bootstrap the first admin. Once an admin exists, a
+remote caller reclaiming that handle needs its password, or the setup token
+if no password was set; new remote members need `SWARM_INVITE_CODE`.
+Without those values remote registration is closed.
 
 If a Bot reply fails (provider down, rate limit, timeout), use **Retry**
 on the error bubble. If your own message fails to send, use the banner
@@ -103,7 +107,10 @@ Exit code is 0 when the install is usable and 1 when something is actually
 broken. Warnings (demo mode on, host tools on a public bind, `SWARM_SECRET`
 unset) are legitimate local choices and do **not** fail the run — they are
 listed under the relevant check so you can decide. It makes no network call
-unless you pass `--connectivity`, so it works offline.
+unless you pass `--connectivity`, so it works offline. If **Connect → AI**
+returns 409 and names `SWARM_SECRET`, set a private random value in `.env`,
+restart, and try again; the same value must be kept to read saved keys.
+`SWARM_DEMO=1` does not need one.
 
 Boolean flags accept one vocabulary everywhere: `1`/`true`/`t`/`yes`/`y`/`on`
 and `0`/`false`/`f`/`no`/`n`/`off`. `SWARM_BROWSER` is the one exception and
@@ -305,6 +312,9 @@ copies a set of files and is not the verified restore path.
 
 | var | required | purpose |
 |---|---|---|
+| `SWARM_SECRET` | no (required to connect) | seals stored provider keys; set a stable private value before Connect → AI or the connect attempt returns 409. `SWARM_DEMO=1` needs none; rotating it makes saved keys need reconnecting |
+| `SWARM_SETUP_TOKEN` | no | remote bootstrap proof for the first admin; loopback setup does not need it |
+| `SWARM_INVITE_CODE` | no | remote member registration; without it remote registration is closed |
 | `GROQ_API_KEY` | yes (or OpenRouter) | Groq inference |
 | `OPENROUTER_API_KEY` | no | fallback if Groq is down or unset |
 | `OPENROUTER_MODEL` | no | OpenRouter model slug; mapped from the agent model if unset |
