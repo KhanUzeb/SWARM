@@ -296,10 +296,40 @@ def test_sandbox_api_and_writes_stay_inside(client, auth, tmp_path, monkeypatch)
 
     result = asyncio.run(agent._run_write_workspace("reports/a.md", "# hi"))
     assert "wrote reports/a.md" in result
+    import hashlib
+
+    assert f"sha256:{hashlib.sha256(b'# hi').hexdigest()[:12]}" in result
+    assert "verified on disk" in result
     assert (sandbox / "reports" / "a.md").read_text(encoding="utf-8") == "# hi"
+
+    # Windows newline translation must not make a correct multiline file look
+    # like a failed verification (AGENTS.md: Windows-first local install).
+    multi = "# report\nline one\nline two\n"
+    multi_result = asyncio.run(agent._run_write_workspace("reports/multi.md", multi))
+    assert "verified on disk" in multi_result
+    assert "verification failed" not in multi_result
+    assert f"sha256:{hashlib.sha256(multi.encode('utf-8')).hexdigest()[:12]}" in multi_result
+    stored = (sandbox / "reports" / "multi.md").read_bytes()
+    assert stored == multi.encode("utf-8")
+    assert b"\r\n" not in stored
+
     denied = asyncio.run(agent._run_write_workspace("../escape.md", "nope"))
     assert "invalid" in denied
     assert not (tmp_path / "escape.md").exists()
+
+
+def test_read_truncation_reports_what_was_dropped(tmp_path, monkeypatch):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    monkeypatch.setattr(agent, "SANDBOX_DIR", str(sandbox))
+    text = "A" * 32_000 + "B" * 25
+    (sandbox / "big.txt").write_bytes(text.encode("utf-8"))
+
+    result = asyncio.run(agent._run_read_workspace("big.txt"))
+
+    assert result.startswith("A" * 32_000)
+    assert "truncated: 25 more characters of 32025" in result
+    assert "B" not in result, "omitted evidence must not leak into the tool result"
 
 
 def test_handoff_from_agent_mention(client, auth, monkeypatch):

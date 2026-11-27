@@ -13,6 +13,7 @@ Phase 9: per-agent harness, memory notes, classified retries, OpenRouter.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json as _json
 import logging
 import math
@@ -547,9 +548,28 @@ async def _run_write_workspace(rel: str, content: str) -> str:
         return "(file too large — cap is 32000 characters)"
     os.makedirs(SANDBOX_DIR, exist_ok=True)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
+    # write_text() uses universal newline translation: on Windows every \n in
+    # model-authored content becomes \r\n, which then failed the byte-for-byte
+    # check below even though the file was correct. Write the exact UTF-8
+    # bytes we intend to verify, on every platform.
+    intended = text.encode("utf-8")
+    target.write_bytes(intended)
     rel_out = target.relative_to(Path(SANDBOX_DIR).resolve()).as_posix()
-    return f"wrote {rel_out} ({len(text)} chars)"
+    # A model saying "wrote" is not proof the deliverable exists. Read the
+    # bytes back and report a bounded digest so the agent (and the human
+    # reading the audit) can distinguish a verified file from an intention.
+    # Only size and a short hash cross the tool boundary, never content.
+    try:
+        saved = target.read_bytes()
+    except OSError as exc:
+        return f"wrote {rel_out} ({len(text)} chars) but could not verify it: {exc}"
+    if saved != intended:
+        return f"(write verification failed: {rel_out} does not hold the intended text)"
+    digest = hashlib.sha256(saved).hexdigest()[:12]
+    return (
+        f"wrote {rel_out} ({len(text)} chars); "
+        f"verified on disk ({len(saved)} bytes, sha256:{digest})"
+    )
 
 
 async def _run_save_skill(name: str, body: str) -> str:
@@ -974,9 +994,16 @@ async def _complete_stream(
                 if on_token is not None:
                     await on_token(delta.content)
     except Exception:  # noqa: BLE001 — mid-stream failures return partial + cutoff
-        if content and not saw_tools:
+        # Narration accumulated before a tool-call chunk is still a real
+        # answer. Dropping it because a later chunk carried a tool call and
+        # the stream broke turned a useful partial reply into a generic
+        # "[agent error: couldn't reach the model]". Never return partial
+        # tool calls: their arguments may be incomplete and must not run.
+        if content:
             note = CUTOFF_NOTE
-            if on_token is not None:
+            # Only emit a token when this stream actually opened; tool-first
+            # narration was never streamed live.
+            if started and on_token is not None:
                 await on_token(note)
             return content + note, [], usage
         raise
@@ -1008,7 +1035,15 @@ async def _run_read_workspace(rel: str) -> str:
     except OSError as exc:
         return f"(read error: {exc})"
     if len(text) > 32_000:
-        return text[:32_000] + "\n…[truncated]"
+        # A bare truncation marker hides how much evidence was dropped, so a
+        # model can mistake a partial file for the whole thing and claim it
+        # verified. Report the counts and the next action instead.
+        omitted = len(text) - 32_000
+        return (
+            text[:32_000]
+            + f"\n…[truncated: {omitted} more characters of {len(text)}; "
+            "read a smaller file or a narrower source]"
+        )
     return text
 
 
@@ -1293,7 +1328,12 @@ async def _run_with_client(
 
         if not tool_calls:
             await announce_tools()
-            reply = (content or "").strip() or "(empty reply)"
+            reply = (content or "").strip()
+            if not reply:
+                # A blank completion is not work done. v2.run_agent_node treats
+                # anything that is not an [agent error:] as a successful step,
+                # so an empty model response must carry the failure contract.
+                reply = "[agent error: the model returned an empty reply]"
             return {"reply": reply, "tool_events": tool_events, "usage": usage_total}
 
         remaining = cap - len(tool_events)
@@ -1323,64 +1363,91 @@ async def _run_with_client(
         # Per-tool-call collector for a delegated sub-run's own tool calls.
         sub_audit: list[dict[str, Any]] = []
         for tc in selected_tool_calls:
-            try:
-                args = _json.loads(tc["arguments"] or "{}")
-            except _json.JSONDecodeError:
+            malformed = False
+            bad_shape = ""
+            # Some OpenAI-compatible servers send `arguments` already decoded
+            # instead of as a JSON string. json.loads() then raises TypeError
+            # out of the whole turn, which generate_reply reports as a generic
+            # provider failure. Treat every non-string shape as malformed
+            # instead, keeping the turn useful and the audit honest.
+            raw_args = tc.get("arguments") or "{}"
+            if not isinstance(raw_args, str):
                 args = {}
-                result = "(malformed tool arguments: not valid JSON)"
-                tool_events.append({"tool": tc["name"], "args": {}, "result": result})
-                messages.append({
-                    "role": "tool", "tool_call_id": tc["id"],
-                    "content": wrap_untrusted(tc["name"], result),
-                })
-                round_results.append(result)
-                continue
+                malformed = True
+                bad_shape = type(raw_args).__name__
+            else:
+                try:
+                    args = _json.loads(raw_args)
+                except _json.JSONDecodeError:
+                    args = {}
+                    malformed = True
+                    bad_shape = "invalid JSON"
+                else:
+                    # `[]`, `null`, `5` and friends are valid JSON but not an
+                    # argument object. Policy and the registry both expect a
+                    # dict; passing anything else through produced a generic
+                    # TypeError result that mislabeled the real cause. Keep
+                    # only the shape name for the audit: raw arguments can
+                    # hold secrets and there is no proven redaction policy.
+                    if not isinstance(args, dict):
+                        bad_shape = type(args).__name__
+                        args = {}
+                        malformed = True
             # --- loop detection -------------------------------------------
             # The identity of a call is (tool, args, result). The result is
             # part of it on purpose: re-reading a file that is being appended
             # to repeats the *arguments* but returns something new each time,
             # and that is a watch, not a loop. A genuine loop keeps getting the
             # identical answer to the identical question, so all three must
-            # repeat before the run is cut off.
+            # repeat before the run is cut off. Malformed JSON used to bypass
+            # this entirely: a model emitting "{oops}" over and over burned
+            # every round without ever tripping the guard. It now flows
+            # through the same audit and loop accounting as a real call.
             arg_key = _call_signature(tc["name"], args)
             review_block: dict[str, Any] | None = None
 
-            try:
-                result = await _execute_tool(
-                    tc["name"], args,
-                    agent_name=agent_row["name"],
-                    channel_id=channel_id,
-                    allowed=allowed,
-                    delegate_depth=delegate_depth,
-                    delegate_chain=delegate_chain,
-                    audit_sink=sub_audit,
-                )
-            except policy.PolicyReviewRequired as exc:
-                approval = exc.approval or {}
+            if malformed:
                 result = (
-                    f"(approval required: #{approval.get('id')} is pending for "
-                    f"{tc['name']}. Stop here. Tell the human what you need "
-                    f"approved. Do not retry this call until they decide.)"
+                    "(malformed tool arguments: expected a JSON object, got "
+                    f"{bad_shape})"
                 )
-                review_block = {"blocked": "review", "approval_id": approval.get("id")}
-            except policy.PolicyDenied as exc:
-                reason = "; ".join(exc.evaluation.get("reasons") or []) or str(exc)
-                result = (
-                    f"(blocked by policy: {tc['name']} is not allowed for this "
-                    f"agent - {reason})"
-                )
-                review_block = {"blocked": "deny"}
-            except Exception as exc:  # noqa: BLE001 — tool failures are results, not 500s
-                # A tool that raises must still be audited like any other tool
-                # call (AGENTS.md s6) and must not take the turn down with a
-                # raw exception. Only the class and first line reach the
-                # channel — a traceback would be persisted verbatim by the
-                # caller's audit message.
-                first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
-                if "Traceback" in first_line or "  File " in first_line:
-                    first_line = ""
-                detail = f": {first_line}" if first_line else ""
-                result = f"(tool {tc['name']} failed: {type(exc).__name__}{detail})"
+            else:
+                try:
+                    result = await _execute_tool(
+                        tc["name"], args,
+                        agent_name=agent_row["name"],
+                        channel_id=channel_id,
+                        allowed=allowed,
+                        delegate_depth=delegate_depth,
+                        delegate_chain=delegate_chain,
+                        audit_sink=sub_audit,
+                    )
+                except policy.PolicyReviewRequired as exc:
+                    approval = exc.approval or {}
+                    result = (
+                        f"(approval required: #{approval.get('id')} is pending for "
+                        f"{tc['name']}. Stop here. Tell the human what you need "
+                        f"approved. Do not retry this call until they decide.)"
+                    )
+                    review_block = {"blocked": "review", "approval_id": approval.get("id")}
+                except policy.PolicyDenied as exc:
+                    reason = "; ".join(exc.evaluation.get("reasons") or []) or str(exc)
+                    result = (
+                        f"(blocked by policy: {tc['name']} is not allowed for this "
+                        f"agent - {reason})"
+                    )
+                    review_block = {"blocked": "deny"}
+                except Exception as exc:  # noqa: BLE001 — tool failures are results, not 500s
+                    # A tool that raises must still be audited like any other tool
+                    # call (AGENTS.md s6) and must not take the turn down with a
+                    # raw exception. Only the class and first line reach the
+                    # channel — a traceback would be persisted verbatim by the
+                    # caller's audit message.
+                    first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+                    if "Traceback" in first_line or "  File " in first_line:
+                        first_line = ""
+                    detail = f": {first_line}" if first_line else ""
+                    result = f"(tool {tc['name']} failed: {type(exc).__name__}{detail})"
 
             full_key = f"{arg_key}\x00{result}"
             identical = identical + 1 if full_key == last_call else 1
@@ -1392,6 +1459,11 @@ async def _run_with_client(
             # loop is still a call, and AGENTS.md s6 persists every tool call
             # as a system audit message in-channel.
             tool_events.append({"tool": tc["name"], "args": args, "result": result})
+            if malformed:
+                # A shape label is enough to explain the refusal. The raw
+                # argument string is deliberately not persisted: without a
+                # proven redaction policy it could carry credentials.
+                tool_events[-1]["invalid_args_shape"] = bad_shape
             if review_block is not None:
                 tool_events[-1].update(review_block)
             # A delegated sub-run answers headlessly, so its own tool calls are
@@ -1426,11 +1498,15 @@ async def _run_with_client(
                 break
 
             if identical >= LOOP_REPEAT_LIMIT:
+                shape = (
+                    "malformed arguments"
+                    if malformed else
+                    "identical arguments and getting the identical result"
+                )
                 round_reason = (
-                    f"stopped after calling {tc['name']} with identical "
-                    f"arguments and getting the identical result {identical} "
-                    f"times in a row — repeating the same call is not making "
-                    f"progress"
+                    f"stopped after calling {tc['name']} with {shape} "
+                    f"{identical} times in a row — repeating the same call is "
+                    f"not making progress"
                 )
                 break
 

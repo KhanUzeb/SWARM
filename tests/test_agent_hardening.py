@@ -147,6 +147,168 @@ def test_malformed_tool_arguments_do_not_execute(monkeypatch):
         result["tool_events"][0]["result"])
 
 
+def test_repeated_malformed_arguments_hit_the_loop_guard(monkeypatch):
+    """A provider stuck emitting invalid JSON must not burn the whole budget."""
+    calls = {"n": 0}
+    executed = []
+
+    async def fake_complete(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            return "", [{"id": f"c{calls['n']}", "name": "read", "arguments": "{oops"}], None
+        return "Summarized the failed calls.", [], None
+
+    async def fake_tool(*_args, **_kwargs):
+        executed.append(True)
+        return "ok"
+
+    monkeypatch.setattr(agent, "_complete_stream", fake_complete)
+    monkeypatch.setattr(agent, "_execute_tool", fake_tool)
+    messages: list = []
+    result = _run(agent._run_with_client(
+        object(), "model", {"name": "swarm", "max_steps": 8, "max_tool_calls": 8},
+        "general", messages, use_tools=True, allowed=["read"],
+        on_tools_ready=None, on_stream_start=None, on_token=None, trace=None,
+    ))
+
+    assert executed == [], "malformed arguments must never reach a tool"
+    assert len(result["tool_events"]) == 3, "every attempt stays audited"
+    # Three failing rounds plus one closing summary; eight rounds are never used.
+    assert calls["n"] == 4, calls["n"]
+    assert "malformed arguments" in result["reply"]
+    assert "3 times in a row" in result["reply"]
+    assert "step budget" not in result["reply"], "the real cause must be named"
+
+
+def test_non_object_json_arguments_are_rejected_without_persisting_them(monkeypatch):
+    """Valid JSON that is not an object must not reach policy or a tool."""
+    executed: list = []
+
+    async def fake_tool(*_args, **_kwargs):
+        executed.append(True)
+        return "ok"
+
+    monkeypatch.setattr(agent, "_execute_tool", fake_tool)
+
+    async def check(payload: str, shape: str) -> None:
+        calls = {"n": 0}
+
+        async def fake_complete(*_args, **_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return "", [{"id": "c1", "name": "read", "arguments": payload}], None
+            return "done", [], None
+
+        monkeypatch.setattr(agent, "_complete_stream", fake_complete)
+        # This helper already runs inside the loop opened by the outer _run;
+        # awaiting avoids a nested asyncio.run() and keeps one shared loop.
+        result = await agent._run_with_client(
+            object(), "model", {"name": "swarm"}, "general", [],
+            use_tools=True, allowed=["read"], on_tools_ready=None,
+            on_stream_start=None, on_token=None, trace=None,
+        )
+        assert executed == [], f"{payload!r} reached a tool"
+        assert result["reply"] == "done"
+        assert len(result["tool_events"]) == 1
+        event = result["tool_events"][0]
+        assert event["args"] == {}
+        assert event["invalid_args_shape"] == shape
+        assert shape in event["result"] and "malformed" in event["result"]
+        assert payload not in str(event), "raw arguments must not be persisted"
+
+    for payload, shape in (
+        ("[]", "list"), ("null", "NoneType"), ("5", "int"),
+        ('"text"', "str"), ("true", "bool"),
+    ):
+        _run(check(payload, shape))
+
+
+def test_non_string_tool_arguments_do_not_break_the_turn(monkeypatch):
+    """A decoded arguments object must not turn the turn into an agent error."""
+    executed: list = []
+
+    async def fake_tool(*_args, **_kwargs):
+        executed.append(True)
+        return "ok"
+
+    monkeypatch.setattr(agent, "_execute_tool", fake_tool)
+
+    async def check(raw: object, shape: str) -> None:
+        calls = {"n": 0}
+
+        async def fake_complete(*_args, **_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return "", [{"id": "c1", "name": "read", "arguments": raw}], None
+            return "done", [], None
+
+        monkeypatch.setattr(agent, "_complete_stream", fake_complete)
+        # This helper already runs inside the loop opened by the outer _run;
+        # awaiting avoids a nested asyncio.run() and keeps one shared loop.
+        result = await agent._run_with_client(
+            object(), "model", {"name": "swarm"}, "general", [],
+            use_tools=True, allowed=["read"], on_tools_ready=None,
+            on_stream_start=None, on_token=None, trace=None,
+        )
+        assert executed == [], f"{raw!r} reached a tool"
+        assert result["reply"] == "done"
+        event = result["tool_events"][0]
+        assert event["args"] == {}
+        assert event["invalid_args_shape"] == shape
+        assert "malformed" in event["result"] and shape in event["result"]
+        assert "secret-value" not in str(event), "raw arguments must not be persisted"
+
+    for raw, shape in (({"path": "secret-value"}, "dict"), (["x"], "list"), (5, "int")):
+        _run(check(raw, shape))
+
+
+def test_repeated_non_object_arguments_hit_the_loop_guard(monkeypatch):
+    calls = {"n": 0}
+    executed = []
+
+    async def fake_complete(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            return "", [{"id": f"c{calls['n']}", "name": "read", "arguments": "[]"}], None
+        return "Summarized.", [], None
+
+    async def fake_tool(*_args, **_kwargs):
+        executed.append(True)
+        return "ok"
+
+    monkeypatch.setattr(agent, "_complete_stream", fake_complete)
+    monkeypatch.setattr(agent, "_execute_tool", fake_tool)
+    result = _run(agent._run_with_client(
+        object(), "model", {"name": "swarm", "max_steps": 8, "max_tool_calls": 8},
+        "general", [], use_tools=True, allowed=["read"], on_tools_ready=None,
+        on_stream_start=None, on_token=None, trace=None,
+    ))
+
+    assert executed == []
+    assert calls["n"] == 4, "three failing rounds plus one summary"
+    assert len(result["tool_events"]) == 3
+    assert all(e["invalid_args_shape"] == "list" for e in result["tool_events"])
+    assert "malformed arguments" in result["reply"]
+    assert "step budget" not in result["reply"]
+
+
+def test_empty_completion_is_reported_as_an_agent_error(monkeypatch):
+    """A blank model reply must not look like a successful work step."""
+
+    async def fake_complete(*_args, **_kwargs):
+        return "   ", [], None  # whitespace only: stripped, no content
+
+    monkeypatch.setattr(agent, "_complete_stream", fake_complete)
+    result = _run(agent._run_with_client(
+        object(), "model", {"name": "swarm"}, "general", [],
+        use_tools=True, allowed=["read"], on_tools_ready=None,
+        on_stream_start=None, on_token=None, trace=None,
+    ))
+    assert agent.is_agent_error(result["reply"])
+    assert "empty reply" in result["reply"]
+    assert result["tool_events"] == []
+
+
 def test_custom_http_get_bad_template_returns_error_not_raise():
     reg = get_registry()
     row = {

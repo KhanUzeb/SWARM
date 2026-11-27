@@ -195,6 +195,41 @@ def test_stream_cutoff_reraises_mid_stream_error_when_tools_present():
         _run(agent_mod._complete_stream(client, "m", [], None, None))
 
 
+def test_stream_cutoff_keeps_narration_when_a_tool_chunk_precedes_the_break():
+    """A streamed answer is not lost just because a later chunk carried a tool."""
+    tokens = []
+
+    async def collect(delta):
+        tokens.append(delta)
+
+    class _DyingStream:
+        def __aiter__(self):
+            async def gen():
+                yield _FakeChunk(_FakeDelta(content="partial answer"))
+                yield _FakeChunk(_FakeDelta(tool_calls=[_FakeTC(0, "c1", "read", "{}")]))
+                raise RuntimeError("connection reset")
+
+            return gen()
+
+    class _DyingClient:
+        base_url = ""
+        chat = None
+        completions = None
+
+        async def create(self, **_kw):
+            return _DyingStream()
+
+    client = _DyingClient()
+    client.chat = client
+    client.completions = client
+    content, tool_calls, _usage = _run(
+        agent_mod._complete_stream(client, "m", [], None, collect)
+    )
+    assert content == "partial answer" + agent_mod.CUTOFF_NOTE
+    assert tool_calls == [], "incomplete tool calls must never be returned"
+    assert tokens == ["partial answer", agent_mod.CUTOFF_NOTE]
+
+
 def test_tool_schemas_are_forwarded_as_tools_plus_auto_choice():
     client = _FakeClient([_FakeChunk(_FakeDelta(content="ok"))])
     schemas = [{"type": "function", "function": {"name": "read"}}]
