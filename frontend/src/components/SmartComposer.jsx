@@ -14,7 +14,7 @@ const MODES = [
  * One input, four intents. The intent keys are set into the same machine
  * register as the rest of the board, and the selected one is lit.
  */
-export function SmartComposer({ onSend, contextItems = [], onRemoveContext, disabled }) {
+export function SmartComposer({ onSend, contextItems = [], onRemoveContext, disabled, error, errorId = "work-launch-error" }) {
   const [mode, setMode] = useState("ask");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -63,6 +63,10 @@ export function SmartComposer({ onSend, contextItems = [], onRemoveContext, disa
           placeholder={active.hint}
           aria-label={active.hint}
           disabled={disabled}
+          // A failed launch keeps the draft; point the focused input at the
+          // printed error so it is reachable without hunting the live region.
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
         />
         <button
           type="submit"
