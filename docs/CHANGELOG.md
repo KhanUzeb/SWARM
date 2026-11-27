@@ -2,6 +2,15 @@
 
 This file maps the feature layers to the commits that introduced them. Use it when you need to bisect a change or revert a layer.
 
+## v1.5.0 (published release)
+
+Release of the merged `v0.1.0..main` increment (durable work and approvals,
+agent reliability, fail-closed backup/restore, work UX). Full notes and known
+limitations: [docs/releases/v1.5.0.md](releases/v1.5.0.md). Version metadata
+updated in `backend/main.py`, `frontend/package.json`, `README.md`, and
+`docs/DEPLOY.md`. The older assessment below is a historical snapshot, not the
+release record.
+
 The twelve settlement and cancellation rows at the top of this table were
 added locally and are now merged in `origin/main` `3ffdf86`. Their commit
 hashes name the merged layer; `18721d8` adds the regression tests alongside

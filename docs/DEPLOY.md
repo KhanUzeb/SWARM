@@ -28,7 +28,7 @@ Pin a version rather than tracking `latest` on anything you care about:
 
 ```bash
 # docker-compose.yml
-image: ghcr.io/khanuzeb/swarm:v0.1.0
+image: ghcr.io/khanuzeb/swarm:v1.5.0
 ```
 
 ### Build it locally instead

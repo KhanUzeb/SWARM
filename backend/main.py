@@ -52,7 +52,7 @@ from .security import (
 from .settings import get_settings, validate_settings
 from .tools.registry import get_registry, reload_registry
 
-app = FastAPI(title="swarm", version="0.1.0")
+app = FastAPI(title="swarm", version="1.5.0")
 install_api_guard(app)
 
 
