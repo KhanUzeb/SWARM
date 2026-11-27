@@ -144,10 +144,29 @@ uv pip install --python .venv/bin/python -r requirements.txt   # .venv\Scripts\p
 .venv/bin/python -m uvicorn backend.main:app --reload
 ```
 
+Before connecting a provider in **Connect → AI**, set `SWARM_SECRET` in `.env`
+to a private random value. Copying `.env.example` leaves it blank, and the
+connect endpoint refuses the key until it is set. Generate one in any shell:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Paste that value after `SWARM_SECRET=` and keep it stable — rotating it makes
+stored provider keys need reconnecting. `SWARM_DEMO=1` needs no secret. Check
+the install before you start with `python cli/swarm_cli.py doctor`
+(Windows: `.\.venv\Scripts\python.exe cli\swarm_cli.py doctor`); exit 0 means
+usable. Back up before any upgrade with
+`python cli/swarm_cli.py backup ./swarm-backup.db`. Restore needs a stopped
+instance and `--confirm-stopped`. Both commands run locally without a server
+or token; [docs/DEPLOY.md](docs/DEPLOY.md) has the WAL-safe steps and limits.
+
 Open `http://localhost:8000`. Register a handle (first user is admin;
 optionally set an admin password — stored as a PBKDF2 hash, never plain
 text), connect a provider in **Connect → AI**, pick your
-first bot, and open its 1:1.
+first bot, and open its 1:1. Remote registration is closed unless you set
+`SWARM_SETUP_TOKEN` for the first admin or `SWARM_INVITE_CODE` for later
+members; a browser on the server can register from loopback without either.
 
 **Docker (prebuilt image):**
 
@@ -299,6 +318,7 @@ swarm/
 | File | Purpose |
 | ---- | ------- |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Feature layers + revert map (includes merged audit, positioning, and launch facts) |
+| [docs/product-upgrade/FUTURE_SCOPE.md](docs/product-upgrade/FUTURE_SCOPE.md) | Optional future prospects; not commitments |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, checks, PR rules |
 | [ai-support/README.md](ai-support/README.md) | Provider settings user guide |
 
