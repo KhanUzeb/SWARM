@@ -584,6 +584,11 @@ async def append_event(
     """
     async with event_lock():
         async with _open_db() as conn:
+            # event_lock is per-event-loop, so another process does not share
+            # it. Take SQLite's write lock before the fence check and hold it
+            # through the insert: a takeover cannot slip between the SELECT
+            # and the INSERT and make a stale executor's work look durable.
+            await conn.execute("BEGIN IMMEDIATE")
             if claim is not None:
                 cur = await conn.execute(
                     "SELECT 1 FROM runs WHERE id=? AND owner=? AND lease_owner=?"
@@ -591,6 +596,7 @@ async def append_event(
                     (claim.run_id, claim.owner, claim.worker_id, claim.generation),
                 )
                 if await cur.fetchone() is None:
+                    await conn.rollback()
                     raise StaleRunClaim(
                         f"run {run_id} lease changed; event {event_type} not appended")
             cur = await conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id=?", (run_id,))

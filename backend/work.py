@@ -63,16 +63,28 @@ _RUN_EVENT_TYPES = {
     "approval_resolved": "approval_resolved", "run_completed": "work_completed",
     "run_failed": "work_failed", "run_cancelled": "work_cancelled",
     "run_denied": "work_cancelled",
+    # Advisories: a warning or an unfinished step must never masquerade as a
+    # successful tool result, but it is also not the run's outcome. A failed
+    # step, a lost lease, or a gate whose grant no longer matches needs human
+    # reconciliation while the run's own terminal event still decides whether
+    # the work completed, failed or was cancelled. Mapping them to
+    # ``work_failed`` settled the session early and terminal dedupe then
+    # suppressed the later, truthful ``run_completed`` — a completed run shown
+    # as failed forever. They join the audit order as ``work_advisory``.
+    "step_failed": "work_advisory", "execution_ambiguous": "work_advisory",
+    "approval_ambiguous": "work_advisory", "approval_binding_error": "work_advisory",
+    "approval_reconciled": "approval_requested",
 }
 
 ALLOWED_TYPES = {
     "work_queued", "work_started", "agent_started", "tool_started",
     "tool_finished", "approval_requested", "approval_resolved",
-    "message_linked", "artifact_created", "work_completed",
-    "work_failed", "work_cancelled",
+    "message_linked", "artifact_created", "work_advisory",
+    "work_completed", "work_failed", "work_cancelled",
 }
 
 TERMINAL = {"completed", "failed", "cancelled"}
+TERMINAL_WORK_EVENTS = {"work_completed", "work_failed", "work_cancelled"}
 
 
 class CancellationFailed(RuntimeError):
@@ -217,36 +229,65 @@ async def _append_event_in_conn(
         " VALUES(?,?,?,?,?,?)",
         (work_id, seq, event_type, step_id, json.dumps(safe), now),
     )
+    # A terminal session is final. A delayed or replayed run event may still
+    # join the immutable event order, but it must never move the session back
+    # to running/waiting, and a second terminal event must not overwrite the
+    # first one's outcome. Every transition below is therefore conditional on
+    # the session's current state.
+    active = "status IN ('queued','running','waiting_for_approval')"
+    open_terminal = "status NOT IN ('completed','failed','cancelled')"
     if event_type == "work_started":
         await conn.execute(
             "UPDATE work_sessions SET status='running',"
-            " started_at=COALESCE(started_at, ?) WHERE id=?", (now, work_id))
+            f" started_at=COALESCE(started_at, ?) WHERE id=? AND {active}", (now, work_id))
     elif event_type == "approval_requested":
+        # A replayed older gate event joins the audit order but must not move
+        # the human's attention back to a gate that was already resolved.
+        # Only a session that is not already parked adopts the event's step;
+        # a parked session is repaired from the newest materialized gate by
+        # _repair_active_gate below.
         await conn.execute(
-            "UPDATE work_sessions SET status='waiting_for_approval',"
-            " requires_action=1, active_step=? WHERE id=?", (step_id, work_id))
+            "UPDATE work_sessions SET status='waiting_for_approval', requires_action=1,"
+            " active_step=CASE WHEN status='waiting_for_approval' OR active_step IS NOT NULL"
+            " THEN active_step ELSE ? END"
+            f" WHERE id=? AND {active}", (step_id, work_id))
     elif event_type == "approval_resolved":
         await conn.execute(
-            "UPDATE work_sessions SET status='running', requires_action=0 WHERE id=?",
+            f"UPDATE work_sessions SET status='running', requires_action=0"
+            f" WHERE id=? AND {active}",
+            (work_id,),
+        )
+    elif event_type == "work_advisory":
+        # An advisory asks for a human's eyes, it does not own the outcome.
+        # The session stays in whatever live state the run is in (running,
+        # queued or parked at a gate) so the run's truthful terminal event can
+        # still settle it. requires_action surfaces it without claiming the
+        # work failed; a resolved gate or a terminal event clears the flag.
+        await conn.execute(
+            f"UPDATE work_sessions SET requires_action=1 WHERE id=? AND {open_terminal}",
             (work_id,),
         )
     elif event_type == "work_completed":
         summary = str(safe.get("summary") or "")[:1000]
         await conn.execute(
             "UPDATE work_sessions SET status='completed', summary=?,"
-            " requires_action=0, finished_at=? WHERE id=?", (summary, now, work_id))
+            f" requires_action=0, finished_at=? WHERE id=? AND {open_terminal}",
+            (summary, now, work_id))
     elif event_type == "work_failed":
         summary = str(safe.get("error") or "")[:1000]
         await conn.execute(
             "UPDATE work_sessions SET status='failed', summary=?,"
-            " requires_action=1, finished_at=? WHERE id=?", (summary, now, work_id))
+            f" requires_action=1, finished_at=? WHERE id=? AND {open_terminal}",
+            (summary, now, work_id))
     elif event_type == "work_cancelled":
         await conn.execute(
             "UPDATE work_sessions SET status='cancelled', requires_action=0,"
-            " finished_at=? WHERE id=?", (now, work_id))
-    if step_id and event_type not in {"work_queued", "work_completed", "work_failed", "work_cancelled"}:
+            f" finished_at=? WHERE id=? AND {open_terminal}", (now, work_id))
+    if step_id and event_type not in {
+            "work_queued", "work_advisory", "work_completed",
+            "work_failed", "work_cancelled"}:
         await conn.execute(
-            "UPDATE work_sessions SET active_step=? WHERE id=? AND active_step IS NULL",
+            f"UPDATE work_sessions SET active_step=? WHERE id=? AND active_step IS NULL AND {active}",
             (step_id, work_id),
         )
     return {"work_id": work_id, "seq": seq, "type": event_type,
@@ -261,10 +302,49 @@ async def append_event(
 ) -> dict[str, Any]:
     async with _event_lock():
         async with db.open_db() as conn:
+            if event_type in TERMINAL_WORK_EVENTS:
+                # The public helper is also used by the approval endpoint. A
+                # terminal session is final for every caller, not just cancel,
+                # so a second native settlement adopts the recorded event.
+                cur = await conn.execute(
+                    "SELECT seq, type, step_id, payload, created_at FROM work_events"
+                    " WHERE work_id=? AND type IN"
+                    " ('work_completed','work_failed','work_cancelled') LIMIT 1",
+                    (work_id,))
+                row = await cur.fetchone()
+                if row is not None:
+                    return {"work_id": work_id, "seq": int(row[0]), "type": row[1],
+                            "step_id": row[2], "payload": _decode(row[3], {}),
+                            "created_at": row[4]}
             event = await _append_event_in_conn(
                 conn, work_id, event_type, payload, step_id)
             await conn.commit()
     return event
+
+
+async def append_terminal_once(
+    work_id: str, event_type: str, payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Append a native terminal event only when none has been recorded yet.
+
+    Cancel, recovery and the run mirror can all try to settle the same
+    session. The check and the append share the event lock and one transaction,
+    so two concurrent cancels cannot each write a work_cancelled event, and a
+    native settlement cannot duplicate a terminal event the mirror adopted.
+    """
+    if event_type not in TERMINAL_WORK_EVENTS:
+        raise ValueError(f"not a terminal work event: {event_type}")
+    async with _event_lock():
+        async with db.open_db() as conn:
+            cur = await conn.execute(
+                "SELECT 1 FROM work_events WHERE work_id=?"
+                " AND type IN ('work_completed','work_failed','work_cancelled') LIMIT 1",
+                (work_id,))
+            if await cur.fetchone() is not None:
+                return None
+            event = await _append_event_in_conn(conn, work_id, event_type, payload, None)
+            await conn.commit()
+            return event
 
 
 MIRROR_PAGE_SIZE = 2000
@@ -331,6 +411,72 @@ async def mark_terminal_from_run(
         return cur.rowcount > 0
 
 
+async def _repair_active_gate(work_id: str) -> None:
+    """Point a parked session at the newest materialized approval gate.
+
+    main._sync_work_with_run only re-marks a waiting session when its status
+    changes, so a stale active_step would otherwise survive every poll. The
+    newest approval_requested event in the immutable work order is the gate
+    the human is actually looking at.
+    """
+    async with db.open_db() as conn:
+        cur = await conn.execute(
+            "SELECT s.status, s.active_step,"
+            " (SELECT step_id FROM work_events WHERE work_id=s.id"
+            "  AND type='approval_requested' AND step_id IS NOT NULL"
+            "  ORDER BY seq DESC LIMIT 1) AS latest"
+            " FROM work_sessions s WHERE s.id=?", (work_id,))
+        row = await cur.fetchone()
+        if not row or row[0] != "waiting_for_approval" or not row[2] or row[1] == row[2]:
+            return
+        await conn.execute(
+            "UPDATE work_sessions SET active_step=? WHERE id=?"
+            " AND status='waiting_for_approval'", (row[2], work_id))
+        await conn.commit()
+
+
+async def settle_from_recorded_terminal_event(work_id: str) -> bool:
+    """Re-apply a recorded terminal event to a session that is still active.
+
+    A terminal event without its state transition (old data, a crash between
+    writes, or an adopted mirror reservation) used to make cancel_session
+    return a running session even though the audit already said terminal.
+    """
+    async with db.open_db() as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT type, payload, created_at FROM work_events WHERE work_id=?"
+            " AND type IN ('work_completed','work_failed','work_cancelled')"
+            " ORDER BY seq LIMIT 1", (work_id,))
+        event = await cur.fetchone()
+        if event is None:
+            return False
+        payload = _decode(event["payload"], {}) or {}
+        now = float(event["created_at"] or time.time())
+        if event["type"] == "work_completed":
+            await conn.execute(
+                "UPDATE work_sessions SET status='completed', summary=?,"
+                " requires_action=0, active_step=NULL,"
+                " finished_at=COALESCE(finished_at, ?)"
+                " WHERE id=? AND status NOT IN ('completed','failed','cancelled')",
+                (str(payload.get("summary") or "")[:1000], now, work_id))
+        elif event["type"] == "work_failed":
+            await conn.execute(
+                "UPDATE work_sessions SET status='failed', summary=?,"
+                " requires_action=1, active_step=NULL,"
+                " finished_at=COALESCE(finished_at, ?)"
+                " WHERE id=? AND status NOT IN ('completed','failed','cancelled')",
+                (str(payload.get("error") or "")[:1000], now, work_id))
+        else:
+            await conn.execute(
+                "UPDATE work_sessions SET status='cancelled', requires_action=0,"
+                " active_step=NULL, finished_at=COALESCE(finished_at, ?)"
+                " WHERE id=? AND status NOT IN ('completed','failed','cancelled')",
+                (now, work_id))
+        await conn.commit()
+        return True
+
+
 async def _mirror_run_events(work_id: str, owner: str, run_id: str) -> None:
     """Materialize unseen run events into the immutable work-event order.
 
@@ -377,7 +523,16 @@ async def _mirror_run_events(work_id: str, owner: str, run_id: str) -> None:
                         cursor = max(cursor, run_seq)
                         continue
                     payload = dict(run_event.get("payload") or {})
-                    wtype = _RUN_EVENT_TYPES.get(run_event.get("event_type", ""), "tool_finished")
+                    rtype = str(run_event.get("event_type") or "")
+                    wtype = _RUN_EVENT_TYPES.get(rtype, "tool_finished")
+                    if wtype == "work_advisory":
+                        # Keep the run's own vocabulary in the payload so the
+                        # rail can name the warning (failed step, lost lease,
+                        # ambiguous gate) while the event stays non-terminal.
+                        payload["kind"] = rtype
+                        if not payload.get("detail"):
+                            payload["detail"] = str(
+                                payload.get("error") or payload.get("message") or "")[:500]
                     # Older code could commit the work event and crash before
                     # recording its work_seq. Adopt that event instead of
                     # appending a duplicate to the audit order.
@@ -389,6 +544,45 @@ async def _mirror_run_events(work_id: str, owner: str, run_id: str) -> None:
                     existing = await cur.fetchone()
                     if existing is not None:
                         work_seq = int(existing[0])
+                    elif wtype == "approval_requested":
+                        # An older gate replayed after a newer gate was already
+                        # materialized must not add a second gate line or steal
+                        # active_step. Adopt the newer gate's work event so the
+                        # reservation advances without another audit event.
+                        cur = await conn.execute(
+                            "SELECT m.work_seq FROM work_run_event_mirror m"
+                            " JOIN run_events re ON re.run_id=m.via_run AND re.seq=m.run_seq"
+                            " WHERE m.work_id=? AND re.event_type='approval_requested'"
+                            " AND re.seq>? AND m.work_seq>0"
+                            " ORDER BY re.seq DESC LIMIT 1", (work_id, run_seq))
+                        newer_gate = await cur.fetchone()
+                        if newer_gate is not None:
+                            work_seq = int(newer_gate[0])
+                        else:
+                            mirrored = await _append_event_in_conn(
+                                conn, work_id, wtype,
+                                {**payload, "_via_run": run_id, "_via_run_seq": run_seq},
+                                run_event.get("step_id"))
+                            work_seq = int(mirrored["seq"])
+                    elif wtype in TERMINAL_WORK_EVENTS:
+                        # A run can emit more than one terminal-shaped event
+                        # (step_failed then run_failed, or a late failure after
+                        # an owner cancel). The first terminal event owns the
+                        # outcome; adopting it keeps one audit record and one
+                        # immutable session status.
+                        cur = await conn.execute(
+                            "SELECT seq FROM work_events WHERE work_id=?"
+                            " AND type IN ('work_completed','work_failed','work_cancelled')"
+                            " LIMIT 1", (work_id,))
+                        settled = await cur.fetchone()
+                        if settled is not None:
+                            work_seq = int(settled[0])
+                        else:
+                            mirrored = await _append_event_in_conn(
+                                conn, work_id, wtype,
+                                {**payload, "_via_run": run_id, "_via_run_seq": run_seq},
+                                run_event.get("step_id"))
+                            work_seq = int(mirrored["seq"])
                     else:
                         mirrored = await _append_event_in_conn(
                             conn, work_id, wtype,
@@ -405,6 +599,10 @@ async def _mirror_run_events(work_id: str, owner: str, run_id: str) -> None:
                 await conn.commit()
         if cursor <= before or len(batch) < MIRROR_PAGE_SIZE:
             break
+    # Repair state that lagged behind the immutable event order. Both helpers
+    # are guarded, so a settled or correctly parked session is untouched.
+    await settle_from_recorded_terminal_event(work_id)
+    await _repair_active_gate(work_id)
 
 
 async def list_events(work_id: str, owner: str, after: int = 0) -> list[dict[str, Any]]:
@@ -468,12 +666,15 @@ async def linked_messages(work_id: str, owner: str) -> list[int]:
 
 
 async def cancel_session(work_id: str, owner: str) -> dict[str, Any] | None:
-    """Cancel the underlying run before reporting the work session cancelled.
+    """Cancel the underlying run, then settle the work view with the real outcome.
 
     Marking the session first used to leave a parked approval grant live. A
     late decision then resumed the run and overwrote the "cancelled" session
     with fresh events — work the owner believed they had stopped. A failed or
-    raced run cancellation now fails closed: the session stays active.
+    raced run cancellation now fails closed: the session stays active. When
+    the run had already reached a terminal state, the mirror carries *that*
+    outcome (including its summary); a native work_cancelled would fabricate
+    a cancellation over an honest completed/failed result.
     """
     session = await get_session(work_id, owner)
     if not session:
@@ -481,26 +682,65 @@ async def cancel_session(work_id: str, owner: str) -> dict[str, Any] | None:
     if session.get("status") in TERMINAL:
         return session
     run_id = session.get("run_id")
-    settlement: dict[str, Any] = {}
-    if run_id:
-        from . import v2 as v2_mod
-        try:
-            cancelled = await v2_mod.cancel_run(run_id, owner)
-        except Exception as exc:
+    if not run_id:
+        # Chat/routine work has no run to cancel, so a native settlement is
+        # the only honest record. append_terminal_once makes it idempotent.
+        await append_terminal_once(work_id, "work_cancelled", {})
+        await settle_from_recorded_terminal_event(work_id)
+        return await get_session(work_id, owner)
+
+    from . import v2 as v2_mod
+    try:
+        cancelled = await v2_mod.cancel_run(run_id, owner)
+    except Exception as exc:
+        raise CancellationFailed(
+            f"run {run_id} could not be cancelled; work was kept active") from exc
+    if not cancelled:
+        current = await v2_mod.get_run(run_id, owner)
+        if current is not None and current.get("status") not in v2_mod.TERMINAL_RUN_STATUSES:
             raise CancellationFailed(
-                f"run {run_id} could not be cancelled; work was kept active") from exc
-        if not cancelled:
-            current = await v2_mod.get_run(run_id, owner)
-            if current is not None and current.get("status") not in v2_mod.TERMINAL_RUN_STATUSES:
-                raise CancellationFailed(
-                    f"run {run_id} is still active; work was kept active")
-        # Tag the native settlement with the run event it mirrors so the work
-        # mirror adopts it instead of appending a second work_cancelled.
-        for event in reversed(await v2_mod.list_events(run_id, owner)):
-            if event.get("event_type") == "run_cancelled":
-                settlement = {"_via_run": run_id, "_via_run_seq": event.get("seq")}
-                break
-    await append_event(work_id, "work_cancelled", settlement)
+                f"run {run_id} is still active; work was kept active")
+
+    # Mirror first: the run's own terminal event is the audit record, and its
+    # payload carries the truthful summary. A late approval event in the same
+    # replay cannot regress the session afterwards (see _append_event_in_conn).
+    with suppress(Exception):
+        await _mirror_run_events(work_id, owner, run_id)
+    settled = await get_session(work_id, owner)
+    if settled is not None and settled.get("status") in TERMINAL:
+        return settled
+    # An already-recorded terminal event can outlive its state transition.
+    # Re-apply it instead of falling through with a still-running session.
+    await settle_from_recorded_terminal_event(work_id)
+    settled = await get_session(work_id, owner)
+    if settled is not None and settled.get("status") in TERMINAL:
+        return settled
+
+    # Fallback for a mirror that could not complete. Settle from the run's
+    # real terminal status, tagged with its event so a later mirror adopts
+    # this event instead of appending a duplicate.
+    current = await v2_mod.get_run(run_id, owner) or {}
+    status = str(current.get("status") or "")
+    report = current.get("report") or {}
+    if status == "completed":
+        event_type = "work_completed"
+        payload: dict[str, Any] = {"summary": str(report.get("summary") or "")[:1000]}
+    elif status == "failed":
+        event_type = "work_failed"
+        payload = {"error": str(report.get("error") or "run failed")[:500]}
+    else:
+        # A run that genuinely cancelled (or a missing run) is the only case
+        # where work_cancelled is truthful here.
+        event_type = "work_cancelled"
+        payload = {"reason": "run cancelled" if status == "cancelled" else "run not found"}
+        if cancelled or status == "cancelled":
+            for event in reversed(await v2_mod.list_events(run_id, owner)):
+                if event.get("event_type") == "run_cancelled":
+                    payload.update({"_via_run": run_id,
+                                    "_via_run_seq": event.get("seq")})
+                    break
+    await append_terminal_once(work_id, event_type, payload)
+    await settle_from_recorded_terminal_event(work_id)
     return await get_session(work_id, owner)
 
 
@@ -550,6 +790,6 @@ async def recover_interrupted() -> int:
                 settled += 1
                 continue
         with suppress(Exception):
-            await append_event(session["id"], event_type, payload)
-            settled += 1
+            if await append_terminal_once(session["id"], event_type, payload) is not None:
+                settled += 1
     return settled
