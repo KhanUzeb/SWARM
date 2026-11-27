@@ -176,8 +176,9 @@ docker compose up -d
 
 `docker compose up -d` pulls the prebuilt multi-arch image
 (`linux/amd64`, `linux/arm64`) from `ghcr.io/khanuzeb/swarm:latest`
-(pinned release: `ghcr.io/khanuzeb/swarm:v0.1.0` — see the
-[GitHub release](https://github.com/KhanUzeb/SWARM/releases/tag/v0.1.0)).
+(pinned release: `ghcr.io/khanuzeb/swarm:v1.5.0` — see the
+[GitHub release](https://github.com/KhanUzeb/SWARM/releases/tag/v1.5.0) and
+[release notes](docs/releases/v1.5.0.md)).
 To build locally instead, uncomment the `build:` block in
 `docker-compose.yml`, then `docker compose up --build -d`. Pushing a new
 `v*` tag republishes `:latest` and creates a release automatically.

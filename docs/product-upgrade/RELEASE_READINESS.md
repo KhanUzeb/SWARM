@@ -1,5 +1,12 @@
 # v1.5.0 release readiness assessment (draft)
 
+> **Superseded by the published release (2026-11-27):** after this assessment
+> was written, the operator explicitly authorized the `v1.5.0` release. This
+> file stays as the historical readiness snapshot it was; the authoritative
+> release record, including what shipped and what remains open, is
+> [docs/releases/v1.5.0.md](../releases/v1.5.0.md). Do not read the "NOT READY"
+> verdict below as the current state.
+>
 > Status: **DRAFT / ASSESSMENT** — not a published release note.
 > Prepared 2026-11-17 for the operator's "final docs / v1.5.0 release" task.
 > Verdict: **NOT READY.** Do not tag, push, publish, or trigger the Docker workflow.
