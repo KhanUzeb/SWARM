@@ -1,13 +1,11 @@
 name: Docker
 
-# Publishes the multi-arch image to GHCR. Tags drive releases; pull requests
-# build the same Dockerfile but never push, so a broken image is caught in CI.
+# Publishes the multi-arch image to GHCR for releases or manual runs.
 on:
   push:
     tags:
       - "v*"
       - "latest"
-  pull_request:
   workflow_dispatch:
 
 env:

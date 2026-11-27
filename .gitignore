@@ -32,6 +32,8 @@ frontend/dist/
 
 # local agent handoff context
 context.md
+# concise local working note (replaces the master-prompt handoffs)
+scope.md
 # personal plain-language guide to this codebase (mine, not the repo's)
 GUIDE.md
 .scratch/
