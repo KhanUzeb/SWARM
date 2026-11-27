@@ -21,14 +21,14 @@ def _mock_agent(monkeypatch, reply="done", tool_events=None):
     monkeypatch.setattr(main.agent, "generate_reply", fake_reply)
 
 
-def _wait_for(predicate, timeout=10.0):
+def _wait_for(predicate, timeout=10.0, what="background work"):
     deadline = time.time() + timeout
     while time.time() < deadline:
         result = predicate()
         if result:
             return result
         time.sleep(0.1)
-    raise AssertionError("timed out waiting for background work")
+    raise AssertionError(f"timed out waiting for {what}")
 
 
 def _gate_binding(client, auth, run_id):
@@ -359,9 +359,9 @@ def _launch_parked_run(client, auth, objective):
     run = client.post("/api/v2/runs", headers=auth,
                       json={"objective": objective, "workflow_id": workflow_id}).json()
     _wait_for(lambda: client.get(f"/api/v2/runs/{run['id']}", headers=auth).json()["status"]
-              == "waiting_for_approval" or None, "park at gate")
+              == "waiting_for_approval" or None, what="park at gate")
     session = _wait_for(lambda: next(iter([s for s in client.get("/api/work", headers=auth).json()
-                                           if s.get("run_id") == run["id"]]), None), "work session")
+                                           if s.get("run_id") == run["id"]]), None), what="work session")
     client.get(f"/api/work/{session['id']}/events", headers=auth).json()
     return run["id"], session["id"], _gate_binding(client, auth, run["id"])
 
@@ -521,7 +521,13 @@ def test_legacy_cursor_replays_once_then_stays_stable(client, auth):
 
 
 @pytest.mark.parametrize("kind", ["completed", "failed"])
-def test_terminal_work_event_is_recorded_once(client, auth, kind):
+def test_terminal_work_event_is_recorded_once(client, auth, kind, monkeypatch):
+    # A workflow-less run still executes the default agent node. Without a
+    # deterministic reply the run fails on a missing model key, so this test
+    # would assert a work_completed event that never existed. The dedupe under
+    # test is the mirror, not the provider.
+    _mock_agent(monkeypatch, reply="terminal dedupe result")
+
     async def scenario():
         if kind == "completed":
             run = await v2.create_run("uzeb", "terminal dedupe", None)
@@ -637,7 +643,7 @@ def test_approval_decision_is_recorded_once(client, auth, monkeypatch):
                            json={**binding, "status": "approved"})
     assert decision.status_code == 200
     _wait_for(lambda: client.get(f"/api/v2/runs/{rid}", headers=auth).json()["status"]
-              == "completed" or None, "run completion")
+              == "completed" or None, what="run completion")
     events = asyncio.run(work.list_events(wid, "uzeb"))
     resolved = [e for e in events if e["type"] == "approval_resolved"]
     assert len(resolved) == 1
@@ -653,7 +659,7 @@ def test_work_rail_names_the_real_approval_gate(client, auth):
     run = client.post("/api/v2/runs", headers=auth, json={
         "objective": "needs review", "workflow_id": created["id"]}).json()
     _wait_for(lambda: client.get(f"/api/v2/runs/{run['id']}", headers=auth).json()["status"]
-              == "waiting_for_approval" or None, "park at gate")
+              == "waiting_for_approval" or None, what="park at gate")
     session = next(s for s in client.get("/api/work", headers=auth).json()
                    if s.get("run_id") == run["id"])
     state = client.get(f"/api/v2/runs/{run['id']}/approval", headers=auth).json()
@@ -755,3 +761,280 @@ def test_ws_receives_work_lifecycle_events(client, auth, monkeypatch):
     # The same session is listed with its message link.
     sessions = [s for s in client.get("/api/work", headers=auth).json() if s["id"] == work_id]
     assert sessions and sessions[0]["status"] == "completed"
+
+
+def test_cancel_of_a_terminal_run_keeps_the_real_outcome(client, auth):
+    """Cancelling a finished run must not fabricate a cancellation."""
+    async def scenario():
+        run = await v2.create_run("uzeb", "already complete", None)
+        session = await work.create_session(
+            "uzeb", "already complete", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.update_run(run["id"], "uzeb", "completed",
+                            report={"summary": "real result"})
+        await v2.append_event(run["id"], "run_completed", {"summary": "real result"})
+        cancelled = await work.cancel_session(session["id"], "uzeb")
+        await work.list_events(session["id"], "uzeb")  # materialise the mirror
+        return cancelled, await work.list_events(session["id"], "uzeb"), await work.get_session(
+            session["id"], "uzeb")
+
+    cancelled, events, session = asyncio.run(scenario())
+    assert cancelled["status"] == "completed"
+    assert session["status"] == "completed"
+    assert session["summary"] == "real result"
+    assert "work_cancelled" not in [e["type"] for e in events]
+
+
+def test_mirrored_late_events_cannot_regress_a_cancelled_session(client, auth):
+    """A replayed pending reservation must not reopen settled work."""
+    async def scenario():
+        run = await v2.create_run("uzeb", "late replay", None)
+        session = await work.create_session(
+            "uzeb", "late replay", source="run", run_id=run["id"])
+        for etype, step in (("run_started", None),
+                            ("approval_requested", "gate"), ("run_cancelled", None)):
+            await v2.append_event(
+                run["id"], etype, {"label": "late gate"} if step else {}, step)
+        await v2.update_run(run["id"], "uzeb", "cancelled")
+        async with db.open_db() as conn:
+            await conn.execute(
+                "INSERT INTO work_events(work_id,seq,type,step_id,payload,created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (session["id"], 5, "work_cancelled", None,
+                 '{"_via_run":"%s","_via_run_seq":4}' % run["id"], 1.0))
+            await conn.executemany(
+                "INSERT INTO work_run_event_mirror(work_id,run_seq,work_seq,via_run)"
+                " VALUES(?,?,?,?)",
+                [(session["id"], 2, 0, run["id"]), (session["id"], 4, 5, run["id"])])
+            await conn.execute(
+                "UPDATE work_sessions SET status='cancelled',requires_action=0,"
+                "finished_at=1 WHERE id=?", (session["id"],))
+            await conn.commit()
+        await work.list_events(session["id"], "uzeb")
+        await work.list_events(session["id"], "uzeb")
+        return await work.get_session(session["id"], "uzeb")
+
+    session = asyncio.run(scenario())
+    assert session["status"] == "cancelled"
+    assert session["requires_action"] is False
+    assert session["active_step"] is None
+
+
+def test_concurrent_cancel_records_one_terminal_event(client, auth):
+    """Two cancels of the same work session must not double the audit record."""
+    async def scenario():
+        run = await v2.create_run("uzeb", "double cancel", None)
+        await v2.update_run(run["id"], "uzeb", "running")
+        session = await work.create_session(
+            "uzeb", "double cancel", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await asyncio.gather(*(
+            work.cancel_session(session["id"], "uzeb") for _ in range(2)))
+        return await work.list_events(session["id"], "uzeb")
+
+    events = asyncio.run(scenario())
+    assert len([e for e in events if e["type"] == "work_cancelled"]) == 1
+    assert len([e for e in events if e["type"] in work.TERMINAL_WORK_EVENTS]) == 1
+
+
+ADVISORY_RUN_EVENTS = ("approval_ambiguous", "execution_ambiguous",
+                       "approval_binding_error", "step_failed")
+
+
+@pytest.mark.parametrize("run_event", ADVISORY_RUN_EVENTS)
+def test_advisory_run_event_is_visible_without_settling_the_session(client, auth, run_event):
+    """A warning needs review; it must not decide the run's outcome.
+
+    Mapping these straight to ``work_failed`` settled the session before the
+    run finished, and terminal dedupe then discarded the later truthful
+    ``run_completed`` — a completed run shown failed forever. The advisory is
+    now its own non-terminal audit line that still asks for a human's eyes.
+    """
+    async def scenario():
+        run = await v2.create_run("uzeb", f"advisory {run_event}", None)
+        session = await work.create_session(
+            "uzeb", f"advisory {run_event}", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.append_event(
+            run["id"], run_event, {"detail": "needs review"}, "step_1")
+        events = await work.list_events(session["id"], "uzeb")
+        return events, await work.get_session(session["id"], "uzeb")
+
+    events, session = asyncio.run(scenario())
+    mirrored = [e for e in events if e.get("via_run")]
+    advisory = [e for e in mirrored if e["type"] == "work_advisory"]
+    assert len(advisory) == 1
+    assert advisory[0]["payload"]["kind"] == run_event
+    assert advisory[0]["payload"]["detail"] == "needs review"
+    assert advisory[0]["step_id"] == "step_1"
+    # Never a benign tool result, and never a terminal outcome.
+    assert not [e for e in mirrored if e["type"] == "tool_finished"]
+    assert not [e for e in mirrored if e["type"] in work.TERMINAL_WORK_EVENTS]
+    assert session["status"] == "running"
+    assert session["requires_action"] is True
+
+
+def test_completed_run_after_an_advisory_is_still_completed(client, auth):
+    """Watchdog repro: approval_ambiguous, mirror, then completion, mirror."""
+    async def scenario():
+        run = await v2.create_run("uzeb", "advisory then completion", None)
+        session = await work.create_session(
+            "uzeb", "advisory then completion", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.append_event(
+            run["id"], "approval_ambiguous", {"detail": "gate state disagrees"})
+        await work.list_events(session["id"], "uzeb")  # mirror the advisory
+        midway = await work.get_session(session["id"], "uzeb")
+        await v2.update_run(run["id"], "uzeb", "completed",
+                            report={"summary": "truthful result"})
+        await v2.append_event(
+            run["id"], "run_completed", {"summary": "truthful result"})
+        events = await work.list_events(session["id"], "uzeb")
+        return midway, events, await work.get_session(session["id"], "uzeb")
+
+    midway, events, final = asyncio.run(scenario())
+    assert midway["status"] == "running"
+    assert midway["requires_action"] is True
+    assert [e["type"] for e in events].count("work_advisory") == 1
+    terminals = [e for e in events if e["type"] in work.TERMINAL_WORK_EVENTS]
+    assert [e["type"] for e in terminals] == ["work_completed"]
+    assert final["status"] == "completed"
+    assert final["summary"] == "truthful result"
+    assert final["requires_action"] is False
+
+
+def test_genuine_failure_after_an_advisory_is_still_failed(client, auth):
+    """A real run_failed keeps its single terminal record; the step stays advice."""
+    async def scenario():
+        run = await v2.create_run("uzeb", "advisory then failure", None)
+        session = await work.create_session(
+            "uzeb", "advisory then failure", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.append_event(run["id"], "step_failed", {"error": "boom"}, "code")
+        await work.list_events(session["id"], "uzeb")
+        await v2.update_run(run["id"], "uzeb", "failed", report={"error": "boom"})
+        await v2.append_event(run["id"], "run_failed", {"error": "boom"})
+        events = await work.list_events(session["id"], "uzeb")
+        return events, await work.get_session(session["id"], "uzeb")
+
+    events, session = asyncio.run(scenario())
+    assert session["status"] == "failed"
+    assert session["summary"] == "boom"
+    assert [e["type"] for e in events if e["type"] in work.TERMINAL_WORK_EVENTS] == [
+        "work_failed"]
+    advisories = [e for e in events if e["type"] == "work_advisory"]
+    assert [e["payload"]["kind"] for e in advisories] == ["step_failed"]
+    assert advisories[0]["payload"]["detail"] == "boom"
+
+
+def test_cancel_after_an_advisory_is_still_cancelled(client, auth):
+    async def scenario():
+        run = await v2.create_run("uzeb", "advisory then cancel", None)
+        await v2.update_run(run["id"], "uzeb", "running")
+        session = await work.create_session(
+            "uzeb", "advisory then cancel", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.append_event(
+            run["id"], "execution_ambiguous", {"detail": "lease lost"})
+        await work.list_events(session["id"], "uzeb")
+        cancelled = await work.cancel_session(session["id"], "uzeb")
+        events = await work.list_events(session["id"], "uzeb")
+        return cancelled, events, await work.get_session(session["id"], "uzeb")
+
+    cancelled, events, final = asyncio.run(scenario())
+    assert cancelled["status"] == "cancelled"
+    assert final["status"] == "cancelled"
+    assert [e["type"] for e in events if e["type"] in work.TERMINAL_WORK_EVENTS] == [
+        "work_cancelled"]
+    assert [e["type"] for e in events if e["type"] == "work_advisory"] == ["work_advisory"]
+
+
+def test_advisory_replay_cannot_reopen_completed_work(client, auth):
+    """A late mirrored advisory joins the order but cannot unsettle the result."""
+    async def scenario():
+        run = await v2.create_run("uzeb", "late advisory", None)
+        session = await work.create_session(
+            "uzeb", "late advisory", source="run", run_id=run["id"])
+        await work.append_event(session["id"], "work_started", {})
+        await v2.update_run(run["id"], "uzeb", "completed",
+                            report={"summary": "already done"})
+        await v2.append_event(run["id"], "run_completed", {"summary": "already done"})
+        await work.list_events(session["id"], "uzeb")
+        await v2.append_event(
+            run["id"], "approval_ambiguous", {"detail": "late replay"})
+        events = await work.list_events(session["id"], "uzeb")
+        return events, await work.get_session(session["id"], "uzeb")
+
+    events, final = asyncio.run(scenario())
+    advisory = [e for e in events if e["type"] == "work_advisory"]
+    assert len(advisory) == 1
+    assert advisory[0]["seq"] > next(
+        e["seq"] for e in events if e["type"] == "work_completed")
+    assert final["status"] == "completed"
+    assert final["requires_action"] is False
+    assert [e["type"] for e in events if e["type"] in work.TERMINAL_WORK_EVENTS] == [
+        "work_completed"]
+
+
+def test_old_approval_replay_keeps_the_current_gate(client, auth):
+    """A retried gate1 reservation must not steal the human's gate2."""
+    async def scenario():
+        run = await v2.create_run("uzeb", "stale gate via mirror", None)
+        session = await work.create_session(
+            "uzeb", "stale gate via mirror", source="run", run_id=run["id"])
+        g1 = await v2.append_event(run["id"], "approval_requested", {}, "gate1")
+        r1 = await v2.append_event(run["id"], "approval_resolved", {}, "gate1")
+        g2 = await v2.append_event(run["id"], "approval_requested", {}, "gate2")
+        async with db.open_db() as conn:
+            await conn.executemany(
+                "INSERT INTO work_events(work_id,seq,type,step_id,payload,created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                [(session["id"], 2, "approval_requested", "gate1", "{}", 1.0),
+                 (session["id"], 3, "approval_resolved", "gate1", "{}", 1.0),
+                 (session["id"], 4, "approval_requested", "gate2", "{}", 1.0)])
+            await conn.executemany(
+                "INSERT INTO work_run_event_mirror(work_id,run_seq,work_seq,via_run)"
+                " VALUES(?,?,?,?)",
+                [(session["id"], g1["seq"], 0, run["id"]),
+                 (session["id"], r1["seq"], 3, run["id"]),
+                 (session["id"], g2["seq"], 4, run["id"])])
+            await conn.execute(
+                "UPDATE work_sessions SET status='waiting_for_approval',"
+                " requires_action=1, active_step='gate2' WHERE id=?", (session["id"],))
+            await conn.commit()
+        await work.list_events(session["id"], "uzeb")
+        parked = await work.get_session(session["id"], "uzeb")
+        await main._sync_work_with_run(dict(parked), "uzeb")
+        events = await work.list_events(session["id"], "uzeb")
+        return parked, await work.get_session(session["id"], "uzeb"), events
+
+    parked, synced, events = asyncio.run(scenario())
+    assert parked["active_step"] == "gate2"
+    assert synced["active_step"] == "gate2"
+    gates = [e for e in events if e["type"] == "approval_requested"]
+    assert [e["step_id"] for e in gates] == ["gate1", "gate2"]
+
+
+def test_cancel_applies_a_recorded_terminal_event(client, auth):
+    """A terminal audit event without its state transition must be repaired."""
+    async def scenario():
+        run = await v2.create_run("uzeb", "event without state", None)
+        session = await work.create_session(
+            "uzeb", "event without state", source="run", run_id=run["id"])
+        await v2.update_run(run["id"], "uzeb", "cancelled")
+        await v2.append_event(run["id"], "run_cancelled", {})
+        async with db.open_db() as conn:
+            await conn.execute(
+                "INSERT INTO work_events(work_id,seq,type,step_id,payload,created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (session["id"], 2, "work_cancelled", None,
+                 '{"_via_run":"%s","_via_run_seq":2}' % run["id"], 1.0))
+            await conn.execute(
+                "UPDATE work_sessions SET status='running' WHERE id=?", (session["id"],))
+            await conn.commit()
+        outcome = await work.cancel_session(session["id"], "uzeb")
+        return outcome, await work.get_session(session["id"], "uzeb")
+
+    outcome, final = asyncio.run(scenario())
+    assert outcome["status"] == "cancelled"
+    assert final["status"] == "cancelled"
