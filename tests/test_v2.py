@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 
 import pytest
@@ -1079,6 +1080,183 @@ def test_lost_lease_leaves_a_durable_ambiguity_event(client, monkeypatch):
         ambiguous = [e for e in events if e["event_type"] == "execution_ambiguous"]
         assert len(ambiguous) == 1
         assert "ambiguous" in ambiguous[0]["payload"]["detail"]
+
+    asyncio.run(run())
+
+
+def _insert_gate_grant(run_id, workflow, created, status):
+    canonical, digest = v2._gate_binding(
+        created, workflow, "gate", nonce=f"agr_{status}_gate")
+    now = time.time()
+
+    async def insert():
+        async with v2.db.open_db() as conn:
+            await conn.execute(
+                "INSERT INTO approval_grants(id, run_id, owner, step_id, agent, scope,"
+                " canonical_args, binding_hash, status, created_at, expires_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (f"agr_{status}_gate", run_id, "uzeb", "gate", canonical["agent"],
+                 canonical["scope"],
+                 json.dumps(canonical, sort_keys=True, separators=(",", ":")),
+                 digest, status, now, now + 3600))
+            await conn.execute(
+                "UPDATE runs SET status='waiting_for_approval' WHERE id=?", (run_id,))
+            await conn.commit()
+
+    asyncio.run(insert())
+    return canonical, digest
+
+
+def test_cancel_run_is_durable_and_fences_late_executor_writes(client, auth):
+    """A cancel must survive a lost executor and block its late writes."""
+    created = asyncio.run(v2.create_run("uzeb", "durable cancel", None))
+    rid = created["id"]
+    claim = asyncio.run(v2.claim_run(rid, "uzeb", worker_id="owner"))
+    assert claim is not None
+
+    async def cancel():
+        assert await v2.cancel_run(rid, "uzeb") is True
+        assert await v2.cancel_run(rid, "uzeb") is False
+
+    asyncio.run(cancel())
+    run = asyncio.run(v2.get_run(rid, "uzeb"))
+    assert run["status"] == "cancelled"
+    assert run["lease_owner"] is None
+    assert run["lease_expires_at"] is None
+    events = asyncio.run(v2.list_events(rid, "uzeb"))
+    assert [e["event_type"] for e in events].count("run_cancelled") == 1
+
+    async def late_writes():
+        with pytest.raises(v2.StaleRunClaim):
+            await v2.append_event(rid, "step_completed", {}, claim=claim)
+        assert await v2.update_run(rid, "uzeb", "running", claim=claim) is None
+        assert await v2.claim_run(rid, "uzeb", worker_id="takeover") is None
+        assert rid not in [r["id"] for r in await v2.recoverable_runs()]
+
+    asyncio.run(late_writes())
+    assert asyncio.run(v2.get_run(rid, "uzeb"))["status"] == "cancelled"
+
+
+def test_cancel_route_cancels_a_run_with_no_local_task(client, auth):
+    run = client.post("/api/v2/runs", headers=auth,
+                      json={"objective": "cancel before start"}).json()
+    resp = client.post(f"/api/v2/runs/{run['id']}/cancel", headers=auth)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+    assert client.post(f"/api/v2/runs/{run['id']}/cancel", headers=auth).status_code == 404
+    events = asyncio.run(v2.list_events(run["id"], "uzeb"))
+    assert events[-1]["event_type"] == "run_cancelled"
+
+
+@pytest.mark.parametrize("grant_status", ["pending", "granted"])
+def test_cancel_settles_a_gate_grant_before_it_can_be_consumed(client, grant_status):
+    workflow = asyncio.run(v2.create_workflow("uzeb", "Gated cancel", "", {
+        "nodes": [{"id": "gate", "type": "approval"}], "edges": []}))
+    created = asyncio.run(v2.create_run("uzeb", "gated cancel", workflow["id"]))
+    rid = created["id"]
+    _insert_gate_grant(rid, workflow, created, grant_status)
+    grant = asyncio.run(v2.get_approval_grant(rid, "uzeb", "gate"))
+    assert grant["status"] == grant_status
+
+    assert asyncio.run(v2.cancel_run(rid, "uzeb")) is True
+    grant = asyncio.run(v2.get_approval_grant(rid, "uzeb", "gate"))
+    state = asyncio.run(v2.approval_state(rid, "uzeb"))
+    assert grant["status"] == "cancelled"  # cancelled, not denied by a human
+    assert state["state"] == "cancelled"
+    decision = asyncio.run(v2.resolve_approval_grant(
+        rid, "uzeb", "gate", "approved", resolved_by="uzeb",
+        grant_id=grant["id"], binding_hash=grant["binding_hash"]))
+    assert decision["state"] == "already"
+    assert asyncio.run(v2.claim_run(rid, "uzeb", worker_id="late")) is None
+
+
+def test_cancel_stops_a_live_in_process_executor(client, monkeypatch):
+    created = asyncio.run(v2.create_run("uzeb", "live cancel", None))
+    rid = created["id"]
+    started = asyncio.Event()
+
+    async def never_finishes(run_id, owner):
+        started.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(v2, "execute_run", never_finishes)
+
+    async def cancel():
+        v2.start_run(rid, "uzeb")
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert await v2.cancel_run(rid, "uzeb") is True
+        task = v2._run_tasks[rid]
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+
+    try:
+        asyncio.run(cancel())
+    finally:
+        v2._run_tasks.pop(rid, None)
+    assert asyncio.run(v2.get_run(rid, "uzeb"))["status"] == "cancelled"
+
+
+def test_reconcile_cancel_fences_the_stale_executor(client):
+    async def run():
+        await v2.init_db()
+        wf = await v2.create_workflow("uzeb", "Gate", "", {
+            "nodes": [{"id": "gate", "type": "approval"}], "edges": []})
+        created = await v2.create_run("uzeb", "ambiguous", wf["id"])
+        rid = created["id"]
+        claim = await v2.claim_run(rid, "uzeb", worker_id="stale")
+        canonical, digest = v2._gate_binding(created, wf, "gate", nonce="agr_stale")
+        now = time.time()
+        async with v2.db.open_db() as conn:
+            await conn.execute(
+                "INSERT INTO approval_grants(id, run_id, owner, step_id, agent, scope,"
+                " canonical_args, binding_hash, status, created_at, consumed_at)"
+                " VALUES('agr_stale',?,?,?,?,?,?,?,'consumed',?,?)",
+                (rid, "uzeb", "gate", canonical["agent"], canonical["scope"],
+                 json.dumps(canonical, sort_keys=True, separators=(",", ":")),
+                 digest, now, now))
+            await conn.execute(
+                "UPDATE runs SET status='waiting_for_approval' WHERE id=?", (rid,))
+            await conn.commit()
+        out = await v2.reconcile_ambiguous(rid, "uzeb", "cancel", resolved_by="admin")
+        assert out["state"] == "consumed"
+        current = await v2.get_run(rid, "uzeb")
+        assert current["status"] == "cancelled"
+        assert current["lease_owner"] is None and current["lease_expires_at"] is None
+        types = [e["event_type"] for e in await v2.list_events(rid, "uzeb")]
+        assert "approval_reconciled" in types and "run_cancelled" in types
+        with pytest.raises(v2.StaleRunClaim):
+            await v2.append_event(rid, "step_completed", {"late": True}, claim=claim)
+
+    asyncio.run(run())
+
+
+def test_failed_lease_renewal_stops_before_the_next_agent_call(client, monkeypatch):
+    async def run():
+        from backend import agent as agent_mod
+        await v2.init_db()
+        workflow = await v2.create_workflow("uzeb", "Two steps", "", {
+            "nodes": [{"id": "one", "type": "agent", "agent": "swarm"},
+                      {"id": "two", "type": "agent", "agent": "swarm"}],
+            "edges": [["one", "two"]]})
+        created = await v2.create_run("uzeb", "lease renewal", workflow["id"])
+        calls = {"n": 0}
+
+        async def slow_reply(*_args, **_kwargs):
+            calls["n"] += 1
+            await asyncio.sleep(0.4)
+            return {"reply": f"step {calls['n']}"}
+
+        async def failed_renew(*_args, **_kwargs):
+            return False
+
+        monkeypatch.setattr(agent_mod, "generate_reply", slow_reply)
+        monkeypatch.setattr(v2, "renew_run_lease", failed_renew)
+        monkeypatch.setattr(v2, "RUN_LEASE_SECONDS", 0.6)
+        await v2.execute_run(created["id"], "uzeb")
+        events = await v2.list_events(created["id"], "uzeb")
+        assert calls["n"] == 1
+        assert "run_completed" not in [e["event_type"] for e in events]
+        assert "execution_ambiguous" in [e["event_type"] for e in events]
 
     asyncio.run(run())
 
