@@ -200,11 +200,13 @@ def test_non_object_json_arguments_are_rejected_without_persisting_them(monkeypa
             return "done", [], None
 
         monkeypatch.setattr(agent, "_complete_stream", fake_complete)
-        result = _run(agent._run_with_client(
+        # This helper already runs inside the loop opened by the outer _run;
+        # awaiting avoids a nested asyncio.run() and keeps one shared loop.
+        result = await agent._run_with_client(
             object(), "model", {"name": "swarm"}, "general", [],
             use_tools=True, allowed=["read"], on_tools_ready=None,
             on_stream_start=None, on_token=None, trace=None,
-        ))
+        )
         assert executed == [], f"{payload!r} reached a tool"
         assert result["reply"] == "done"
         assert len(result["tool_events"]) == 1
@@ -241,11 +243,13 @@ def test_non_string_tool_arguments_do_not_break_the_turn(monkeypatch):
             return "done", [], None
 
         monkeypatch.setattr(agent, "_complete_stream", fake_complete)
-        result = _run(agent._run_with_client(
+        # This helper already runs inside the loop opened by the outer _run;
+        # awaiting avoids a nested asyncio.run() and keeps one shared loop.
+        result = await agent._run_with_client(
             object(), "model", {"name": "swarm"}, "general", [],
             use_tools=True, allowed=["read"], on_tools_ready=None,
             on_stream_start=None, on_token=None, trace=None,
-        ))
+        )
         assert executed == [], f"{raw!r} reached a tool"
         assert result["reply"] == "done"
         event = result["tool_events"][0]
