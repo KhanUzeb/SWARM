@@ -16,14 +16,19 @@ Usage:
     swarm_cli.py patch-agent <name> [--prompt TEXT] [--model M] [--scope ID]
                  [--unscoped] [--window N] [--tools a,b,c] [--job JOB]
     swarm_cli.py doctor [--connectivity] [--json]
+    swarm_cli.py backup <destination> [--db PATH] [--overwrite]
+    swarm_cli.py restore <backup-file> [--db PATH] --confirm-stopped
     swarm_cli.py places list
     swarm_cli.py places add <path> [--label L]
     swarm_cli.py places remove <place-id>
     swarm_cli.py places bind <path> | --id <place-id>
 
-`doctor` is the odd one out: it runs against the local checkout instead of a
-relay, because what it diagnoses is the install you are standing in. Every
-other subcommand needs SWARM_URL and a token; doctor needs neither.
+`doctor`, `backup` and `restore` are the odd ones out: they run against the
+local checkout instead of a relay, because what they operate on is the install
+you are standing in. Every other subcommand needs SWARM_URL and a token; these
+three need neither. `backup` is an online SQLite snapshot (safe while Swarm
+runs); `restore` deliberately refuses to proceed unless the operator confirms
+the instance is stopped.
 
 Env:
     SWARM_URL     base URL of the relay (default http://localhost:8000)
@@ -62,6 +67,9 @@ def _request(method: str, path: str, payload: dict | None = None, auth: bool = F
             return json.loads(body) if body else None
     except urllib.error.HTTPError as e:
         print(json.dumps({"error": e.code, "detail": e.read().decode()}), file=sys.stderr)
+        sys.exit(1)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        print(json.dumps({"error": f"request failed: {e}"}), file=sys.stderr)
         sys.exit(1)
 
 
@@ -191,6 +199,54 @@ def cmd_doctor(args) -> None:
     else:
         print(doctor_mod.format_report(report))
     sys.exit(0 if report["ok"] else 1)
+
+
+def _local_backup_module():
+    """Import backend.backup the same way doctor imports backend.doctor.
+
+    The CLI is launched as `python cli/swarm_cli.py`, so sys.path[0] is the
+    cli folder; the repo root has to be added before a backend import works.
+    """
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    from backend import backup as backup_mod
+
+    return backup_mod
+
+
+def cmd_backup(args) -> None:
+    """Online SQLite backup — safe while the server is running."""
+    mod = _local_backup_module()
+    try:
+        report = mod.backup(
+            mod.resolve_db_path(args.db), args.destination, overwrite=args.overwrite,
+        )
+    except mod.BackupError as exc:
+        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        # OSError from mkdir/link/replace and anything unexpected must still
+        # honour the JSON-in/JSON-out contract instead of dumping a traceback.
+        print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(report, indent=2))
+
+
+def cmd_restore(args) -> None:
+    """Restore into a stopped instance. The flag is an operator attestation."""
+    mod = _local_backup_module()
+    try:
+        report = mod.restore(
+            args.source, mod.resolve_db_path(args.db),
+            confirm_stopped=args.confirm_stopped,
+        )
+    except mod.BackupError as exc:
+        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(report, indent=2))
 
 
 def cmd_places(args) -> None:
@@ -327,6 +383,34 @@ def main() -> None:
         help="emit the raw report instead of the human-readable rendering",
     )
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_backup = sub.add_parser(
+        "backup", help="consistent, integrity-checked SQLite backup (works while Swarm runs)",
+    )
+    p_backup.add_argument("destination", help="backup file to write")
+    p_backup.add_argument(
+        "--db", default=None,
+        help="database to back up (default: this install's SWARM_DB_PATH)",
+    )
+    p_backup.add_argument(
+        "--overwrite", action="store_true",
+        help="replace an existing backup file",
+    )
+    p_backup.set_defaults(func=cmd_backup)
+
+    p_restore = sub.add_parser(
+        "restore", help="restore a backup into a STOPPED instance",
+    )
+    p_restore.add_argument("source", help="backup file made by `swarm backup`")
+    p_restore.add_argument(
+        "--db", default=None,
+        help="database file to restore into (default: this install's SWARM_DB_PATH)",
+    )
+    p_restore.add_argument(
+        "--confirm-stopped", action="store_true",
+        help="attest that Swarm is stopped; required, and no lock can prove it for you",
+    )
+    p_restore.set_defaults(func=cmd_restore)
 
     args = parser.parse_args()
     args.func(args)
