@@ -2,12 +2,15 @@ import { describe, expect, test } from "bun:test";
 import {
   WORK_ACTIVE,
   activitySummary,
+  advisoryDetail,
   apiErrorText,
+  approvalDescriptor,
   applyWorkEventToSession,
   failureSurvivors,
   groupWorkByAttention,
   launchFailureText,
   mergeWorkEvents,
+  tabIndexForKey,
   workStatusLabel,
   workStatusTone,
 } from "./workUtils.js";
@@ -94,6 +97,16 @@ describe("event-driven transitions", () => {
     expect(agentStarted.active_step).toBe("swarm");
   });
 
+  test("an advisory keeps the current step and does not invent a new one", () => {
+    const session = { id: "work_1", status: "running", requires_action: false, active_step: "draft" };
+    const advisory = applyWorkEventToSession(session, {
+      work_id: "work_1", seq: 2, type: "work_advisory", step_id: "review",
+      payload: { kind: "step_failed", detail: "timeout" },
+    });
+    expect(advisory.active_step).toBe("draft");
+    expect(advisory.status).toBe("running");
+  });
+
   test("replayed events merge without duplicates", () => {
     const first = [{ seq: 1, type: "work_started" }, { seq: 2, type: "agent_started" }];
     const replay = [{ seq: 2, type: "agent_started" }, { seq: 3, type: "work_completed" }];
@@ -166,6 +179,26 @@ describe("activity lines", () => {
   });
 });
 
+describe("non-terminal advisories", () => {
+  test("an advisory keeps its own kind and detail", () => {
+    const advisory = {
+      type: "work_advisory",
+      payload: { kind: "execution_ambiguous", detail: "grant consumed but run still parked" },
+    };
+    expect(advisoryDetail(advisory)).toBe("execution ambiguous: grant consumed but run still parked");
+    expect(activitySummary({ event_type: "work_advisory", payload: advisory.payload }))
+      .toEqual({ label: "Attention needed", detail: "execution ambiguous: grant consumed but run still parked" });
+  });
+
+  test("a missing kind or detail stays honest and bounded", () => {
+    expect(advisoryDetail({ payload: { kind: "step_failed", error: "ignored" } })).toBe("step failed");
+    expect(advisoryDetail({ payload: { detail: "x".repeat(400) } }).length).toBe(180);
+    expect(advisoryDetail({})).toBe("");
+    expect(activitySummary({ event_type: "work_advisory", payload: {} }).label)
+      .toBe("Attention needed");
+  });
+});
+
 describe("failure card evidence", () => {
   test("only steps with a completed event are reported as done", () => {
     const plan = ["plan", "code", "review", "report"];
@@ -196,5 +229,43 @@ describe("failure card evidence", () => {
   test("with no plan at all the current step is the only named gap", () => {
     expect(failureSurvivors([], [], "lead")).toEqual({ done: [], missing: ["lead"] });
     expect(failureSurvivors([], [], null)).toEqual({ done: [], missing: [] });
+  });
+});
+
+describe("approval descriptor", () => {
+  test("an empty decoded grant does not hide the event's exact data", () => {
+    const event = { agent: "ledger", scope: "files/read", label: "Review the diff" };
+    expect(approvalDescriptor({}, event)).toBe(event);
+    expect(approvalDescriptor(null, undefined, event)).toBe(event);
+    expect(approvalDescriptor([], "text", event)).toBe(event);
+  });
+
+  test("the authoritative grant wins when it has fields", () => {
+    const grant = { agent: "coder", scope: "run", authority: "resumes this gate" };
+    expect(approvalDescriptor(grant, { agent: "old" })).toBe(grant);
+    expect(approvalDescriptor({}, {})).toEqual({});
+  });
+});
+
+describe("tablist keyboard movement", () => {
+  test("arrows wrap and move one tab at a time", () => {
+    expect(tabIndexForKey(0, 5, "ArrowRight")).toBe(1);
+    expect(tabIndexForKey(4, 5, "ArrowRight")).toBe(0);
+    expect(tabIndexForKey(0, 5, "ArrowLeft")).toBe(4);
+    expect(tabIndexForKey(2, 5, "ArrowDown")).toBe(3);
+    expect(tabIndexForKey(2, 5, "ArrowUp")).toBe(1);
+  });
+
+  test("Home and End reach the first and last evidence tab", () => {
+    expect(tabIndexForKey(3, 5, "Home")).toBe(0);
+    expect(tabIndexForKey(1, 5, "End")).toBe(4);
+  });
+
+  test("keys the browser owns and empty strips are left alone", () => {
+    expect(tabIndexForKey(2, 5, "Tab")).toBe(null);
+    expect(tabIndexForKey(2, 5, "Enter")).toBe(null);
+    expect(tabIndexForKey(2, 5, undefined)).toBe(null);
+    expect(tabIndexForKey(0, 0, "ArrowRight")).toBe(null);
+    expect(tabIndexForKey(99, 3, "ArrowRight")).toBe(1);
   });
 });

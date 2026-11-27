@@ -1216,8 +1216,12 @@ select.input { cursor: pointer; }
    The summaries are interface controls, so they read as ordinary
    text (67); the content they disclose stays in the register.       */
 .inspector-step-more { grid-column: 1 / -1; margin-top: 2px; }
+/* The grant identifier is machine data, not a decision input: it uses the
+   same disclosure grammar and keeps its place below the authority line. */
+.approval-technical { margin-top: var(--s2); }
 .inspector-step-more > summary,
 .approval-args > summary,
+.approval-technical > summary,
 .approval-diff > summary,
 .approvals-decided > summary {
   display: inline-flex;
@@ -1233,18 +1237,22 @@ select.input { cursor: pointer; }
 }
 .inspector-step-more > summary::-webkit-details-marker,
 .approval-args > summary::-webkit-details-marker,
+.approval-technical > summary::-webkit-details-marker,
 .approval-diff > summary::-webkit-details-marker,
 .approvals-decided > summary::-webkit-details-marker { display: none; }
 .inspector-step-more > summary:hover,
 .approval-args > summary:hover,
+.approval-technical > summary:hover,
 .approval-diff > summary:hover,
 .approvals-decided > summary:hover { color: var(--ink-2); }
 .inspector-step-more[open] > summary svg,
 .approval-args[open] > summary svg,
+.approval-technical[open] > summary svg,
 .approval-diff[open] > summary svg,
 .approvals-decided[open] > summary svg { transform: rotate(180deg); }
 .inspector-step-more > summary svg,
 .approval-args > summary svg,
+.approval-technical > summary svg,
 .approval-diff > summary svg,
 .approvals-decided > summary svg { transition: transform var(--dur-fast) var(--ease-out); }
 
@@ -1645,7 +1653,7 @@ select.input { cursor: pointer; }
 .work-skeleton-line { height: 9px; background: var(--housing-raised); border-radius: var(--r-slot); }
 .work-error { padding: var(--s3); font-size: var(--t-sm); color: var(--hold-lit); }
 
-.segmented { display: inline-flex; gap: 1px; padding: 2px; background: var(--slot); border-radius: var(--r-key); box-shadow: var(--slot-shadow); }
+.segmented { display: inline-flex; flex-wrap: wrap; max-width: 100%; gap: 1px; padding: 2px; background: var(--slot); border-radius: var(--r-key); box-shadow: var(--slot-shadow); }
 .segmented button {
   height: 22px; padding: 0 var(--s2);
   font-size: var(--t-xs); font-weight: 600;
@@ -1707,7 +1715,7 @@ select.input { cursor: pointer; }
 .work-detail-section:last-child { margin-bottom: 0; }
 .work-detail-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s3); }
 /* The sheet's objective is the head of the object, not a stray h3. */
-.work-detail-head h3 { margin: 0; font-size: var(--t-lg); font-weight: 620; letter-spacing: -0.025em; color: var(--ink-on-housing); min-width: 0; }
+.work-detail-head h3 { margin: 0; font-size: var(--t-lg); font-weight: 620; letter-spacing: -0.025em; color: var(--ink-on-housing); min-width: 0; overflow-wrap: anywhere; }
 .work-detail-time, .work-detail-reply-time { font-family: var(--f-machine); font-size: var(--t-xs); color: var(--ink-3); }
 .work-detail-reply { padding: var(--s3) 0; border-top: 1px solid var(--rule); }
 .work-detail-reply-author { font-size: var(--t-sm); font-weight: 600; color: var(--ink-on-housing); }
@@ -2582,7 +2590,9 @@ select.input { cursor: pointer; }
    new pattern.                                                      */
 
 /* A tab list / tab row used outside the topbar (thread pickers). */
-.tabs { display: flex; gap: 1px; background: var(--slot); border-radius: var(--r-key); box-shadow: var(--slot-shadow); }
+/* At 390px five inspector faces used to overrun the sheet. Wrapping keeps
+   every tab reachable without horizontal scrolling (8a: no hidden controls). */
+.tabs { display: flex; flex-wrap: wrap; max-width: 100%; gap: 1px; background: var(--slot); border-radius: var(--r-key); box-shadow: var(--slot-shadow); }
 .tab {
   height: 24px; padding: 0 var(--s2);
   font-size: var(--t-sm); font-weight: 550;
@@ -2595,7 +2605,12 @@ select.input { cursor: pointer; }
 .segment { display: inline-flex; gap: 1px; padding: 2px; background: var(--slot); border-radius: var(--r-key); box-shadow: var(--slot-shadow); }
 /* Work detail: the objective is the heading of the sheet. */
 .work-detail-objective { font-size: var(--t-md); font-weight: 600; color: var(--ink-on-housing); margin: 0; }
-.work-overview { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); }
+/* One reading path: objective and status (the head) -> current step ->
+   the exact decision -> failure/result -> verification. A wrapping row put
+   the approval beside the plan and the result beside the verify control,
+   so the order of work was a matter of viewport width (AGENTS.md 8a). */
+.work-overview { display: flex; flex-direction: column; align-items: stretch; gap: var(--s4); }
+.work-detail-panel { min-width: 0; }
 .work-detail-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
 /* A run that needs you: the hold lamp carries the state, the words stay
    ink — the alert says needs-you without tinting the surface (8a). */

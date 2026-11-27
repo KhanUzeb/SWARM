@@ -57,7 +57,10 @@ export function applyWorkEventToSession(session, event) {
   if (!session || session.id !== event?.work_id) return session;
   const transition = WORK_EVENT_TRANSITIONS[event.type];
   const next = transition ? { ...session, ...transition } : { ...session };
-  if (event.step_id) next.active_step = event.step_id;
+  // An advisory is a warning, not a new step: work.py only raises
+  // requires_action for work_advisory and leaves the session's active step
+  // alone. Mirroring its step_id here made the rail claim the run had moved.
+  if (event.step_id && event.type !== "work_advisory") next.active_step = event.step_id;
   return next;
 }
 
@@ -99,6 +102,19 @@ export function launchFailureText(detail, fallback = "Could not start work") {
   return `${apiErrorText(detail, fallback)}. Your brief is still here — try again.`;
 }
 
+/**
+ * One printed line for a non-terminal work advisory. The backend keeps the
+ * run's own kind (step_failed, execution_ambiguous, ...) and a detail; both
+ * are read as given so a warning reads as a warning, never as a completed or
+ * failed outcome. Bounded like every other printed line.
+ */
+export function advisoryDetail(event) {
+  const payload = event?.payload || {};
+  const kind = typeof payload.kind === "string" ? payload.kind.replace(/_/g, " ").trim() : "";
+  const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+  return [kind, detail].filter(Boolean).join(": ").slice(0, 180);
+}
+
 const ACTIVITY_LABELS = {
   run_queued: "Queued",
   run_started: "Started",
@@ -116,6 +132,7 @@ const ACTIVITY_LABELS = {
   execution_ambiguous: "Needs review",
   approval_ambiguous: "Needs review",
   approval_binding_error: "Needs review",
+  work_advisory: "Attention needed",
 };
 
 function firstText(...values) {
@@ -136,7 +153,9 @@ export function activitySummary(event) {
   const payload = event?.payload || {};
   const label = ACTIVITY_LABELS[type] || type.replace(/_/g, " ") || "Event";
   let detail = "";
-  if (type === "step_failed" || type === "run_failed" || type === "work_failed") {
+  if (type === "work_advisory") {
+    detail = advisoryDetail(event);
+  } else if (type === "step_failed" || type === "run_failed" || type === "work_failed") {
     detail = firstText(payload.error, payload.message, payload.detail);
   } else if (type === "run_cancelled" || type === "work_cancelled") {
     detail = firstText(payload.reason, payload.detail);
@@ -177,4 +196,41 @@ export function failureSurvivors(plan, evidence, currentStep) {
   let missing = ordered.filter(step => !completed.has(step));
   if (!ordered.length && currentStep) missing = [currentStep];
   return { done, missing };
+}
+
+/**
+ * Movement inside a tablist. Both work strips declared `role="tablist"` but
+ * only answered clicks, so a keyboard user had to Tab through every control
+ * to reach the evidence tabs while the role promised arrow keys. Returning
+ * null for every other key leaves Tab/Enter/Space to the browser. Pure so the
+ * contract is testable without a DOM.
+ */
+/**
+ * The first descriptor with actual fields. `approval_state` decodes a missing
+ * or malformed canonical_args column as `{}`, which is truthy: using it first
+ * hid the agent, scope and label printed in the approval_requested event and
+ * replaced them with generic fallbacks. Never let an empty record mask the
+ * exact data the human is being asked to approve.
+ */
+export function approvalDescriptor(...candidates) {
+  for (const value of candidates) {
+    if (value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length) {
+      return value;
+    }
+  }
+  return {};
+}
+
+export function tabIndexForKey(current, count, key) {
+  if (!count || typeof key !== "string") return null;
+  const at = Number.isInteger(current) && current >= 0 && current < count ? current : 0;
+  switch (key) {
+    case "ArrowRight":
+    case "ArrowDown": return (at + 1) % count;
+    case "ArrowLeft":
+    case "ArrowUp": return (at - 1 + count) % count;
+    case "Home": return 0;
+    case "End": return count - 1;
+    default: return null;
+  }
 }

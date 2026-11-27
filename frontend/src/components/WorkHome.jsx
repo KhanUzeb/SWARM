@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { apiJson, EmptyState } from "../ui.jsx";
 import { WorkStatusBadge, ProgressBar, FailureState } from "./Status.jsx";
 import { ArtifactCard } from "./ArtifactCard.jsx";
 import { SmartComposer } from "./SmartComposer.jsx";
-import { activitySummary, failureSurvivors, launchFailureText } from "../work/workUtils.js";
+import { activitySummary, approvalDescriptor, failureSurvivors, launchFailureText, tabIndexForKey } from "../work/workUtils.js";
 
 /**
  * Work hero surface (plan §3): Needs You queue + active projects, and a
@@ -12,6 +13,45 @@ import { activitySummary, failureSurvivors, launchFailureText } from "../work/wo
  * stay under Activity.
  */
 const TABS = ["Overview", "Activity", "Agents", "Artifacts", "Context"];
+
+/**
+ * The one tab strip for both work surfaces: the list filter and the run
+ * inspector. Both declared `role="tablist"` but only answered clicks, so a
+ * keyboard user had to tab through every control to reach the evidence tabs.
+ * Arrow keys move and activate; Tab enters and leaves the group once. The
+ * active face keeps the existing lamp/segment grammar — no new styling.
+ */
+function WorkTabs({ items, value, onChange, idPrefix, label, className, itemClass }) {
+  const tabs = useRef([]);
+  const active = Math.max(0, items.findIndex((i) => i.value === value));
+  function onKeyDown(e) {
+    const next = tabIndexForKey(active, items.length, e.key);
+    if (next === null) return;
+    e.preventDefault();
+    onChange(items[next].value);
+    tabs.current[next]?.focus();
+  }
+  return (
+    <div className={className} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
+      {items.map((item, i) => (
+        <button
+          key={item.value}
+          ref={(el) => { tabs.current[i] = el; }}
+          type="button"
+          id={`${idPrefix}-tab-${String(item.value).toLowerCase()}`}
+          className={`${itemClass} ${value === item.value ? "active" : ""}`}
+          role="tab"
+          aria-selected={value === item.value}
+          aria-controls={`${idPrefix}-panel`}
+          tabIndex={value === item.value ? 0 : -1}
+          onClick={() => onChange(item.value)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function WorkHome({ token, onOpenRun, flash }) {
   const [runs, setRuns] = useState([]);
@@ -76,7 +116,10 @@ export function WorkHome({ token, onOpenRun, flash }) {
   const needsYou = runs.filter((r) => r.status === "waiting_for_approval");
   const active = runs.filter((r) => ["queued", "running"].includes(r.status));
   const rest = runs.filter((r) => !["queued", "running", "waiting_for_approval"].includes(r.status));
-  const visible = filter === "needs-you" ? needsYou : filter === "active" ? active : filter === "done" ? rest : runs;
+  // On All, a needs-you run is printed once, in the band above the composer.
+  // The grid used to print it a second time, so one gate looked like two jobs.
+  const heroBand = needsYou.length > 0 && filter === "all";
+  const visible = filter === "needs-you" ? needsYou : filter === "active" ? active : filter === "done" ? rest : runs.filter((r) => r.status !== "waiting_for_approval");
 
   return (
     <section className="work-home" aria-label="Work">
@@ -85,19 +128,22 @@ export function WorkHome({ token, onOpenRun, flash }) {
           <h2>Work</h2>
           <p className="muted">Hand a project to your team and watch the work become legible.</p>
         </div>
-        <div className="segmented" role="tablist" aria-label="Work filter">
-          {[["all", "All"], ["needs-you", `Needs you (${needsYou.length})`], ["active", `Active (${active.length})`], ["done", "Done"]].map(([v, l]) => (
-            <button key={v} role="tab" aria-selected={filter === v} className={`segment ${filter === v ? "active" : ""}`} onClick={() => setFilter(v)}>
-              {l}
-            </button>
-          ))}
-        </div>
+        <WorkTabs
+          label="Work filter" idPrefix="work-filter" className="segmented" itemClass="segment"
+          value={filter} onChange={setFilter}
+          items={[
+            { value: "all", label: "All" },
+            { value: "needs-you", label: `Needs you (${needsYou.length})` },
+            { value: "active", label: `Active (${active.length})` },
+            { value: "done", label: "Done" },
+          ]}
+        />
       </header>
 
       {error && <p className="error-text" role="alert">{error}. <button className="btn btn-ghost btn-sm" onClick={load}>Retry</button></p>}
       {launchError && <p id="work-launch-error" className="error-text" role="alert">{launchError}</p>}
 
-      {needsYou.length > 0 && filter === "all" && (
+      {heroBand && (
         <div className="needs-you" aria-label="Needs you">
           <h3>Needs you ({needsYou.length})</h3>
           {needsYou.map((r) => <WorkCard key={r.id} run={r} hero onOpen={() => onOpenRun?.(r)} token={token} />)}
@@ -106,8 +152,10 @@ export function WorkHome({ token, onOpenRun, flash }) {
 
       <SmartComposer onSend={startWork} error={launchError} errorId="work-launch-error" />
 
-      <div className="work-grid">
-        {visible.length === 0 && <EmptyState title="No work here" message="Describe an outcome above — agents plan, execute and verify." />}
+      <div className="work-grid" id="work-filter-panel" role="tabpanel" aria-labelledby={`work-filter-tab-${filter}`}>
+        {/* The panel stays mounted for aria-controls even when the band above
+            holds every run, so no empty-state card competes with a real one. */}
+        {!heroBand && visible.length === 0 && <EmptyState title="No work here" message="Describe an outcome above — agents plan, execute and verify." />}
         {visible.map((r) => <WorkCard key={r.id} run={r} onOpen={() => onOpenRun?.(r)} token={token} />)}
       </div>
     </section>
@@ -344,29 +392,20 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
         <h3>{current?.objective}</h3>
         <WorkStatusBadge status={current?.status || "queued"} />
       </header>
-      <div className="tabs" role="tablist">
-        {TABS.map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
-            {t}
-          </button>
-        ))}
-      </div>
-
+      <WorkTabs
+        label="Work detail sections" idPrefix="work-detail" className="tabs" itemClass="tab"
+        value={tab} onChange={setTab}
+        items={TABS.map((t) => ({ value: t, label: t }))}
+      />
+      <div className="work-detail-panel" id="work-detail-panel" role="tabpanel" aria-labelledby={`work-detail-tab-${tab.toLowerCase()}`}>
       {tab === "Overview" && (
         <div className="work-overview">
           <PlanList plan={progress?.plan || []} current={progress?.current_step} status={current?.status} />
-          {current?.report?.summary && (
-            <div className="report-card">
-              <h4>Result</h4>
-              <p>{current.report.summary}</p>
-              <p className="muted small">{current.report.steps?.length || 0} steps, {(current.report.artifacts || []).length} artifacts</p>
-            </div>
-          )}
           {current?.status === "waiting_for_approval" && (
             <div className="approval-card rich">
               <h4>Needs your approval{pendingGate?.step_id ? ` — gate ${pendingGate.step_id}` : ""}</h4>
               {(() => {
-                const desc = approvalState?.canonical_args || pendingGate?.payload?.canonical_args || {};
+                const desc = approvalDescriptor(approvalState?.canonical_args, pendingGate?.payload?.canonical_args);
                 const state = approvalState?.state;
                 const blocked = state === "expired" || state === "stale" || state === "ambiguous";
                 const canReissue = approvalState?.can_reissue === true
@@ -377,10 +416,19 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
                     <p className="muted small">Scope: {desc.scope || "run"}</p>
                     <p className="muted small">Checkpoint: {desc.label || pendingGate?.step_id || "gate"}</p>
                     <p className="muted small">Objective: {desc.objective || current?.objective || ""}</p>
-                    <p className="muted small">Grant: {approvalState?.grant_id || pendingGate?.payload?.grant_id || "unknown"}</p>
+                    {/* Authority, agent, scope and arguments stay in view: they
+                        are what the decision means. Only the machine identifier
+                        is tucked away, so the card reads as a choice, not a
+                        register dump. The backend grant is single-use but binds
+                        a workflow checkpoint, not a tool command, so the action
+                        keeps its honest "Approve" label. */}
                     <p className="muted small">
                       {approvalState?.authority || desc.authority || "Approving resumes this workflow past the gate; no specific tool or command is bound."}
                     </p>
+                    <details className="approval-technical">
+                      <summary>Run details <ChevronDown size={11} aria-hidden="true" /></summary>
+                      <p className="muted small">Grant: {approvalState?.grant_id || pendingGate?.payload?.grant_id || "unknown"}</p>
+                    </details>
                     {state === "expired" && (
                       <p className="muted" role="status">This request expired. Re-request it before reviewing a fresh decision.</p>
                     )}
@@ -411,6 +459,13 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
               missing={survivors.missing}
               actions={[{ label: "Retry step", variant: "primary", onClick: retryRun }, { label: "View trace", onClick: () => setTab("Activity") }]}
             />
+          )}
+          {current?.report?.summary && (
+            <div className="report-card">
+              <h4>Result</h4>
+              <p>{current.report.summary}</p>
+              <p className="muted small">{current.report.steps?.length || 0} steps, {(current.report.artifacts || []).length} artifacts</p>
+            </div>
           )}
           <div className="verify-row">
             <button className="btn btn-secondary btn-sm" disabled={verifyBusy} onClick={() => verify(true)}>Mark verified</button>
@@ -461,6 +516,7 @@ export function WorkDetail({ run, token, onApprove, onDeny, onStatusChange }) {
           </ul>
         </div>
       )}
+      </div>
     </section>
   );
 }

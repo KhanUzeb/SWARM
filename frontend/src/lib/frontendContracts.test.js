@@ -124,12 +124,79 @@ describe("work list stays current", () => {
   });
 });
 
+describe("the All grid prints each run once", () => {
+  test("needs-you work belongs to the band, not the grid below it", async () => {
+    // The live check was done in Orca's embedded browser: one gated run used
+    // to appear as two cards on All. Pin the wiring so it cannot return.
+    const home = await src("components/WorkHome.jsx");
+    expect(home).toContain('const heroBand = needsYou.length > 0 && filter === "all"');
+    expect(home).toContain('runs.filter((r) => r.status !== "waiting_for_approval")');
+    expect(home).toContain("{!heroBand && visible.length === 0 && <EmptyState");
+  });
+});
+
 describe("work activity is readable", () => {
   test("the Activity tab renders durable outcomes, not raw wire names", async () => {
     // The label and outcome mapping is covered at runtime in workUtils.test.js.
     const home = await src("components/WorkHome.jsx");
     expect(home).toContain("activitySummary(e)");
     expect(home).not.toContain('<span className="activity-type">{e.event_type}</span>');
+  });
+});
+
+describe("work tabs keep their keyboard promise", () => {
+  test("both work tablists use one roving-tabindex strip", async () => {
+    const home = await src("components/WorkHome.jsx");
+    // The runtime movement is covered in workUtils.test.js; no DOM harness
+    // here, so pin that no hand-rolled strip is left behind.
+    expect(home).toContain("tabIndexForKey(active, items.length, e.key)");
+    expect(home).toContain("tabIndex={value === item.value ? 0 : -1}");
+    expect(home).toContain('aria-controls={`${idPrefix}-panel`}');
+    expect(home.match(/<div className=\{className\} role="tablist"/g)?.length).toBe(1);
+    expect(home).not.toContain('<div className="tabs" role="tablist"');
+    expect(home).not.toContain('<div className="segmented" role="tablist"');
+  });
+
+  test("the inspector reads plan, decision, failure/result, then verification", async () => {
+    const home = await src("components/WorkHome.jsx");
+    const overview = home.slice(
+      home.indexOf('{tab === "Overview"'), home.indexOf('{tab === "Activity"'));
+    const at = (needle) => overview.indexOf(needle);
+    expect(at("<PlanList")).toBeLessThan(at("approval-card"));
+    expect(at("approval-card")).toBeLessThan(at("<FailureState"));
+    expect(at("<FailureState")).toBeLessThan(at('"report-card"'));
+    expect(at('"report-card"')).toBeLessThan(at("verify-row"));
+  });
+
+  test("the decision text stays visible; only the grant id is disclosed", async () => {
+    const home = await src("components/WorkHome.jsx");
+    const authority = home.indexOf("{approvalState?.authority || desc.authority");
+    const details = home.indexOf('<details className="approval-technical">');
+    expect(authority).toBeGreaterThan(-1);
+    expect(details).toBeGreaterThan(authority);
+    expect(home).toContain("Grant: {approvalState?.grant_id");
+  });
+
+  test("modal focus enters the dialog, skips inactive tabs and returns to the opener", async () => {
+    // No DOM harness here; pin the wiring a DOM-less test can see. The live
+    // check was done in Orca's embedded browser: without this, Tab walked the
+    // page behind the run detail, closing left focus on BODY, and Shift+Tab
+    // from the close button wrapped to a tab with tabIndex=-1.
+    const trap = await src("lib/focusTrap.js");
+    expect(trap).toContain("const opener = document.activeElement");
+    expect(trap).toContain("focusable(el)[0]?.focus()");
+    expect(trap).toContain("n.tabIndex >= 0");
+    expect(trap).toContain("if (previous && document.contains(previous)) previous.focus();");
+  });
+
+  test("both strips wrap and a long objective wraps at 390px", async () => {
+    // A real 390px pass was done in Orca's embedded browser (scrollWidth 390
+    // with innerWidth 390, tab strip 317/317). Pin the CSS here so a later
+    // edit cannot quietly remove the wrapping that made that pass possible.
+    const css = await src("styles.css");
+    expect(css).toMatch(/\.tabs \{[^}]*flex-wrap: wrap/);
+    expect(css).toMatch(/\.segmented \{[^}]*flex-wrap: wrap/);
+    expect(css).toMatch(/\.work-detail-head h3 \{[^}]*overflow-wrap: anywhere/);
   });
 });
 
@@ -140,6 +207,16 @@ describe("failed work reports real evidence", () => {
     const home = await src("components/WorkHome.jsx");
     expect(home).toContain("failureSurvivors(progress?.plan, progress?.evidence, progress?.current_step)");
     expect(home).not.toContain("slice(0, 2)");
+  });
+});
+
+describe("advisories read as attention, not a decision", () => {
+  test("the rail prints advisory kind/detail and never offers approval for it", async () => {
+    // Runtime mapping is covered in workUtils.test.js; pin the rail wiring.
+    const rail = await src("components/WorkRail.jsx");
+    expect(rail).toContain('work_advisory: "Attention needed"');
+    expect(rail).toContain('if (e.type === "work_advisory") return advisoryDetail(e);');
+    expect(rail).toContain('session.status === "waiting_for_approval"');
   });
 });
 

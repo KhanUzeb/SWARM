@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge, Button, EmptyState, fmtTime } from "../ui.jsx";
 import { WORK_ACTIVE, cancelWork, fetchWorkMessages, workStatusLabel, workStatusTone } from "../work/sessionStore.js";
+import { advisoryDetail } from "../work/workUtils.js";
 import { X, ChevronRight, PanelRightClose } from "lucide-react";
 import { useFocusTrap } from "../lib/focusTrap";
 
@@ -9,6 +10,9 @@ const EVENT_LABEL = {
   tool_started: "Tool started", tool_finished: "Tool finished",
   approval_requested: "Approval requested", approval_resolved: "Approval resolved",
   message_linked: "Reply posted", artifact_created: "Artifact created",
+  // An advisory asks for eyes, not a decision: no approval affordance follows
+  // this label. The status flap still says what the run itself is doing.
+  work_advisory: "Attention needed",
   work_completed: "Completed", work_failed: "Failed", work_cancelled: "Cancelled",
 };
 
@@ -245,6 +249,7 @@ function sourceLabel(source) {
 
 function eventDetail(e) {
   const p = e.payload || {};
+  if (e.type === "work_advisory") return advisoryDetail(e);
   if (e.type === "tool_started" || e.type === "tool_finished") {
     return [p.tool || e.step_id, p.result ? `→ ${String(p.result).slice(0, 160)}` : ""].filter(Boolean).join(" ");
   }
