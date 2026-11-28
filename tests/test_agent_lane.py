@@ -843,6 +843,88 @@ def test_provider_attempts_respect_priority_order(monkeypatch):
     assert ids == ["groq", "anthropic", "custom"]
 
 
+def _pinned_catalog(monkeypatch, model: str, provider_id: str):
+    import backend.ai_support.catalog as catalog_mod
+
+    async def fake_catalog():
+        return {"models": [{"id": model, "provider_id": provider_id}]}
+
+    monkeypatch.setattr(catalog_mod, "list_all_models", fake_catalog)
+    catalog_mod.clear_model_index_cache()
+
+
+def test_pinned_model_runs_only_on_its_provider(monkeypatch):
+    """A composer pick must not be offered to Groq first (AGENTS.md s4)."""
+    import backend.ai_support.resolver as resolver
+
+    model = "nvidia/nemotron-3.5-lightning:free"
+    _pinned_catalog(monkeypatch, model, "openrouter")
+    used: list[str] = []
+
+    class FakeClient:
+        def __init__(self, pid: str):
+            self.pid = pid
+
+    async def fake_ready():
+        return True
+
+    async def fake_attempts(_model):
+        return [
+            (FakeClient("groq"), _model, "groq"),
+            (FakeClient("openrouter"), _model, "openrouter"),
+            (FakeClient("huggingface"), _model, "huggingface"),
+        ]
+
+    async def fake_complete(client, _model, *_args, **_kwargs):
+        used.append(client.pid)
+        return "pinned reply", [], None
+
+    monkeypatch.setattr(resolver, "any_provider_ready", fake_ready)
+    monkeypatch.setattr(resolver, "iter_provider_attempts", fake_attempts)
+    monkeypatch.setattr(agent_mod, "_complete_stream", fake_complete)
+    row = {"name": "swarm", "system_prompt": "s", "model": "openai/gpt-oss-120b",
+           "history_window": 12, "max_tool_calls": 1, "tools": []}
+    result = _run(agent_mod.generate_reply(
+        row, "general", [{"author_kind": "human", "author": "u", "body": "ping"}],
+        model_override=model,
+    ))
+    assert used == ["openrouter"]
+    assert result["model"] == model
+    assert result.get("model_fallback") is None
+
+
+def test_pinned_model_failure_never_becomes_the_agent_default(monkeypatch):
+    """A failing pick reports the picked model; it must not silently answer with Groq."""
+    import backend.ai_support.resolver as resolver
+
+    model = "nvidia/nemotron-3.5-lightning:free"
+    _pinned_catalog(monkeypatch, model, "openrouter")
+
+    async def fake_ready():
+        return True
+
+    async def fake_attempts(_model):
+        return [(object(), _model, "openrouter")]
+
+    async def fake_complete(_client, _model, *_args, **_kwargs):
+        err = RuntimeError(f"model {model} does not exist")
+        err.status_code = 404
+        raise err
+
+    monkeypatch.setattr(resolver, "any_provider_ready", fake_ready)
+    monkeypatch.setattr(resolver, "iter_provider_attempts", fake_attempts)
+    monkeypatch.setattr(agent_mod, "_complete_stream", fake_complete)
+    row = {"name": "swarm", "system_prompt": "s", "model": "openai/gpt-oss-120b",
+           "history_window": 12, "max_tool_calls": 1, "tools": []}
+    result = _run(agent_mod.generate_reply(
+        row, "general", [{"author_kind": "human", "author": "u", "body": "ping"}],
+        model_override=model,
+    ))
+    assert result["model"] == model
+    assert result.get("model_fallback") is None
+    assert "[agent error:" in result["reply"]
+
+
 def test_openai_client_carries_an_explicit_timeout(monkeypatch):
     import backend.ai_support.resolver as resolver
 

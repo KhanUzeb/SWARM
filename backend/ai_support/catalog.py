@@ -1,6 +1,7 @@
 """Live model catalogs from provider APIs (OpenAI-compatible /v1/models)."""
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from .config import RuntimeProviderAuth
@@ -245,3 +246,43 @@ async def list_all_models() -> dict[str, Any]:
                     "provider_name": group["name"],
                 })
     return {"providers": groups, "models": models}
+
+
+# A pinned model from the composer must run on the provider that actually
+# offers it. Trying every connected provider in priority order sent an
+# OpenRouter-only id to Groq first (404), and a later provider's model-not-found
+# made the turn silently fall back to the agent's Groq default. The index is
+# built from the same live catalog the picker shows, cached briefly because a
+# turn should not re-fetch every provider's /models list. Connection changes
+# clear it through store._invalidate_provider_cache.
+_MODEL_INDEX_TTL_SECONDS = 300.0
+_model_index: tuple[float, dict[str, str]] | None = None
+
+
+def clear_model_index_cache() -> None:
+    global _model_index
+    _model_index = None
+
+
+async def find_model_provider(model_id: str) -> str | None:
+    """Return the connected provider that offers ``model_id``, if any.
+
+    ``list_all_models`` already deduplicates ids in provider-priority order,
+    so a shared id keeps its highest-priority owner (Groq's default stays on
+    Groq). Unknown ids return None and keep the ordinary fallback chain.
+    """
+    global _model_index
+    wanted = (model_id or "").strip()
+    if not wanted:
+        return None
+    now = time.monotonic()
+    if _model_index is None or now - _model_index[0] >= _MODEL_INDEX_TTL_SECONDS:
+        data = await list_all_models()
+        index: dict[str, str] = {}
+        for row in data.get("models") or []:
+            mid = row.get("id")
+            pid = row.get("provider_id")
+            if mid and pid and mid not in index:
+                index[mid] = pid
+        _model_index = (now, index)
+    return _model_index[1].get(wanted)

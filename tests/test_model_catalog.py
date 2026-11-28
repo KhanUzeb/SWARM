@@ -116,3 +116,21 @@ def test_live_model_errors_redact_preview_credentials(monkeypatch):
     assert result["live"] is False
     assert result["error"] == "provider rejected credential <REDACTED>"
     assert "secret-preview-key" not in repr(result)
+
+
+def test_pinned_model_provider_lookup_is_cached(monkeypatch):
+    """Routing a pinned model must not re-fetch every provider each turn."""
+    import asyncio
+
+    calls: list[int] = []
+
+    async def fake_all_models():
+        calls.append(1)
+        return {"models": [{"id": "vendor/model:free", "provider_id": "openrouter"}]}
+
+    monkeypatch.setattr(catalog, "list_all_models", fake_all_models)
+    catalog.clear_model_index_cache()
+    assert asyncio.run(catalog.find_model_provider("vendor/model:free")) == "openrouter"
+    assert asyncio.run(catalog.find_model_provider("vendor/model:free")) == "openrouter"
+    assert asyncio.run(catalog.find_model_provider("no-such-model")) is None
+    assert len(calls) == 1

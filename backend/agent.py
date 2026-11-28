@@ -1710,6 +1710,17 @@ async def generate_reply(
         agent_row.get("model") or "",
         override=(model_override or "").strip() or None,
     )
+    # A model picked in the composer names a provider as well as an id. Route
+    # it to that provider instead of offering the id to every connected
+    # provider in priority order (Groq returned 404 for OpenRouter-only ids).
+    pinned_provider: str | None = None
+    if (model_override or "").strip():
+        from .ai_support.catalog import find_model_provider
+
+        try:
+            pinned_provider = await find_model_provider(model)
+        except Exception:  # noqa: BLE001 — catalog is a best-effort routing aid
+            pinned_provider = None
     window = history_window_of(agent_row)
     allowed = agent_tools(agent_row)
     if exclude_tools:
@@ -1812,6 +1823,19 @@ async def generate_reply(
         }
 
     attempts = await iter_provider_attempts(model)
+    if pinned_provider:
+        owned = [entry for entry in attempts if entry[2] == pinned_provider]
+        if not owned:
+            return {
+                "reply": (
+                    f"[agent error: {pinned_provider} is not connected — "
+                    f"reconnect it in Connect → AI to use {model}]"
+                ),
+                "tool_events": [],
+                "usage": empty_usage(),
+                "model": model,
+            }
+        attempts = owned
     if not attempts:
         return {
             "reply": "[agent error: no API key — set GROQ_API_KEY or SWARM_OPENAI_COMPAT_API_KEY in .env, or connect a provider in Command Center → AI providers]",
@@ -1840,10 +1864,12 @@ async def generate_reply(
                 except Exception as retry_exc:  # noqa: BLE001 — final attempt; classify below
                     last_exc = retry_exc
 
-    if (model_override or "").strip() and is_model_not_found(last_exc):
-        # The pinned model is gone (rotated id, outage) — fall back to the
-        # agent default once instead of failing the turn. Partial tokens
-        # already streamed stay visible; the fallback continues the reply.
+    if (model_override or "").strip() and not pinned_provider and is_model_not_found(last_exc):
+        # An unknown pinned id is gone (rotated id, typo) — fall back to the
+        # agent default once instead of failing the turn. A *known* model from
+        # the picker never gets this treatment: its provider failed, and
+        # silently answering with the agent's Groq default was the bug.
+        # Partial tokens already streamed stay visible; the fallback continues.
         _logger.warning("model %s unavailable, falling back to agent default", model_override)
         fallback = await generate_reply(
             agent_row, channel_id, history,

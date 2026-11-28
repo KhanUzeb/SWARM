@@ -143,6 +143,12 @@ def _invalidate_provider_cache(provider_id: str) -> None:
     prefix = (str(db.DB_PATH), provider_id)
     for key in [k for k in _RESOLVE_CACHE if k[:2] == prefix]:
         del _RESOLVE_CACHE[key]
+    # A connected/disconnected provider changes which models are routable;
+    # the pinned-model index must not keep pointing at the old set.
+    # Local import: catalog imports resolver, which imports this module.
+    from .catalog import clear_model_index_cache
+
+    clear_model_index_cache()
 
 
 async def connect(provider_id: str, api_key: str, *, model: str | None = None) -> dict[str, Any]:
